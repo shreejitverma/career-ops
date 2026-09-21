@@ -537,10 +537,14 @@ test('acquirePipelineLock: a negative or -Infinity ceiling takes the default rat
     // different behaviour; the default is at least bounded and obvious. Paired
     // with the zero test above on purpose — together they pin that 0 and "less
     // than 0" are NOT the same input.
+    //
+    // timeoutMs is several churn intervals wide so a loaded event loop that
+    // delays one handoff cannot trip the per-holder timeout before the ceiling
+    // (10x timeoutMs) is what ends the wait.
     for (const bad of [-5, -Infinity]) {
       const startedAt = Date.now();
       const outcome = await settleOrGiveUp(
-        acquirePipelineLock(p, { timeoutMs: 50, retryMs: 20, maxWaitMs: bad }), 3000,
+        acquirePipelineLock(p, { timeoutMs: 150, retryMs: 20, maxWaitMs: bad }), 3000,
       );
       const elapsed = Date.now() - startedAt;
       assert.ok(outcome instanceof LockTimeoutError, `maxWaitMs=${bad}: expected a timeout, got: ${outcome}`);
