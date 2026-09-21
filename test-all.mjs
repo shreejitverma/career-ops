@@ -2091,10 +2091,17 @@ const absPathRaw = run(
 );
 // The old shell pipeline's `grep -v` exclusions, now as a JS filter.
 const ABS_PATH_EXCLUDE = ['README.md', 'LICENSE', 'CLAUDE.md', 'test-all.mjs'];
+// command-center/ is this fork's private user-layer data store; its vault sync
+// scripts and notes carry absolute vault paths on purpose (the vault symlinks
+// those folders back at exactly those paths). Matched on the file path prefix
+// of git grep's `path:line:text` output, so a vault path mentioned in a file
+// outside command-center/ is still reported.
+const ABS_PATH_EXCLUDE_DIRS = ['command-center/'];
 const absPathLines = (absPathRaw || '')
   .split('\n')
   .filter(Boolean)
-  .filter(line => !ABS_PATH_EXCLUDE.some(x => line.includes(x)));
+  .filter(line => !ABS_PATH_EXCLUDE.some(x => line.includes(x)))
+  .filter(line => !ABS_PATH_EXCLUDE_DIRS.some(dir => line.startsWith(dir)));
 if (absPathLines.length === 0) {
   pass('No absolute paths in code files');
 } else {
