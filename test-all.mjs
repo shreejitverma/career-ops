@@ -2090,7 +2090,10 @@ const absPathRaw = run(
   { stdio: ['pipe', 'pipe', 'ignore'] }
 );
 // The old shell pipeline's `grep -v` exclusions, now as a JS filter.
-const ABS_PATH_EXCLUDE = ['README.md', 'LICENSE', 'CLAUDE.md', 'test-all.mjs'];
+// command-center/ is this fork's private user-layer data store; its vault sync
+// scripts and notes carry absolute vault paths on purpose (the vault symlinks
+// those folders back at exactly those paths).
+const ABS_PATH_EXCLUDE = ['README.md', 'LICENSE', 'CLAUDE.md', 'test-all.mjs', 'command-center/'];
 const absPathLines = (absPathRaw || '')
   .split('\n')
   .filter(Boolean)
