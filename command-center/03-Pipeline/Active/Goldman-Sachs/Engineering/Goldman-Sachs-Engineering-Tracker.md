@@ -2,16 +2,16 @@
 company: Goldman-Sachs
 role: Quant-Dev
 level: Early Career / Analyst
-stage: technical-assessment
-date_applied: 2024-10-02
+stage: OA
+applied: 2024-10-02
 next_action: "Prepare for HackerRank technical assessment: Data structures, Math/Stats, and Systems coding"
-next_deadline: 2024-10-16
-referral: "Direct Application"
+next_action_date: 2024-10-16
+source: "Direct Application"
 recruiter: "Goldman Sachs Recruiting"
 recruiter_email: "noreply@careers.gs.com"
 confidence: 4
 priority: high
-salary_range: "$140,000 - $175,000 + Bonus"
+comp_band: "$140,000 - $175,000 + Bonus"
 location: "New York, NY / Jersey City, NJ"
 remote: false
 manager: "Engineering Hiring Team"
@@ -25,6 +25,9 @@ tags:
   - sde
   - hackerrank
   - algorithms
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # 🏛️ Goldman Sachs — Engineering & Quantitative Assessment

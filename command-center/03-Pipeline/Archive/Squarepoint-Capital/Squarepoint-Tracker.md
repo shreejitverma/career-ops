@@ -1,10 +1,10 @@
 ---
 company: "Squarepoint Capital"
 role: "Quantitative Developer"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Dev"
-date_applied: 2026-06-01
+track: [quant-dev]
+applied: 2026-06-01
 date_rejected: 2026-06-16
 rejection_reason: "Greenhouse application update"
 recruiter: "no-reply@us.greenhouse-mail.io"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Squarepoint Capital - Quantitative Developer (Archived)

@@ -1,16 +1,17 @@
 ---
 company: "DRW"
 role: "FICC Desk Tools Developer"
-stage: "Interview"
+stage: onsite
 status: "Interview Loop Completed / Awaiting Feedback"
-track: "Quant-Dev / Market Data"
-priority: "P1"
-confidence: "Medium"
-date_applied: 2026-07-20
+track: [quant-dev]
+focus: Market Data
+priority: high
+confidence: 3
+applied: 2026-07-20
 last_contact: 2026-07-29
 next_action: "Check in with Intec Select for latest FICC team updates"
-next_deadline: 2026-09-25
-salary_range: "$220,000 - $280,000 + PnL Bonus"
+next_action_date: 2026-09-25
+comp_band: "$220,000 - $280,000 + PnL Bonus"
 location: "New York, NY"
 stakeholders:
   - name: "Jamie Mumford"
@@ -23,6 +24,8 @@ tags:
   - interview-tracker
   - active-pipeline
   - quant-dev / market data
+referrer:
+links: []
 ---
 
 # DRW - FICC Desk Tools Developer

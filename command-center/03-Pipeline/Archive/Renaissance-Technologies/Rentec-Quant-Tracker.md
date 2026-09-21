@@ -1,10 +1,10 @@
 ---
 company: "Renaissance Technologies"
 role: "Quantitative Researcher / Developer"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Research"
-date_applied: 2026-07-15
+track: [quant-research]
+applied: 2026-07-15
 date_rejected: 2026-07-30
 rejection_reason: "Resume review post-submission; elite bar"
 recruiter: "Denise Gennari (denise@rentec.com)"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Renaissance Technologies - Quantitative Researcher / Developer (Archived)

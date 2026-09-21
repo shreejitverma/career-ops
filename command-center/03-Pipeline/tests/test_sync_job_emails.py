@@ -1,0 +1,113 @@
+"""Behavior tests for sync_job_emails.py: python3 -m unittest discover -s command-center/03-Pipeline/tests"""
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import sync_job_emails as sj  # noqa: E402
+
+TRACKER = """---
+company: Acme Capital
+role: Quant Developer
+stage: applied
+recruiter_email: talent@acmecap.com
+---
+
+# Acme Capital tracker
+
+## Notes
+
+Hand-written notes.
+"""
+
+
+def msg(subject, sender, date="2026-09-20", snippet="", mailbox="INBOX"):
+    return {"account": "Test", "mailbox": mailbox, "subject": subject, "sender": sender, "date": date, "snippet": snippet}
+
+
+class SyncTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "Active" / "Acme").mkdir(parents=True)
+        self.tracker = self.root / "Active" / "Acme" / "Acme-Tracker.md"
+        self.tracker.write_text(TRACKER)
+        self.trackers = sj.load_trackers(self.root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_classify_priority(self):
+        self.assertEqual(sj.classify(msg("Your offer letter", "x@y.com")), "offer")
+        self.assertEqual(sj.classify(msg("Update", "x@y.com", snippet="we regret to inform you")), "rejection")
+        self.assertEqual(sj.classify(msg("HackerRank assessment for your interview", "x@y.com")), "assessment")
+        self.assertEqual(sj.classify(msg("Superday invitation", "x@y.com")), "interview")
+        self.assertEqual(sj.suggest_stage("interview", "Superday invitation"), "onsite")
+        self.assertEqual(sj.suggest_stage("interview", "Phone screen"), "phone")
+
+    def test_match_by_domain_and_name(self):
+        by_domain = sj.match_tracker(msg("Hello", "Talent <talent@acmecap.com>"), self.trackers)
+        by_name = sj.match_tracker(msg("Your Acme Capital application", "no-reply@greenhouse.io"), self.trackers)
+        self.assertEqual(by_domain.company, "Acme Capital")
+        self.assertEqual(by_name.company, "Acme Capital")
+        self.assertIsNone(sj.match_tracker(msg("Hello", "someone@other.com"), self.trackers))
+
+    def test_record_is_idempotent(self):
+        events_file = self.root / ".sync" / "events.jsonl"
+        e = [sj.to_event(msg("Interview invitation from Acme Capital", "talent@acmecap.com"), self.trackers, self.root)]
+        self.assertEqual(len(sj.record(e, events_file)), 1)
+        self.assertEqual(len(sj.record(e, events_file)), 0)
+        self.assertEqual(len(sj.load_events(events_file)), 1)
+
+    def test_review_flags_stage_disagreement(self):
+        e = sj.to_event(msg("Unfortunately, we will not be moving forward", "talent@acmecap.com"), self.trackers, self.root)
+        review = sj.render_review({e.id: e}, self.trackers, "2026-09-21", root=self.root)
+        attention = review.split("## Needs attention")[1].split("## Last")[0]
+        self.assertIn("[[Acme-Tracker]]", attention)
+        self.assertIn("rejected", attention)
+
+    def test_timeline_appended_once_and_frontmatter_untouched(self):
+        e = sj.to_event(msg("Phone screen with Acme Capital", "talent@acmecap.com"), self.trackers, self.root)
+        self.assertEqual(sj.apply_timeline([e], self.root), 1)
+        self.assertEqual(sj.apply_timeline([e], self.root), 0)
+        text = self.tracker.read_text()
+        self.assertEqual(text.count(f"evt:{e.id}"), 1)
+        self.assertTrue(text.startswith(TRACKER.split("# Acme")[0]))  # frontmatter byte-identical
+        self.assertIn("Hand-written notes.", text)
+
+    def test_timeline_inserts_into_existing_section(self):
+        self.tracker.write_text(TRACKER.replace("## Notes", "## Timeline\n\n- 2026-09-01 applied: portal\n\n## Notes"))
+        e = sj.to_event(msg("Phone screen with Acme Capital", "talent@acmecap.com"), self.trackers, self.root)
+        sj.apply_timeline([e], self.root)
+        text = self.tracker.read_text()
+        timeline = text.split("## Timeline")[1].split("## Notes")[0]
+        self.assertIn("2026-09-01 applied", timeline)
+        self.assertIn(f"evt:{e.id}", timeline)
+
+    def test_dry_run_writes_nothing(self):
+        e = sj.to_event(msg("Phone screen with Acme Capital", "talent@acmecap.com"), self.trackers, self.root)
+        before = self.tracker.read_text()
+        self.assertEqual(sj.apply_timeline([e], self.root, dry_run=True), 1)
+        self.assertEqual(self.tracker.read_text(), before)
+        events_file = self.root / ".sync" / "events.jsonl"
+        sj.record([e], events_file, dry_run=True)
+        self.assertFalse(events_file.exists())
+
+    def test_review_lists_untracked_companies(self):
+        e = sj.to_event(msg("Interview invitation", "careers@othercorp.com"), self.trackers, self.root)
+        review = sj.render_review({e.id: e}, self.trackers, "2026-09-21", root=self.root)
+        self.assertIn("careers@othercorp.com", review.split("## Possible untracked applications")[1].split("## Last")[0])
+
+    def test_apple_mail_date_parsing(self):
+        self.assertEqual(sj.parse_date("Friday, August 28, 2026 at 1:00:10 PM"), "2026-08-28")
+        self.assertEqual(sj.parse_date("2026-09-20"), "2026-09-20")
+
+    def test_excluded_newsletters(self):
+        self.assertFalse(sj.is_job_related(msg("Weekly digest: jobs you may like", "alerts@x.com")))
+        self.assertTrue(sj.is_job_related(msg("Anything", "x@y.com", mailbox="Rejections") | {"dedicated": True}))
+
+
+if __name__ == "__main__":
+    unittest.main()

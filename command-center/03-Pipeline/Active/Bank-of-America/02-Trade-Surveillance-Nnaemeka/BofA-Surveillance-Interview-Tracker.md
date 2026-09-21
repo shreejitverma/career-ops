@@ -3,16 +3,16 @@ company: Bank-of-America
 role: Quant-Dev
 level: Senior Contract
 stage: applied
-date_applied: 2026-08-19
+applied: 2026-08-19
 next_action: "Await VMS submission confirmation from Matlen Silver; prepare trade surveillance, alert system design, and platform migration prep for Nnaemeka Ezugwu"
-next_deadline: 2026-09-22
-referral: "Matlen Silver (Stephanie Belaen)"
+next_action_date: 2026-09-22
+source: "Matlen Silver (Stephanie Belaen)"
 recruiter: "Stephanie Belaen"
 recruiter_email: "sbelaen@matlensilver.com"
 recruiter_phone: "917-764-3231"
 confidence: 4
 priority: high
-salary_range: "$80-88/hr W2 / 1099"
+comp_band: "$80-88/hr W2 / 1099"
 location: "New York, NY / Charlotte, NC (Hybrid)"
 remote: false
 manager: "Nnaemeka Ezugwu"
@@ -27,6 +27,9 @@ tags:
   - opex
   - python
   - full-stack
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # 🏦 Bank of America — Quant/Python Developer (Trade Surveillance & OpEx)

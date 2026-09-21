@@ -3,15 +3,15 @@ company: Hudson-River-Trading
 role: Quant-Dev
 level: Early Career
 stage: rejected
-date_applied: 2024-09-15
+applied: 2024-09-15
 next_action: "None (Archived)"
-next_deadline: 
-referral: "Direct Application"
+next_action_date: 
+source: "Direct Application"
 recruiter: "HRT Recruiting"
 recruiter_email: "careers@hudson-trading.com"
 confidence: 3
 priority: low
-salary_range: "$200,000 - $300,000"
+comp_band: "$200,000 - $300,000"
 location: "New York, NY"
 remote: false
 manager: "Core Engineering"
@@ -23,6 +23,9 @@ tags:
   - hrt
   - quant-dev
   - low-latency
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # ⚡ Hudson River Trading (HRT) — Core Dev / Quant (Archived)

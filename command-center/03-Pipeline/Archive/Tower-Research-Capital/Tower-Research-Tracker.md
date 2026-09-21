@@ -1,10 +1,10 @@
 ---
 company: "Tower Research Capital"
 role: "Low-Latency C++ Developer"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Low-Latency"
-date_applied: 2026-06-15
+track: [low-latency]
+applied: 2026-06-15
 date_rejected: 2026-06-25
 rejection_reason: "Agency feedback via Joseph Cooper (Huxley)"
 recruiter: "Joseph Cooper (j.cooper@huxley.com)"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Tower Research Capital - Low-Latency C++ Developer (Archived)

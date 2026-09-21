@@ -1,10 +1,10 @@
 ---
 company: "Point72"
 role: "Quantitative Developer - Cubist Systematic Strategies"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Dev"
-date_applied: 2026-05-10
+track: [quant-dev]
+applied: 2026-05-10
 date_rejected: 2026-05-29
 rejection_reason: "Application update received via Workday/talent@cubistsystematic.com"
 recruiter: "talent@cubistsystematic.com"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Point72 - Quantitative Developer - Cubist Systematic Strategies (Archived)

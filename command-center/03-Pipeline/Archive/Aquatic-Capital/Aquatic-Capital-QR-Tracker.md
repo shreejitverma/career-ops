@@ -3,15 +3,15 @@ company: Aquatic-Capital
 role: Quant-Research
 level: Early Career
 stage: rejected
-date_applied: 2024-11-15
+applied: 2024-11-15
 next_action: "None (Archived)"
-next_deadline: 
-referral: "Direct Application"
+next_action_date: 
+source: "Direct Application"
 recruiter: "Aquatic Capital Talent Team"
 recruiter_email: "recruiting@aquaticcap.com"
 confidence: 3
 priority: low
-salary_range: "$175,000 - $250,000"
+comp_band: "$175,000 - $250,000"
 location: "Chicago, IL"
 remote: false
 manager: "Quantitative Research Team"
@@ -22,6 +22,9 @@ tags:
   - rejected
   - aquatic-capital
   - quant-research
+track: [quant-research]
+referrer:
+links: []
 ---
 
 # 🌊 Aquatic Capital Management — Quantitative Researcher (Archived)

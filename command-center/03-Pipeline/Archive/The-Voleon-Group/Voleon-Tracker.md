@@ -1,10 +1,10 @@
 ---
 company: "The Voleon Group"
 role: "Quantitative Researcher / ML Engineer"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "AI-Engineer / Quant-Research"
-date_applied: 2026-06-01
+track: [ai-eng, quant-research]
+applied: 2026-06-01
 date_rejected: 2026-06-19
 rejection_reason: "recruiting-noreply@voleon.com notification"
 recruiter: "recruiting-noreply@voleon.com"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # The Voleon Group - Quantitative Researcher / ML Engineer (Archived)

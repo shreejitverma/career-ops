@@ -2,16 +2,16 @@
 company: Sagarsoft
 role: Low-Latency
 level: Senior
-stage: recruiter-screen
-date_applied: 2025-12-10
+stage: recruiter
+applied: 2025-12-10
 next_action: "Review Senior C++ Market Data requirements and follow up with recruiter Shiv Kumar"
-next_deadline: 2026-01-15
-referral: "Recruiter Outreach"
+next_action_date: 2026-01-15
+source: "Recruiter Outreach"
 recruiter: "Shiv Kumar"
 recruiter_email: "shiva@sagarsoft.com"
 confidence: 4
 priority: high
-salary_range: "$160,000 - $190,000"
+comp_band: "$160,000 - $190,000"
 location: "New York, NY / Remote"
 remote: true
 manager: "Market Data Team Lead"
@@ -24,6 +24,9 @@ tags:
   - c-plus-plus
   - market-data
   - quant-dev
+track: [low-latency]
+referrer:
+links: []
 ---
 
 # ⚡ Sagarsoft — Senior C++ Software Engineer (Market Data)

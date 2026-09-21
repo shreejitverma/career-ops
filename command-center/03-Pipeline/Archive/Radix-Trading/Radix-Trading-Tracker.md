@@ -3,15 +3,15 @@ company: Radix-Trading
 role: Quant-Dev
 level: Early Career / University
 stage: applied
-date_applied: 2024-10-14
+applied: 2024-10-14
 next_action: "None (Archived)"
-next_deadline: 
-referral: "Direct University Job Board"
+next_action_date: 
+source: "Direct University Job Board"
 recruiter: "Radix Trading Talent Team"
 recruiter_email: "no-reply@us.greenhouse-mail.io"
 confidence: 3
 priority: low
-salary_range: "$175,000 - $250,000"
+comp_band: "$175,000 - $250,000"
 location: "Chicago, IL / New York, NY"
 remote: false
 manager: "Trading & Research Team"
@@ -22,6 +22,9 @@ tags:
   - radix-trading
   - quant-dev
   - low-latency
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # ⚡ Radix Trading — Quantitative / Core Engineering (Archived)

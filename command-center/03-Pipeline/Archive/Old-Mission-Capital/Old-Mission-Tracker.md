@@ -1,10 +1,10 @@
 ---
 company: "Old Mission Capital"
 role: "Quantitative Developer / ETF Market Making"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Low-Latency"
-date_applied: 2026-07-10
+track: [low-latency]
+applied: 2026-07-10
 date_rejected: 2026-07-30
 rejection_reason: "Automated notification from no-reply@oldmissioncapital.com"
 recruiter: "no-reply@oldmissioncapital.com"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Old Mission Capital - Quantitative Developer / ETF Market Making (Archived)
