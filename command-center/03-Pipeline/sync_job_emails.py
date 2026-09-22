@@ -111,6 +111,12 @@ class Tracker:
     company: str
     stage: str
     domains: set[str] = field(default_factory=set)
+    aliases: list[str] = field(default_factory=list)
+
+    @property
+    def names(self) -> list[str]:
+        """Company name plus Obsidian `aliases`, e.g. Fidelity for Fidelity Investments."""
+        return [self.company, *self.aliases]
 
 
 @dataclass
@@ -253,7 +259,8 @@ def load_trackers(root: Path = PIPELINE) -> list[Tracker]:
             if not fm.get("company") or "stage" not in fm:
                 continue
             domains = {e.rsplit("@", 1)[1].lower() for e in re.findall(r"[\w.+-]+@[\w.-]+", " ".join(fm.values()))}
-            trackers.append(Tracker(p, fm["company"], fm.get("stage", ""), domains))
+            aliases = [a.strip().strip('"').strip("'") for a in fm.get("aliases", "").strip("[]").split(",") if a.strip()]
+            trackers.append(Tracker(p, fm["company"], fm.get("stage", ""), domains, aliases))
     return trackers
 
 
@@ -281,11 +288,16 @@ def name_matches(company: str, hay: str) -> bool:
 def match_tracker(msg: dict, trackers: list[Tracker]) -> tuple[Tracker | None, str | None]:
     """Return the tracker and how it matched: 'name' (company named in the email) or 'domain' (sender domain only)."""
     hay = words(f"{msg['subject']} {msg['sender']}")
-    best = [t for t in trackers if len(norm(t.company)) >= 3 and name_matches(t.company, hay)]
+    def matched(t: Tracker) -> int:
+        """Length of the longest of the tracker's names found in the email, or 0."""
+        return max((len(norm(n)) for n in t.names if len(norm(n)) >= 3 and name_matches(n, hay)), default=0)
+
+    best = [(matched(t), t) for t in trackers]
+    best = [(n, t) for n, t in best if n]
     if best:
-        # prefer the longest company name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
-        best.sort(key=lambda t: (len(norm(t.company)), "/Active/" in str(t.path)), reverse=True)
-        return best[0], "name"
+        # prefer the longest matching name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
+        best.sort(key=lambda nt: (nt[0], "/Active/" in str(nt[1].path)), reverse=True)
+        return best[0][1], "name"
     sender_domain = (re.findall(r"@([\w.-]+)", msg["sender"]) or [""])[-1].lower()
     if not sender_domain or is_shared_domain(sender_domain):
         return None, None

@@ -1,5 +1,6 @@
 ---
 company: "Old Mission Capital"
+aliases: [Old Mission]
 role: "Quantitative Developer / ETF Market Making"
 stage: rejected
 status: "Archived / Rejected"

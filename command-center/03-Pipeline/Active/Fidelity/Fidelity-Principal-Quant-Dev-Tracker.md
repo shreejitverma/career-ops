@@ -1,5 +1,6 @@
 ---
 company: "Fidelity Investments"
+aliases: [Fidelity]
 role: "Principal Quant Developer (Req 2125023 / 2126133)"
 stage: phone
 status: "Video Interviews Completed / Archive Review"

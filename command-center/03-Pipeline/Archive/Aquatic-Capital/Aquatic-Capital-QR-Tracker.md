@@ -1,5 +1,6 @@
 ---
 company: Aquatic-Capital
+aliases: [Aquatic]
 role: Quant-Research
 level: Early Career
 stage: rejected

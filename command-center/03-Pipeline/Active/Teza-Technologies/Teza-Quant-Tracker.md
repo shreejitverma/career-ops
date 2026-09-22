@@ -1,5 +1,6 @@
 ---
 company: "Teza Technologies"
+aliases: [Teza]
 role: "Quantitative Researcher / Quant Developer"
 stage: phone
 status: "Interview Scheduled / Active"

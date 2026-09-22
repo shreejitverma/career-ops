@@ -105,6 +105,12 @@ class SyncTest(unittest.TestCase):
         review = sj.render_review({e.id: e}, self.trackers, "2026-09-21", root=self.root)
         self.assertIn("careers@othercorp.com", review.split("## Possible untracked applications")[1].split("## Last")[0])
 
+    def test_alias_matches_short_company_name(self):
+        self.tracker.write_text(TRACKER.replace("company: Acme Capital", "company: Acme Capital Investments\naliases: [Acme Capital, AcmeCap]"))
+        trackers = sj.load_trackers(self.root)
+        t, how = sj.match_tracker(msg("Follow Up to Your AcmeCap Application", "no-reply@greenhouse.io"), trackers)
+        self.assertEqual((t.company, how), ("Acme Capital Investments", "name"))
+
     def test_apple_mail_date_parsing(self):
         self.assertEqual(sj.parse_date("Friday, August 28, 2026 at 1:00:10 PM"), "2026-08-28")
         self.assertEqual(sj.parse_date("2026-09-20"), "2026-09-20")

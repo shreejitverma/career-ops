@@ -14,6 +14,7 @@ Its frontmatter is the source of truth for the dashboard, the board, and the inb
 | Field | Values | Notes |
 | :--- | :--- | :--- |
 | `company` | text | Must match the company name used in email subjects or the recruiter's domain, so the email sync can match it. |
+| `aliases` | list | Other names the company uses in email, for example `[Fidelity]` for Fidelity Investments; Obsidian also uses them for link suggestions. |
 | `role` | text | Job title as posted. |
 | `track` | `[sde, quant-dev, quant-research, low-latency, ai-eng]` | One or more. |
 | `focus` | text | Optional specialization, for example "Market Data". |
