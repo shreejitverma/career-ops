@@ -28,6 +28,7 @@ Its frontmatter is the source of truth for the dashboard, the board, and the inb
 | `priority` | `high`, `medium`, `low` | |
 | `confidence` | `1` to `5` | How likely this converts. |
 | `comp_band` | text | Posted or quoted range. |
+| `reached` | a non-terminal stage | Optional: the furthest stage a `rejected`, `withdrawn`, or `ghosted` application got to; the funnel in [[_Pipeline-Stats]] counts it up to that stage. |
 | `rejection_reason` | text | Set when `stage: rejected`. |
 | `recruiter`, `recruiter_email`, `stakeholders` | text or list | Contacts. |
 | `links` | list | Job posting, portal, prep notes. |
