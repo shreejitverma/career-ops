@@ -13,8 +13,8 @@ Its frontmatter is the source of truth for the dashboard, the board, and the inb
 
 | Field | Values | Notes |
 | :--- | :--- | :--- |
-| `company` | text | Must match the company name used in email subjects or the recruiter's domain, so the email sync can match it. |
-| `aliases` | list | Other names the company uses in email, for example `[Fidelity]` for Fidelity Investments; Obsidian also uses them for link suggestions. |
+| `company` | text | Must match, or have an `aliases` entry matching, the company name used in email subjects or the recruiter's domain, so the email sync can match it. |
+| `aliases` | list | Other names the company uses in email, for example `[Fidelity]` for Fidelity Investments; the email sync prefers the longest matching name, and Obsidian also uses them for link suggestions. |
 | `role` | text | Job title as posted. |
 | `track` | `[sde, quant-dev, quant-research, low-latency, ai-eng]` | One or more. |
 | `focus` | text | Optional specialization, for example "Market Data". |
@@ -33,6 +33,8 @@ Its frontmatter is the source of truth for the dashboard, the board, and the inb
 | `rejection_reason` | text | Set when `stage: rejected`. |
 | `recruiter`, `recruiter_email`, `stakeholders` | text or list | Contacts. |
 | `links` | list | Job posting, portal, prep notes. |
+
+List fields may use the inline form (`[a, b]`) or the block form Obsidian's Properties panel writes (`key:` then indented `- a` lines); the pipeline scripts read `aliases` and `track` in either form through `tracker_frontmatter.py`.
 
 ## Stages
 
