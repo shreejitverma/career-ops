@@ -57,6 +57,13 @@ TARGET_ACCOUNTS = [
 ]
 DEDICATED_HINTS = ("interview", "rejection", "job", "bank of america")
 
+# Shared ATS and platform domains: they send mail for many companies, so they never identify a tracker.
+SHARED_DOMAINS = (
+    "greenhouse-mail.io", "greenhouse.io", "lever.co", "myworkday.com", "workday.com", "linkedin.com",
+    "hackerrankforwork.com", "hackerrank.com", "criteriacorp.com", "icims.com", "ashbyhq.com",
+    "smartrecruiters.com", "jobvite.com", "taleo.net",
+)
+
 JOB_KEYWORDS = [
     "interview", "application", "assessment", "hackerrank", "codesignal",
     "karat", "codility", "recruiter", "hiring", "offer", "rejection",
@@ -210,13 +217,18 @@ def classify(msg: dict) -> str:
 
 
 def parse_date(raw: str) -> str:
-    """Apple Mail dates look like 'Friday, August 28, 2026 at 1:00:10 PM'; keep ISO dates as-is."""
+    """Apple Mail dates look like 'Friday, August 28, 2026 at 1:00:10\u202fPM'; keep ISO dates as-is."""
+    text = " ".join(raw.replace("\u202f", " ").replace("\u00a0", " ").split())
     for fmt in ("%A, %B %d, %Y at %I:%M:%S %p", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
         try:
-            return datetime.strptime(raw.strip(), fmt).date().isoformat()
+            return datetime.strptime(text, fmt).date().isoformat()
         except ValueError:
             continue
-    return raw.strip()
+    return text
+
+
+def is_iso_date(s: str) -> bool:
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", s))
 
 
 def read_frontmatter(text: str) -> dict[str, str]:
@@ -247,21 +259,47 @@ def norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
+def words(s: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", s.lower()))
+
+
+def is_shared_domain(domain: str) -> bool:
+    return any(domain == d or domain.endswith("." + d) for d in SHARED_DOMAINS)
+
+
+def name_matches(company: str, hay: str) -> bool:
+    """Whole-word match, so 'drw' does not hit inside 'hdrworks'; 'morganstanley.com' still matches 'Morgan Stanley'."""
+    phrase, compact = words(company), norm(company)
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", hay)) or compact in hay.split()
+
+
 def match_tracker(msg: dict, trackers: list[Tracker]) -> Tracker | None:
+    hay = words(f"{msg['subject']} {msg['sender']}")
+    best = [t for t in trackers if len(norm(t.company)) >= 3 and name_matches(t.company, hay)]
+    if best:
+        # prefer the longest company name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
+        best.sort(key=lambda t: (len(norm(t.company)), "/Active/" in str(t.path)), reverse=True)
+        return best[0]
     sender_domain = (re.findall(r"@([\w.-]+)", msg["sender"]) or [""])[-1].lower()
-    for t in trackers:
-        if sender_domain and sender_domain in t.domains:
-            return t
-    hay = norm(f"{msg['subject']} {msg['sender']}")
-    best = [t for t in trackers if len(norm(t.company)) >= 3 and norm(t.company) in hay]
-    # prefer the longest company name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
-    best.sort(key=lambda t: (len(norm(t.company)), "/Active/" in str(t.path)), reverse=True)
-    return best[0] if best else None
+    if not sender_domain or is_shared_domain(sender_domain):
+        return None
+    owners = [t for t in trackers if sender_domain in t.domains]
+    return owners[0] if len({t.company for t in owners}) == 1 else None
 
 
 def event_id(msg: dict) -> str:
-    key = "|".join(msg.get(k, "") for k in ("account", "mailbox", "subject", "sender", "date"))
+    """Keyed on the message, not the mailbox: one Gmail message under two labels is one event."""
+    key = "|".join(msg.get(k, "") for k in ("account", "subject", "sender", "date"))
     return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+def find_tracker(rel: str, root: Path = PIPELINE) -> Path | None:
+    """Resolve a recorded tracker path, following the file if it moved between Active/ and Archive/."""
+    path = root / rel
+    if path.exists():
+        return path
+    name = Path(rel).name
+    return next((p for d in TRACKER_DIRS for p in sorted((root / d).rglob(name))), None)
 
 
 def to_event(msg: dict, trackers: list[Tracker], root: Path = PIPELINE) -> Event:
@@ -283,17 +321,23 @@ def load_events(path: Path = EVENTS) -> dict[str, Event]:
         for line in path.read_text().splitlines():
             if line.strip():
                 d = json.loads(line)
+                d["date"] = parse_date(d["date"])
                 events[d["id"]] = Event(**d)
     return events
 
 
+def message_key(e: Event) -> tuple[str, str, str, str]:
+    return (e.account, e.subject, e.sender, e.date)
+
+
 def record(new: list[Event], path: Path = EVENTS, dry_run: bool = False) -> list[Event]:
     known = load_events(path)
-    fresh, seen = [], set(known)
+    fresh, seen, seen_keys = [], set(known), {message_key(e) for e in known.values()}
     for e in new:
-        if e.id not in seen:
+        if e.id not in seen and message_key(e) not in seen_keys:
             fresh.append(e)
             seen.add(e.id)
+            seen_keys.add(message_key(e))
     if fresh and not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
@@ -313,15 +357,16 @@ def stage_rank(stage: str) -> int:
 def render_review(events: dict[str, Event], trackers: list[Tracker], today: str, days: int = 30,
                   root: Path = PIPELINE) -> str:
     since = (datetime.fromisoformat(today) - timedelta(days=days)).date().isoformat()
-    recent = sorted((e for e in events.values() if e.date >= since), key=lambda e: e.date, reverse=True)
-    by_path = {str(t.path.relative_to(root)): t for t in trackers}
+    recent = sorted((e for e in events.values() if is_iso_date(e.date) and e.date >= since),
+                    key=lambda e: e.date, reverse=True)
+    by_stem = {t.path.stem: t for t in trackers}
 
     def link(e: Event) -> str:
         return f"[[{Path(e.tracker).stem}]]" if e.tracker else "unmatched"
 
     attention = []
     for e in recent:
-        t = by_path.get(e.tracker or "")
+        t = by_stem.get(Path(e.tracker).stem) if e.tracker else None
         if t and e.suggested_stage and e.suggested_stage.lower() != t.stage.strip().lower():
             if e.suggested_stage in ("rejected", "offer") or stage_rank(e.suggested_stage) > stage_rank(t.stage):
                 attention.append((e, t))
@@ -361,7 +406,10 @@ def apply_timeline(events: list[Event], root: Path = PIPELINE, dry_run: bool = F
     for e in sorted(events, key=lambda e: e.date):
         if not e.tracker or e.signal == "other":
             continue
-        path = root / e.tracker
+        path = find_tracker(e.tracker, root)
+        if path is None:
+            print(f"warning: tracker {e.tracker} not found; skipping event {e.id}", file=sys.stderr)
+            continue
         text = path.read_text()
         marker = f"<!-- evt:{e.id} -->"
         if marker in text:

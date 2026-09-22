@@ -49,8 +49,8 @@ class App:
 
     @property
     def responded(self) -> bool:
-        """Any reply at all: a rejection counts, silence does not."""
-        return self.stage in ("rejected", "withdrawn") or self.furthest > PROGRESS.index("applied")
+        """Any reply at all: a rejection counts; silence and a withdrawal without a reply do not."""
+        return self.stage == "rejected" or self.furthest > PROGRESS.index("applied")
 
 
 def frontmatter(text: str) -> dict[str, str]:

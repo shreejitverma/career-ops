@@ -41,6 +41,13 @@ class ViewsTest(unittest.TestCase):
         text = pv.stats(self.apps).split("## Response rate by source")[1]
         self.assertEqual(self.row(text, "Referral"), "| Referral | 2 | 1 | 50% |")  # B rejected, D ghosted
 
+    def test_withdrawn_without_reply_is_not_a_response(self):
+        d = self.root / "Archive" / "E"
+        d.mkdir(parents=True)
+        (d / "E-Tracker.md").write_text(tracker("E", "withdrawn", "", "Direct"))
+        text = pv.stats(pv.load(self.root)).split("## Response rate by source")[1]
+        self.assertEqual(self.row(text, "Direct"), "| Direct | 1 | 0 | 0% |")
+
     def test_rejection_reasons_listed(self):
         text = pv.stats(self.apps).split("## Rejection reasons")[1]
         self.assertIn("| [[B-Tracker]] | phone | bar |", text)
