@@ -21,6 +21,8 @@ All branches now point at the rewritten history, but the old commits are still r
 2. Through pull request refs, in particular `refs/pull/61/head` (PR #61, closed, head `6e38c67196385f9fa5214ea7e8fc1d86b8823069`), which was created after the sensitive data was committed.
 3. Possibly through older pull request refs (#1 to #60), which reference commits containing the copyrighted PDFs.
 
+I checked a full mirror after both rewrites: no branch reaches the private data; `refs/pull/61/head` is the only ref that still does.
+
 Commits on the old `main` that contain the private data (tree or diff):
 
 - `23c81e3adeb685707c79d94b1c76fa1437aa45f9` (2026-09-18, first commit with the data)
@@ -29,7 +31,8 @@ Commits on the old `main` that contain the private data (tree or diff):
 - `c6bb7e84bd3052a1d8feda8c6280f433e19bcdcf`
 - `580cfeb6cbe09784055ed803961a0b8580f1675d` (old `main` head before the first rewrite)
 
-<!-- After the second rewrite, add: old main head before the PDF purge: <SHA> -->
+Old `main` head before the second rewrite (the PDF purge): `ded18b6f1d67c78d41c03fff8d0342c88d0b77ef` (2026-09-21).
+Every commit reachable from it still contains the third-party PDFs.
 
 Could you please:
 
