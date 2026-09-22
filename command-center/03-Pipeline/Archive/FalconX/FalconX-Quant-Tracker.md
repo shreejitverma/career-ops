@@ -1,10 +1,10 @@
 ---
 company: "FalconX"
 role: "Quantitative Developer / Researcher"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Dev"
-date_applied: 2026-08-10
+track: [quant-dev]
+applied: 2026-08-10
 date_rejected: 2026-08-28
 rejection_reason: "Application reviewed via Greenhouse; position filled"
 recruiter: "no-reply@us.greenhouse-mail.io"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # FalconX - Quantitative Developer / Researcher (Archived)

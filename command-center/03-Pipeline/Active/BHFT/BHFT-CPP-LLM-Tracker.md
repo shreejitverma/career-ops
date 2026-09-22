@@ -2,17 +2,17 @@
 company: BHFT
 role: Low-Latency
 level: Senior C++ Developer
-stage: recruiter-screen
-date_applied: 2026-09-18
+stage: recruiter
+applied: 2026-09-18
 next_action: "Reply to Joshua Miguel (ZMG Ward Howell) on LinkedIn InMail to schedule initial discussion call"
-next_deadline: 2026-09-20
-referral: "Recruiter InMail Outreach"
+next_action_date: 2026-09-20
+source: "Recruiter InMail Outreach"
 recruiter: "Joshua Miguel"
 recruiter_email: "inmail-hit-reply@linkedin.com"
 recruiter_firm: "ZMG Ward Howell Inc"
 confidence: 4
 priority: high
-salary_range: "$250,000 - $350,000+ (HFT Benchmark)"
+comp_band: "$250,000 - $350,000+ (HFT Benchmark)"
 location: "Remote"
 remote: true
 manager: "Engineering Lead"
@@ -27,6 +27,9 @@ tags:
   - c-plus-plus
   - llm
   - remote
+track: [low-latency]
+referrer:
+links: []
 ---
 
 # ⚡ BHFT — C++ Developer (with LLM Experience)

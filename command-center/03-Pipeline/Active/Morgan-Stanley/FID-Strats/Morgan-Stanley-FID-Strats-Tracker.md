@@ -2,16 +2,16 @@
 company: Morgan-Stanley
 role: Quant-Dev
 level: Strats / Early Career
-stage: technical-assessment
-date_applied: 2024-10-02
+stage: OA
+applied: 2024-10-02
 next_action: "Review HackerRank FID Strats & Alphawise test syllabus; practice C++, Python, algorithms & probability"
-next_deadline: 2024-11-15
-referral: "Direct Campus / ATS Application"
+next_action_date: 2024-11-15
+source: "Direct Campus / ATS Application"
 recruiter: "Morgan Stanley Hiring Team"
 recruiter_email: "support@hackerrankforwork.com"
 confidence: 4
 priority: high
-salary_range: "$150,000 - $185,000 + Bonus"
+comp_band: "$150,000 - $185,000 + Bonus"
 location: "New York, NY"
 remote: false
 manager: "FID Strats Team Lead"
@@ -27,6 +27,9 @@ tags:
   - hackerrank
   - c-plus-plus
   - python
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # 🏛️ Morgan Stanley — FID Strats & Alphawise (Quant/Engineering)

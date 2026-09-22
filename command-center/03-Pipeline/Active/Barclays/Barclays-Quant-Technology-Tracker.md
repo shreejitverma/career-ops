@@ -2,16 +2,16 @@
 company: Barclays
 role: Quant-Dev
 level: Early Career / Associate
-stage: technical-assessment
-date_applied: 2024-10-09
+stage: OA
+applied: 2024-10-09
 next_action: "Complete online assessment via Workday portal"
-next_deadline: 2024-10-23
-referral: "Direct Application (Workday)"
+next_action_date: 2024-10-23
+source: "Direct Application (Workday)"
 recruiter: "Barclays Graduate & Early Careers Recruitment"
 recruiter_email: "barclays@myworkday.com"
 confidence: 3
 priority: medium
-salary_range: "$130,000 - $160,000"
+comp_band: "$130,000 - $160,000"
 location: "New York, NY / Whippany, NJ"
 remote: false
 manager: "Barclays Markets Technology"
@@ -23,6 +23,9 @@ tags:
   - barclays
   - quant-dev
   - online-assessment
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # 🏦 Barclays — Quantitative & Technology Assessment

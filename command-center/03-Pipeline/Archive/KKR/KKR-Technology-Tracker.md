@@ -3,15 +3,15 @@ company: KKR
 role: SDE
 level: Summer Internship
 stage: rejected
-date_applied: 2024-09-20
+applied: 2024-09-20
 next_action: "None (Archived)"
-next_deadline: 
-referral: "Direct Application"
+next_action_date: 
+source: "Direct Application"
 recruiter: "KKR Campus Recruiting"
 recruiter_email: "kkrcampusrecruiting@kkr.com"
 confidence: 3
 priority: low
-salary_range: "$50-60/hr"
+comp_band: "$50-60/hr"
 location: "New York, NY"
 remote: false
 manager: "KKR Engineering Lead"
@@ -22,6 +22,8 @@ tags:
   - rejected
   - kkr
   - sde
+referrer:
+links: []
 ---
 
 # 🏢 KKR — Technology Summer Internship (Archived)

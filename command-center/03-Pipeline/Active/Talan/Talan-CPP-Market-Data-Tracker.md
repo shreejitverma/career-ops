@@ -1,16 +1,17 @@
 ---
 company: "Talan"
 role: "C++ Software Engineer - Market Data"
-stage: "Interview"
+stage: onsite
 status: "Technical Interview Loop Completed"
-track: "Low-Latency / Market Data"
-priority: "P2"
-confidence: "Medium"
-date_applied: 2026-06-10
+track: [low-latency]
+focus: Market Data
+priority: medium
+confidence: 3
+applied: 2026-06-10
 last_contact: 2026-06-16
 next_action: "Review Market Data C++ notes and await client assignment matching"
-next_deadline: 2026-09-30
-salary_range: "$160,000 - $190,000"
+next_action_date: 2026-09-30
+comp_band: "$160,000 - $190,000"
 location: "New York, NY"
 stakeholders:
   - name: "Kelley Chung"
@@ -20,6 +21,8 @@ tags:
   - interview-tracker
   - active-pipeline
   - low-latency / market data
+referrer:
+links: []
 ---
 
 # Talan - C++ Software Engineer - Market Data

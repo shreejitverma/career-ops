@@ -1,122 +1,60 @@
-# 📊 Interview Pipeline Dashboard
-
-> **Active interviews tracked here.** Create new interviews using the `_Templates/Interview-Note` template.
-
+---
+type: playbook
+status: solid
 ---
 
-## 🔴 Requiring Immediate Action
+# Pipeline dashboard
+
+[[Pipeline-Board|Board]] - [[_Inbox-Review|Inbox review]] - [[_Pipeline-Stats|Statistics]] - [[_Application-Schema|Schema]]
+
+The daily sync (09:00) refreshes the inbox review, the statistics, and the board.
+Tables below are live: they read tracker frontmatter every time the note opens.
+
+## Overdue follow-ups
+
 ```dataview
 TABLE WITHOUT ID
+  file.link AS "Application",
+  company AS "Company",
+  stage AS "Stage",
+  next_action AS "Next action",
+  next_action_date AS "Due"
+FROM "16-Interview-Command-Center/03-Pipeline/Active"
+WHERE next_action_date AND date(next_action_date) < date(today)
+  AND !contains(list("offer", "rejected", "withdrawn", "ghosted"), stage)
+SORT next_action_date ASC
+```
+
+## Active pipeline
+
+```dataview
+TABLE WITHOUT ID
+  file.link AS "Application",
   company AS "Company",
   role AS "Role",
   stage AS "Stage",
-  next_action AS "Action Needed",
-  next_deadline AS "Deadline"
+  next_action AS "Next action",
+  next_action_date AS "Due",
+  priority AS "Priority",
+  confidence AS "Confidence"
 FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE next_deadline != null AND next_deadline <= date(today) + dur(3 days)
-SORT next_deadline ASC
+WHERE stage AND !contains(list("rejected", "withdrawn", "ghosted"), stage)
+SORT choice(priority = "high", 1, choice(priority = "medium", 2, 3)) ASC, next_action_date ASC
 ```
 
-## 📋 Full Pipeline by Stage
-
-### 🎯 Applied
-```dataview
-TABLE WITHOUT ID
-  file.link AS "Interview / Track",
-  company AS "Company",
-  role AS "Role",
-  manager AS "Manager",
-  salary_range AS "Rate",
-  date_applied AS "Applied",
-  priority AS "Priority"
-FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE stage = "applied"
-SORT date_applied DESC
-```
-
-
-### 📞 Recruiter Call
-```dataview
-TABLE WITHOUT ID company AS "Company", role AS "Role", level AS "Level", next_deadline AS "Next Step"
-FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE stage = "recruiter-call" OR stage = "recruiter-screen"
-SORT next_deadline ASC
-```
-
-### 💻 Online Assessment / Coding Challenge (OA)
-```dataview
-TABLE WITHOUT ID
-  file.link AS "Interview / Track",
-  company AS "Company",
-  role AS "Role",
-  next_action AS "Assessment Scope",
-  next_deadline AS "Deadline",
-  priority AS "Priority"
-FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE stage = "technical-assessment"
-SORT next_deadline ASC
-```
-
-
-### 📱 Phone Screen
-```dataview
-TABLE WITHOUT ID company AS "Company", role AS "Role", level AS "Level", confidence + "/5" AS "Confidence"
-FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE stage = "phone-screen"
-SORT next_deadline ASC
-```
-
-### 🎯 Active Interviews & Final Rounds
-```dataview
-TABLE WITHOUT ID
-  file.link AS "Interview / Track",
-  company AS "Company",
-  role AS "Role",
-  stage AS "Stage",
-  next_action AS "Next Action",
-  next_deadline AS "Target Date",
-  priority AS "Priority"
-FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE stage = "Interview" OR stage = "Final Round" OR stage = "technical" OR stage = "onsite"
-SORT next_deadline ASC
-```
-
-### 📞 Recruiter Screen & Outreach
-```dataview
-TABLE WITHOUT ID
-  file.link AS "Track",
-  company AS "Company",
-  role AS "Role",
-  next_action AS "Action Needed",
-  priority AS "Priority"
-FROM "16-Interview-Command-Center/03-Pipeline/Active"
-WHERE stage = "recruiter-screen" OR stage = "applied" OR stage = "outreach"
-SORT priority ASC
-```
-
----
-
-## 📈 Pipeline Stats
+## Upcoming in the next 7 days
 
 ```dataview
 TABLE WITHOUT ID
-  length(rows) AS "Count",
-  key AS "Stage"
+  file.link AS "Application",
+  next_action AS "Next action",
+  next_action_date AS "Due"
 FROM "16-Interview-Command-Center/03-Pipeline/Active"
-GROUP BY stage AS key
+WHERE next_action_date AND date(next_action_date) >= date(today)
+  AND date(next_action_date) <= date(today) + dur(7 days)
+SORT next_action_date ASC
 ```
 
-## 🗄️ Archived & Post-Mortem Bench (Recent Top Funds)
+## Statistics
 
-```dataview
-TABLE WITHOUT ID
-  file.link AS "Company Tracker",
-  company AS "Company",
-  role AS "Role",
-  track AS "Track",
-  date_rejected AS "Outcome Date",
-  rejection_reason AS "Outcome / Status"
-FROM "16-Interview-Command-Center/03-Pipeline/Archive"
-SORT date_rejected DESC
-```
-
+![[_Pipeline-Stats]]

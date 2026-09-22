@@ -1,16 +1,16 @@
 ---
 company: "Fidelity Investments"
 role: "Principal Quant Developer (Req 2125023 / 2126133)"
-stage: "Interview"
+stage: phone
 status: "Video Interviews Completed / Archive Review"
-track: "Quant-Dev"
-priority: "P1"
-confidence: "Medium"
-date_applied: 2026-05-01
+track: [quant-dev]
+priority: high
+confidence: 3
+applied: 2026-05-01
 last_contact: 2026-07-08
 next_action: "Check Workday portal for new Principal Quant openings"
-next_deadline: 2026-10-01
-salary_range: "$190,000 - $235,000 + Bonus"
+next_action_date: 2026-10-01
+comp_band: "$190,000 - $235,000 + Bonus"
 location: "Boston, MA / Jersey City, NJ"
 stakeholders:
   - name: "Brianna Collums"
@@ -26,6 +26,8 @@ tags:
   - interview-tracker
   - active-pipeline
   - quant-dev
+referrer:
+links: []
 ---
 
 # Fidelity Investments - Principal Quant Developer (Req 2125023 / 2126133)

@@ -1,10 +1,10 @@
 ---
 company: "Schonfeld"
 role: "Senior FX Vol Quant Strategist / Researcher"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Research"
-date_applied: 2026-06-05
+track: [quant-research]
+applied: 2026-06-05
 date_rejected: 2026-06-17
 rejection_reason: "Direct Greenhouse update"
 recruiter: "no-reply@us.greenhouse-mail.io"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Schonfeld - Senior FX Vol Quant Strategist / Researcher (Archived)

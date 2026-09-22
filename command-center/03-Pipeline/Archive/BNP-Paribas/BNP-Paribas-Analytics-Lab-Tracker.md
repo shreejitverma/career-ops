@@ -3,15 +3,15 @@ company: BNP-Paribas
 role: Quant-Dev
 level: Summer AVP Internship
 stage: rejected
-date_applied: 2024-10-15
+applied: 2024-10-15
 next_action: "None (Archived)"
-next_deadline: 
-referral: "Direct Application"
+next_action_date: 
+source: "Direct Application"
 recruiter: "BNP Paribas Early Careers"
 recruiter_email: "noreply@bnppus.tal.net"
 confidence: 3
 priority: low
-salary_range: "$55-65/hr"
+comp_band: "$55-65/hr"
 location: "New York, NY"
 remote: false
 manager: "CIB Analytics Lab Lead"
@@ -23,6 +23,9 @@ tags:
   - bnp-paribas
   - quant-dev
   - banking
+track: [quant-dev]
+referrer:
+links: []
 ---
 
 # 🏦 BNP Paribas — CIB Analytics Lab (Archived)

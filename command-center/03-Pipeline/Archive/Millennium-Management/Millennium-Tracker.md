@@ -1,10 +1,10 @@
 ---
 company: "Millennium Management"
 role: "Quantitative Developer / Alpha Research"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Dev"
-date_applied: 2026-07-01
+track: [quant-dev]
+applied: 2026-07-01
 date_rejected: 2026-07-28
 rejection_reason: "Pod-specific hiring mismatch"
 recruiter: "Millennium Recruiting Team (millenniumrecruitingteam@careers.mlp.com)"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # Millennium Management - Quantitative Developer / Alpha Research (Archived)

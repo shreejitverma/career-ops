@@ -1,16 +1,16 @@
 ---
 company: "Teza Technologies"
 role: "Quantitative Researcher / Quant Developer"
-stage: "Interview"
+stage: phone
 status: "Interview Scheduled / Active"
-track: "Quant-Research / Quant-Dev"
-priority: "P1"
-confidence: "High"
-date_applied: 2026-09-01
+track: [quant-research, quant-dev]
+priority: high
+confidence: 4
+applied: 2026-09-01
 last_contact: 2026-09-14
 next_action: "Follow up on upcoming interview schedule with Gia German"
-next_deadline: 2026-09-21
-salary_range: "$250,000 - $350,000 + Bonus"
+next_action_date: 2026-09-21
+comp_band: "$250,000 - $350,000 + Bonus"
 location: "New York, NY (Hybrid)"
 stakeholders:
   - name: "Gia German"
@@ -23,6 +23,8 @@ tags:
   - interview-tracker
   - active-pipeline
   - quant-research / quant-dev
+referrer:
+links: []
 ---
 
 # Teza Technologies - Quantitative Researcher / Quant Developer

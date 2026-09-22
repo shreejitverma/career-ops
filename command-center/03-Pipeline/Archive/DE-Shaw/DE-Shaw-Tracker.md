@@ -1,10 +1,10 @@
 ---
 company: "D. E. Shaw"
 role: "Quantitative Developer / Analyst"
-stage: "Rejected"
+stage: rejected
 status: "Archived / Rejected"
-track: "Quant-Dev"
-date_applied: 2026-05-25
+track: [quant-dev]
+applied: 2026-05-25
 date_rejected: 2026-06-18
 rejection_reason: "Resume screening rejection from recruiting@deshaw.com"
 recruiter: "recruiting@deshaw.com"
@@ -12,6 +12,8 @@ tags:
   - interview-tracker
   - archive
   - rejection-postmortem
+referrer:
+links: []
 ---
 
 # D. E. Shaw - Quantitative Developer / Analyst (Archived)

@@ -1,16 +1,16 @@
 ---
 company: "AT&T Labs"
 role: "Distributed Systems Software Engineer"
-stage: "Final Round"
+stage: onsite
 status: "Final Onsite Interview Completed"
-track: "Low-Latency / Distributed Systems"
-priority: "P1"
-confidence: "High"
-date_applied: 2026-08-20
+track: [low-latency, sde]
+priority: high
+confidence: 4
+applied: 2026-08-20
 last_contact: 2026-09-10
 next_action: "Debrief with Benjamin Byrne on client feedback and offer decision"
-next_deadline: 2026-09-22
-salary_range: "$175,000 - $210,000"
+next_action_date: 2026-09-22
+comp_band: "$175,000 - $210,000"
 location: "Middletown, NJ / New York, NY"
 stakeholders:
   - name: "Benjamin Byrne"
@@ -20,6 +20,8 @@ tags:
   - interview-tracker
   - active-pipeline
   - low-latency / distributed systems
+referrer:
+links: []
 ---
 
 # AT&T Labs - Distributed Systems Software Engineer

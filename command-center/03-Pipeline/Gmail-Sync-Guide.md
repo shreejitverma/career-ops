@@ -2,7 +2,7 @@
 tags: [gmail, automation, pipeline, prompt, ingestion, tools, daily-sync]
 ---
 
-# 📬 Master Gmail Job Ingestion & Daily 48-Hour Sync System
+# Master Gmail Job Ingestion & Daily 48-Hour Sync System
 
 > **Purpose:** A dual-mode system to automatically fetch, extract, and integrate all job-hunting emails from Gmail into your **Interview Command Center**:
 > 1. **Full Initial Sync:** Historical ingestion of all past applications, recruiter outreach, and OAs.
@@ -10,16 +10,16 @@ tags: [gmail, automation, pipeline, prompt, ingestion, tools, daily-sync]
 
 ---
 
-## ⚡ Quick Reference: The Two Gmail Search Queries
+## Quick Reference: The Two Gmail Search Queries
 
-### 1. 🔄 Daily Refresh Query (Rolling Past 2 Days — Run Every Morning)
+### 1. Daily Refresh Query (Rolling Past 2 Days - Run Every Morning)
 Copy and paste this into Gmail every morning to grab only updates from the past 48 hours:
 
 ```gmail
 ("application" OR "interview" OR "recruiter" OR "hiring team" OR "assessment" OR "coding challenge" OR "hackerrank" OR "codesignal" OR "karat" OR "codility" OR "right to represent" OR "offer" OR "rejection" OR "status of your application" OR "next steps" OR "scheduling" OR "availability" OR "phone screen" OR "technical round" OR "onsite" OR "take-home" OR "congratulations" OR "thank you for your interest" OR "applied to") -from:(jobalerts-noreply@linkedin.com OR alert@indeed.com OR messages-noreply@linkedin.com OR digest-noreply@quora.com OR "newsletter" OR "job recommendations" OR "jobs for you") -subject:("job alert" OR "jobs you may like" OR "recommended jobs" OR "daily job alert" OR "weekly digest") newer_than:2d
 ```
 
-### 2. 📚 Full Initial Historical Query (All-Time / Last 60 Days)
+### 2. Full Initial Historical Query (All-Time / Last 60 Days)
 Run this once to discover and bootstrap all existing historical pipelines:
 
 ```gmail
@@ -28,7 +28,7 @@ Run this once to discover and bootstrap all existing historical pipelines:
 
 ---
 
-## 🤖 The Master AI Prompt (With Dual-Mode Support)
+## The Master AI Prompt (With Dual-Mode Support)
 
 This prompt features an automatic **Sync Mode Detector** that handles both initial onboarding and state-preserving daily refreshes.
 
@@ -68,7 +68,7 @@ Does this company/role already exist in my vault?
      - Advance `stage` (e.g., `applied` -> `phone-screen`, or `phone-screen` -> `technical`)
      - Update `next_action` with the exact next requirement (e.g., "Complete HackerRank by Sept 22")
      - Update `next_deadline` (YYYY-MM-DD)
-  2. Append Timeline Row to `## 📋 Interview Timeline`:
+  2. Append Timeline Row to `## Interview Timeline`:
      `| YYYY-MM-DD | [Round Name] | [Interviewer/Recruiter] | [Format] | [Duration] | [Status] |`
   3. Action Checklist Items: Add any test links, prep tasks, or confirmation replies needed.
 
@@ -110,7 +110,7 @@ RAW EMAIL TEXT / DAILY 48-HOUR EXPORT TO PROCESS:
 
 ---
 
-## 📅 The 60-Second Daily Morning Sync Routine
+## The 60-Second Daily Morning Sync Routine
 
 Integrate this into your morning routine to stay 100% on top of all recruiter messages and coding test deadlines:
 
@@ -137,87 +137,25 @@ Step 4: Vault Automatically Updated
 
 ---
 
-## 🐍 Automated Python Script (With `--mode daily` vs `--mode full`)
+## Automated sync (the maintained pipeline)
 
-Save this script as `sync_job_emails.py`. It supports both full historical sync and daily 48-hour rolling refreshes:
+The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note:
 
-```python
-"""
-sync_job_emails.py - Automated Dual-Mode Gmail to Obsidian Ingestion
-Modes:
-  python sync_job_emails.py --mode daily   # Fetches last 48 hours
-  python sync_job_emails.py --mode full    # Fetches all historical
-"""
+1. `sync_job_emails.py --mode daily --apply` reads recent mail from the Apple Mail accounts listed in the script, keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received), matches it to a tracker by company name or recruiter domain, and appends new events to `.sync/events.jsonl`.
+   It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
+   An email matched only by sender domain (for example an agency recruiter, who also writes about other companies) is listed in the review note as "domain match, check" and never appended.
+   It never edits frontmatter; update `stage` yourself when the review suggests it.
+2. `pipeline_views.py` rewrites [[_Pipeline-Stats]] (funnel, response rate by source, rejection reasons) and [[Pipeline-Board]].
 
-import os
-import sys
-import argparse
-from datetime import datetime
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+Useful commands:
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
-VAULT_DIR = "/Users/shreejitverma/github/SDE-Interview-Prep/16-Interview-Command-Center/03-Pipeline/Active"
-
-BASE_FILTER = (
-    '("application" OR "interview" OR "recruiter" OR "hiring team" OR "assessment" OR '
-    '"coding challenge" OR "hackerrank" OR "codesignal" OR "right to represent" OR "offer" OR "rejection") '
-    '-from:(jobalerts-noreply@linkedin.com OR alert@indeed.com OR messages-noreply@linkedin.com) '
-    '-subject:("job alert" OR "jobs you may like")'
-)
-
-def build_query(mode: str) -> str:
-    if mode == "daily":
-        return f"{BASE_FILTER} newer_than:2d"
-    return BASE_FILTER
-
-def get_gmail_service():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return build('gmail', 'v1', credentials=creds)
-
-def sync_emails(mode: str):
-    service = get_gmail_service()
-    query = build_query(mode)
-    print(f"🔄 Executing [{mode.upper()}] sync with query:\n{query}\n")
-
-    results = service.users().messages().list(userId='me', q=query, maxResults=30).execute()
-    messages = results.get('messages', [])
-
-    if not messages:
-        print("✅ No new job-related emails found in this time window.")
-        return
-
-    print(f"📬 Found {len(messages)} matching emails.\n" + "="*60)
-
-    for msg_meta in messages:
-        msg = service.users().messages().get(userId='me', id=msg_meta['id'], format='full').execute()
-        headers = {h['name'].lower(): h['value'] for h in msg['payload']['headers']}
-        
-        subject = headers.get('subject', 'No Subject')
-        sender = headers.get('from', 'Unknown Sender')
-        date_str = headers.get('date', '')
-        snippet = msg.get('snippet', '')
-
-        print(f"\n📩 [{date_str}]")
-        print(f"   From: {sender}")
-        print(f"   Subject: {subject}")
-        print(f"   Snippet: {snippet[:140]}...")
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Sync Gmail Job Emails to Obsidian")
-    parser.add_argument("--mode", choices=["daily", "full"], default="daily", help="Sync mode: 'daily' (last 48h) or 'full' (all)")
-    args = parser.parse_args()
-    sync_emails(args.mode)
+```sh
+python3 sync_job_emails.py --dry-run            # what would change, writes nothing
+python3 sync_job_emails.py --mode full --apply  # deeper historical scan
+python3 sync_job_emails.py --from-json FILE     # replay a saved export, no Mail needed
+python3 normalize_trackers.py                   # check trackers against _Application-Schema
+python3 -m unittest discover -s tests           # behavior tests
 ```
+
+The field and stage definitions are in [[_Application-Schema]].
+The first-import scripts are in `legacy/` and must not be re-run.

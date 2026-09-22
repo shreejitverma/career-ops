@@ -3,15 +3,15 @@ company: Garda-Capital-Partners
 role: Quant-Research
 level: Quantitative Analyst / Trader
 stage: rejected
-date_applied: 2024-10-22
+applied: 2024-10-22
 next_action: "None (Archived)"
-next_deadline: 
-referral: "Direct Application"
+next_action_date: 
+source: "Direct Application"
 recruiter: "Garda Capital Partners Recruitment"
 recruiter_email: "DO-NOT-REPLY@criteriacorp.com"
 confidence: 3
 priority: low
-salary_range: "$150,000 - $200,000"
+comp_band: "$150,000 - $200,000"
 location: "Minneapolis, MN / New York, NY"
 remote: false
 manager: "Quantitative Strategies"
@@ -23,6 +23,9 @@ tags:
   - garda-capital
   - quant-research
   - assessment
+track: [quant-research]
+referrer:
+links: []
 ---
 
 # 🏛️ Garda Capital Partners — Quantitative Analyst (Archived)
