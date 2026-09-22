@@ -1,5 +1,6 @@
 ---
 company: "The Voleon Group"
+aliases: [Voleon]
 role: "Quantitative Researcher / ML Engineer"
 stage: rejected
 status: "Archived / Rejected"

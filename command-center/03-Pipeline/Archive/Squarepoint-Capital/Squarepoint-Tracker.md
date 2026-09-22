@@ -1,5 +1,6 @@
 ---
 company: "Squarepoint Capital"
+aliases: [Squarepoint]
 role: "Quantitative Developer"
 stage: rejected
 status: "Archived / Rejected"

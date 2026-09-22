@@ -19,11 +19,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+from tracker_frontmatter import read_frontmatter, read_list
 
 PIPELINE = Path(__file__).resolve().parent
 TRACKER_DIRS = ("Active", "Archive")
@@ -53,25 +54,15 @@ class App:
         return self.stage == "rejected" or self.furthest > PROGRESS.index("applied")
 
 
-def frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---\n"):
-        return {}
-    fm = {}
-    for line in text[4:text.find("\n---", 4)].splitlines():
-        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
-        if m:
-            fm[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-    return fm
-
-
 def load(root: Path = PIPELINE) -> list[App]:
     apps = []
     for d in TRACKER_DIRS:
         for p in sorted((root / d).rglob("*.md")):
-            fm = frontmatter(p.read_text(errors="ignore"))
+            text = p.read_text(errors="ignore")
+            fm = read_frontmatter(text)
             if not fm.get("company") or not fm.get("stage"):
                 continue
-            tracks = [t.strip() for t in fm.get("track", "").strip("[]").split(",") if t.strip()]
+            tracks = read_list(text, "track")
             apps.append(App(p.stem, fm["company"], fm["stage"], fm.get("reached", ""), tracks or ["unassigned"],
                             fm.get("source", "") or "unknown", fm.get("rejection_reason", "")))
     return apps

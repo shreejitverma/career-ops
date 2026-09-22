@@ -1,5 +1,6 @@
 ---
 company: Garda-Capital-Partners
+aliases: [Garda]
 role: Quant-Research
 level: Quantitative Analyst / Trader
 stage: rejected

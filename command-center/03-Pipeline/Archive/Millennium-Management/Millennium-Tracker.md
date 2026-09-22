@@ -1,5 +1,6 @@
 ---
 company: "Millennium Management"
+aliases: [Millennium]
 role: "Quantitative Developer / Alpha Research"
 stage: rejected
 status: "Archived / Rejected"

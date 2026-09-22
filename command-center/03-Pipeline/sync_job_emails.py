@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tracker_frontmatter import read_frontmatter, read_list
+
 PIPELINE = Path(__file__).resolve().parent
 STATE_DIR = PIPELINE / ".sync"
 EVENTS = STATE_DIR / "events.jsonl"
@@ -111,6 +113,12 @@ class Tracker:
     company: str
     stage: str
     domains: set[str] = field(default_factory=set)
+    aliases: list[str] = field(default_factory=list)
+
+    @property
+    def names(self) -> list[str]:
+        """Company name plus Obsidian `aliases`, e.g. Fidelity for Fidelity Investments."""
+        return [self.company, *self.aliases]
 
 
 @dataclass
@@ -233,27 +241,16 @@ def is_iso_date(s: str) -> bool:
     return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", s))
 
 
-def read_frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---\n"):
-        return {}
-    end = text.find("\n---", 4)
-    fm = {}
-    for line in text[4:end].splitlines():
-        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
-        if m:
-            fm[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-    return fm
-
-
 def load_trackers(root: Path = PIPELINE) -> list[Tracker]:
     trackers = []
     for d in TRACKER_DIRS:
         for p in sorted((root / d).rglob("*.md")):
-            fm = read_frontmatter(p.read_text(errors="ignore"))
+            text = p.read_text(errors="ignore")
+            fm = read_frontmatter(text)
             if not fm.get("company") or "stage" not in fm:
                 continue
             domains = {e.rsplit("@", 1)[1].lower() for e in re.findall(r"[\w.+-]+@[\w.-]+", " ".join(fm.values()))}
-            trackers.append(Tracker(p, fm["company"], fm.get("stage", ""), domains))
+            trackers.append(Tracker(p, fm["company"], fm.get("stage", ""), domains, read_list(text, "aliases")))
     return trackers
 
 
@@ -281,11 +278,16 @@ def name_matches(company: str, hay: str) -> bool:
 def match_tracker(msg: dict, trackers: list[Tracker]) -> tuple[Tracker | None, str | None]:
     """Return the tracker and how it matched: 'name' (company named in the email) or 'domain' (sender domain only)."""
     hay = words(f"{msg['subject']} {msg['sender']}")
-    best = [t for t in trackers if len(norm(t.company)) >= 3 and name_matches(t.company, hay)]
+    def matched(t: Tracker) -> int:
+        """Length of the longest of the tracker's names found in the email, or 0."""
+        return max((len(norm(n)) for n in t.names if len(norm(n)) >= 3 and name_matches(n, hay)), default=0)
+
+    best = [(matched(t), t) for t in trackers]
+    best = [(n, t) for n, t in best if n]
     if best:
-        # prefer the longest company name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
-        best.sort(key=lambda t: (len(norm(t.company)), "/Active/" in str(t.path)), reverse=True)
-        return best[0], "name"
+        # prefer the longest matching name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
+        best.sort(key=lambda nt: (nt[0], "/Active/" in str(nt[1].path)), reverse=True)
+        return best[0][1], "name"
     sender_domain = (re.findall(r"@([\w.-]+)", msg["sender"]) or [""])[-1].lower()
     if not sender_domain or is_shared_domain(sender_domain):
         return None, None

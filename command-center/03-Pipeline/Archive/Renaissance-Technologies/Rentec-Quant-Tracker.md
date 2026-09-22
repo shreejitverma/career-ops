@@ -1,5 +1,6 @@
 ---
 company: "Renaissance Technologies"
+aliases: [Rentec]
 role: "Quantitative Researcher / Developer"
 stage: rejected
 status: "Archived / Rejected"

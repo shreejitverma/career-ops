@@ -1,5 +1,6 @@
 ---
 company: "D. E. Shaw"
+aliases: [DE Shaw, D.E. Shaw]
 role: "Quantitative Developer / Analyst"
 stage: rejected
 status: "Archived / Rejected"

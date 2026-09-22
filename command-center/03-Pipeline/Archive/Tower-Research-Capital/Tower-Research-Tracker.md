@@ -1,5 +1,6 @@
 ---
 company: "Tower Research Capital"
+aliases: [Tower Research]
 role: "Low-Latency C++ Developer"
 stage: rejected
 status: "Archived / Rejected"

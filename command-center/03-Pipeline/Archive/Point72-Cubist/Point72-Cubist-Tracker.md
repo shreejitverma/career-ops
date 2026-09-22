@@ -1,5 +1,6 @@
 ---
 company: "Point72"
+aliases: [Cubist, Cubist Systematic]
 role: "Quantitative Developer - Cubist Systematic Strategies"
 stage: rejected
 status: "Archived / Rejected"

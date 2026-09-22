@@ -1,5 +1,6 @@
 ---
 company: Radix-Trading
+aliases: [Radix]
 role: Quant-Dev
 level: Early Career / University
 stage: applied

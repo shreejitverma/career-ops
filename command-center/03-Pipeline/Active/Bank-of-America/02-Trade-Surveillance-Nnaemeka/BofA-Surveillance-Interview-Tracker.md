@@ -1,5 +1,6 @@
 ---
 company: Bank-of-America
+aliases: [Bank of America, BofA]
 role: Quant-Dev
 level: Senior Contract
 stage: applied

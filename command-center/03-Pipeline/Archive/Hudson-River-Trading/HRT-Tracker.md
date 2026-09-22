@@ -1,5 +1,6 @@
 ---
 company: Hudson-River-Trading
+aliases: [Hudson River Trading, HRT]
 role: Quant-Dev
 level: Early Career
 stage: rejected

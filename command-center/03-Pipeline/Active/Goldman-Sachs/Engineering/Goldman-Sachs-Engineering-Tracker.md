@@ -1,5 +1,6 @@
 ---
 company: Goldman-Sachs
+aliases: [Goldman]
 role: Quant-Dev
 level: Early Career / Analyst
 stage: OA
