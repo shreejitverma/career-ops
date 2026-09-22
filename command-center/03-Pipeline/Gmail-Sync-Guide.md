@@ -142,7 +142,8 @@ Step 4: Vault Automatically Updated
 The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note:
 
 1. `sync_job_emails.py --mode daily --apply` reads recent mail from the Apple Mail accounts listed in the script, keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received), matches it to a tracker by company name or recruiter domain, and appends new events to `.sync/events.jsonl`.
-   It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line per matched email to the tracker's `## Timeline`.
+   It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
+   An email matched only by sender domain (for example an agency recruiter, who also writes about other companies) is listed in the review note as "domain match, check" and never appended.
    It never edits frontmatter; update `stage` yourself when the review suggests it.
 2. `pipeline_views.py` rewrites [[_Pipeline-Stats]] (funnel, response rate by source, rejection reasons) and [[Pipeline-Board]].
 

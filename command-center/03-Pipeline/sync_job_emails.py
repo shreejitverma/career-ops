@@ -12,8 +12,9 @@ Pipeline:
                so re-running never duplicates anything).
   6. review  - regenerate _Inbox-Review.md: recent events, and the trackers whose
                current stage disagrees with what the email suggests.
-  7. apply   - with --apply, add one dated line per matched event to the tracker's
+  7. apply   - with --apply, add one dated line per name-matched event to the tracker's
                "## Timeline" section, tagged with its event id so it is added once.
+               Domain-only matches (e.g. an agency recruiter) appear only in the review note.
 
 Frontmatter is never modified: stage and every other field stay under human
 control; the review note only suggests changes.
@@ -123,6 +124,7 @@ class Event:
     signal: str
     suggested_stage: str | None
     tracker: str | None  # path relative to PIPELINE
+    match: str | None = None  # "name" (company named in the email) or "domain" (sender domain only)
 
     def to_json(self) -> str:
         return json.dumps(self.__dict__, sort_keys=True)
@@ -268,23 +270,27 @@ def is_shared_domain(domain: str) -> bool:
 
 
 def name_matches(company: str, hay: str) -> bool:
-    """Whole-word match, so 'drw' does not hit inside 'hdrworks'; 'morganstanley.com' still matches 'Morgan Stanley'."""
+    """Whole-word match, so 'drw' does not hit inside 'hdrworks'. Names of 6+ compact characters also match
+    ignoring punctuation and spacing, so 'ATT-Labs' matches 'AT&T Labs' and 'morganstanley.com' matches 'Morgan Stanley'."""
     phrase, compact = words(company), norm(company)
-    return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", hay)) or compact in hay.split()
+    if re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", hay):
+        return True
+    return len(compact) >= 6 and compact in norm(hay)
 
 
-def match_tracker(msg: dict, trackers: list[Tracker]) -> Tracker | None:
+def match_tracker(msg: dict, trackers: list[Tracker]) -> tuple[Tracker | None, str | None]:
+    """Return the tracker and how it matched: 'name' (company named in the email) or 'domain' (sender domain only)."""
     hay = words(f"{msg['subject']} {msg['sender']}")
     best = [t for t in trackers if len(norm(t.company)) >= 3 and name_matches(t.company, hay)]
     if best:
         # prefer the longest company name (e.g. "Morgan Stanley" over "Morgan"), and active over archived
         best.sort(key=lambda t: (len(norm(t.company)), "/Active/" in str(t.path)), reverse=True)
-        return best[0]
+        return best[0], "name"
     sender_domain = (re.findall(r"@([\w.-]+)", msg["sender"]) or [""])[-1].lower()
     if not sender_domain or is_shared_domain(sender_domain):
-        return None
+        return None, None
     owners = [t for t in trackers if sender_domain in t.domains]
-    return owners[0] if len({t.company for t in owners}) == 1 else None
+    return (owners[0], "domain") if len({t.company for t in owners}) == 1 else (None, None)
 
 
 def event_id(msg: dict) -> str:
@@ -304,12 +310,12 @@ def find_tracker(rel: str, root: Path = PIPELINE) -> Path | None:
 
 def to_event(msg: dict, trackers: list[Tracker], root: Path = PIPELINE) -> Event:
     signal = classify(msg)
-    t = match_tracker(msg, trackers)
+    t, how = match_tracker(msg, trackers)
     return Event(
         id=event_id(msg), date=parse_date(msg["date"]), account=msg["account"], mailbox=msg["mailbox"],
         subject=msg["subject"], sender=msg["sender"], signal=signal,
         suggested_stage=suggest_stage(signal, f"{msg['subject']} {msg.get('snippet', '')}"),
-        tracker=str(t.path.relative_to(root)) if t else None,
+        tracker=str(t.path.relative_to(root)) if t else None, match=how,
     )
 
 
@@ -326,18 +332,13 @@ def load_events(path: Path = EVENTS) -> dict[str, Event]:
     return events
 
 
-def message_key(e: Event) -> tuple[str, str, str, str]:
-    return (e.account, e.subject, e.sender, e.date)
-
-
 def record(new: list[Event], path: Path = EVENTS, dry_run: bool = False) -> list[Event]:
     known = load_events(path)
-    fresh, seen, seen_keys = [], set(known), {message_key(e) for e in known.values()}
+    fresh, seen = [], set(known)
     for e in new:
-        if e.id not in seen and message_key(e) not in seen_keys:
+        if e.id not in seen:
             fresh.append(e)
             seen.add(e.id)
-            seen_keys.add(message_key(e))
     if fresh and not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
@@ -362,7 +363,9 @@ def render_review(events: dict[str, Event], trackers: list[Tracker], today: str,
     by_stem = {t.path.stem: t for t in trackers}
 
     def link(e: Event) -> str:
-        return f"[[{Path(e.tracker).stem}]]" if e.tracker else "unmatched"
+        if not e.tracker:
+            return "unmatched"
+        return f"[[{Path(e.tracker).stem}]]" + ("" if e.match == "name" else " (domain match, check)")
 
     attention = []
     for e in recent:
@@ -401,10 +404,11 @@ def render_review(events: dict[str, Event], trackers: list[Tracker], today: str,
 
 
 def apply_timeline(events: list[Event], root: Path = PIPELINE, dry_run: bool = False) -> int:
-    """Append one line per matched event under '## Timeline'; the evt marker makes it idempotent."""
+    """Append one line per name-matched event under '## Timeline'; the evt marker makes it idempotent.
+    Domain-only matches are left to the review note: an agency domain also sends mail about other companies."""
     added = 0
     for e in sorted(events, key=lambda e: e.date):
-        if not e.tracker or e.signal == "other":
+        if not e.tracker or e.match != "name" or e.signal == "other":
             continue
         path = find_tracker(e.tracker, root)
         if path is None:

@@ -1,5 +1,6 @@
 """Behavior tests for sync_job_emails.py: python3 -m unittest discover -s command-center/03-Pipeline/tests"""
 
+import json
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,10 @@ recruiter_email: talent@acmecap.com
 
 Hand-written notes.
 """
+
+
+def norm_dir(company):
+    return "".join(c for c in company if c.isalnum())
 
 
 def msg(subject, sender, date="2026-09-20", snippet="", mailbox="INBOX"):
@@ -48,11 +53,11 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(sj.suggest_stage("interview", "Phone screen"), "phone")
 
     def test_match_by_domain_and_name(self):
-        by_domain = sj.match_tracker(msg("Hello", "Talent <talent@acmecap.com>"), self.trackers)
-        by_name = sj.match_tracker(msg("Your Acme Capital application", "no-reply@greenhouse.io"), self.trackers)
-        self.assertEqual(by_domain.company, "Acme Capital")
-        self.assertEqual(by_name.company, "Acme Capital")
-        self.assertIsNone(sj.match_tracker(msg("Hello", "someone@other.com"), self.trackers))
+        by_domain, how_domain = sj.match_tracker(msg("Hello", "Talent <talent@acmecap.com>"), self.trackers)
+        by_name, how_name = sj.match_tracker(msg("Your Acme Capital application", "no-reply@greenhouse.io"), self.trackers)
+        self.assertEqual((by_domain.company, how_domain), ("Acme Capital", "domain"))
+        self.assertEqual((by_name.company, how_name), ("Acme Capital", "name"))
+        self.assertEqual(sj.match_tracker(msg("Hello", "someone@other.com"), self.trackers), (None, None))
 
     def test_record_is_idempotent(self):
         events_file = self.root / ".sync" / "events.jsonl"
@@ -109,17 +114,46 @@ class SyncTest(unittest.TestCase):
         other.parent.mkdir(parents=True)
         other.write_text("---\ncompany: FalconX\nstage: applied\nrecruiter_email: no-reply@us.greenhouse-mail.io\n---\n")
         trackers = sj.load_trackers(self.root)
-        by_name = sj.match_tracker(msg("Your Acme Capital application", "no-reply@us.greenhouse-mail.io"), trackers)
+        by_name, _ = sj.match_tracker(msg("Your Acme Capital application", "no-reply@us.greenhouse-mail.io"), trackers)
         self.assertEqual(by_name.company, "Acme Capital")
-        self.assertIsNone(sj.match_tracker(msg("Your application", "no-reply@us.greenhouse-mail.io"), trackers))
+        self.assertEqual(sj.match_tracker(msg("Your application", "no-reply@us.greenhouse-mail.io"), trackers), (None, None))
 
     def test_name_match_respects_word_boundaries(self):
         (self.root / "Active" / "Talan").mkdir(parents=True)
         (self.root / "Active" / "Talan" / "Talan-Tracker.md").write_text("---\ncompany: Talan\nstage: applied\n---\n")
         trackers = sj.load_trackers(self.root)
-        self.assertIsNone(sj.match_tracker(msg("Catalan conference", "x@y.com"), trackers))
-        self.assertEqual(sj.match_tracker(msg("Talan interview", "x@y.com"), trackers).company, "Talan")
-        self.assertEqual(sj.match_tracker(msg("Update", "careers@acmecapital.com"), trackers).company, "Acme Capital")
+        self.assertEqual(sj.match_tracker(msg("Catalan conference", "x@y.com"), trackers), (None, None))
+        self.assertEqual(sj.match_tracker(msg("Talan interview", "x@y.com"), trackers)[0].company, "Talan")
+        self.assertEqual(sj.match_tracker(msg("Update", "careers@acmecapital.com"), trackers)[0].company, "Acme Capital")
+
+    def test_name_match_ignores_punctuation_for_long_names(self):
+        for company, subject in (("ATT-Labs", "Interview at AT&T Labs"), ("D. E. Shaw", "D.E. Shaw phone screen")):
+            d = self.root / "Active" / norm_dir(company)
+            d.mkdir(parents=True)
+            (d / f"{norm_dir(company)}-Tracker.md").write_text(f"---\ncompany: {company}\nstage: applied\n---\n")
+            t, how = sj.match_tracker(msg(subject, "x@y.com"), sj.load_trackers(self.root))
+            self.assertEqual((t.company, how), (company, "name"))
+        (self.root / "Active" / "HRT").mkdir(parents=True)
+        (self.root / "Active" / "HRT" / "HRT-Tracker.md").write_text("---\ncompany: HRT\nstage: applied\n---\n")
+        self.assertEqual(sj.match_tracker(msg("Thrtle update", "x@y.com"), sj.load_trackers(self.root)), (None, None))
+
+    def test_agency_domain_match_is_reviewed_but_not_appended(self):
+        e = sj.to_event(msg("Interview: C++ Developer at Citadel", "talent@acmecap.com"), self.trackers, self.root)
+        self.assertEqual(e.match, "domain")
+        before = self.tracker.read_text()
+        self.assertEqual(sj.apply_timeline([e], self.root), 0)
+        self.assertEqual(self.tracker.read_text(), before)
+        review = sj.render_review({e.id: e}, self.trackers, "2026-09-21", root=self.root)
+        self.assertIn("[[Acme-Tracker]] (domain match, check)", review)
+
+    def test_same_day_same_subject_messages_are_both_recorded(self):
+        events_file = self.root / ".sync" / "events.jsonl"
+        first = msg("Re: Interview Confirmation - Acme Capital", "talent@acmecap.com",
+                    date="Monday, September 21, 2026 at 9:00:00\u202fAM")
+        second = first | {"date": "Monday, September 21, 2026 at 3:00:00\u202fPM"}
+        events = [sj.to_event(m, self.trackers, self.root) for m in (first, second)]
+        self.assertEqual(len(sj.record(events, events_file)), 2)
+        self.assertEqual(sj.apply_timeline(list(sj.load_events(events_file).values()), self.root), 2)
 
     def test_apple_mail_date_with_narrow_no_break_space(self):
         self.assertEqual(sj.parse_date("Monday, September 21, 2026 at 8:00:45\u202fPM"), "2026-09-21")
@@ -149,15 +183,14 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(a.id, b.id)
         self.assertEqual(len(sj.record([a, b], events_file)), 1)
 
-    def test_legacy_event_ids_load_and_dedupe(self):
+    def test_recorded_events_with_raw_dates_load_as_iso(self):
         events_file = self.root / ".sync" / "events.jsonl"
         e = sj.to_event(msg("Phone screen with Acme Capital", "talent@acmecap.com"), self.trackers, self.root)
-        legacy = sj.Event(**(e.__dict__ | {"id": "legacy000000", "date": "Sunday, September 20, 2026 at 9:00:00\u202fAM"}))
+        old = {k: v for k, v in e.__dict__.items() if k != "match"}
+        old |= {"id": "legacy000000", "date": "Sunday, September 20, 2026 at 9:00:00\u202fAM"}
         events_file.parent.mkdir(parents=True)
-        events_file.write_text(legacy.to_json() + "\n")
-        loaded = sj.load_events(events_file)
-        self.assertEqual(loaded["legacy000000"].date, "2026-09-20")
-        self.assertEqual(sj.record([e], events_file), [])
+        events_file.write_text(json.dumps(old) + "\n")
+        self.assertEqual(sj.load_events(events_file)["legacy000000"].date, "2026-09-20")
 
     def test_excluded_newsletters(self):
         self.assertFalse(sj.is_job_related(msg("Weekly digest: jobs you may like", "alerts@x.com")))

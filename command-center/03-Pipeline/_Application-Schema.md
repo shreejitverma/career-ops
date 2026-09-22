@@ -45,5 +45,5 @@ Its frontmatter is the source of truth for the dashboard, the board, and the inb
 ## Timeline
 
 Each tracker ends with a `## Timeline` section.
-`sync_job_emails.py --apply` appends one line per matched email there, tagged with an event id so it is never added twice.
+`sync_job_emails.py --apply` appends one line there per email that names the company (sender-domain-only matches stay in the review note), tagged with an event id so it is never added twice.
 Add your own dated lines freely; the sync never removes or rewrites them.
