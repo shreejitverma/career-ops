@@ -48,6 +48,13 @@ class ViewsTest(unittest.TestCase):
         text = pv.stats(pv.load(self.root)).split("## Response rate by source")[1]
         self.assertEqual(self.row(text, "Direct"), "| Direct | 1 | 0 | 0% |")
 
+    def test_block_form_track_is_read(self):
+        d = self.root / "Active" / "F"
+        d.mkdir(parents=True)
+        (d / "F-Tracker.md").write_text(tracker("F", "applied", track="\n  - quant-dev\n  - ml-eng"))
+        f = next(a for a in pv.load(self.root) if a.company == "F")
+        self.assertEqual((f.tracks, f.stage), (["quant-dev", "ml-eng"], "applied"))
+
     def test_rejection_reasons_listed(self):
         text = pv.stats(self.apps).split("## Rejection reasons")[1]
         self.assertIn("| [[B-Tracker]] | phone | bar |", text)

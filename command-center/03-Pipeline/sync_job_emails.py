@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tracker_frontmatter import read_frontmatter, read_list
+
 PIPELINE = Path(__file__).resolve().parent
 STATE_DIR = PIPELINE / ".sync"
 EVENTS = STATE_DIR / "events.jsonl"
@@ -239,28 +241,16 @@ def is_iso_date(s: str) -> bool:
     return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", s))
 
 
-def read_frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---\n"):
-        return {}
-    end = text.find("\n---", 4)
-    fm = {}
-    for line in text[4:end].splitlines():
-        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
-        if m:
-            fm[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-    return fm
-
-
 def load_trackers(root: Path = PIPELINE) -> list[Tracker]:
     trackers = []
     for d in TRACKER_DIRS:
         for p in sorted((root / d).rglob("*.md")):
-            fm = read_frontmatter(p.read_text(errors="ignore"))
+            text = p.read_text(errors="ignore")
+            fm = read_frontmatter(text)
             if not fm.get("company") or "stage" not in fm:
                 continue
             domains = {e.rsplit("@", 1)[1].lower() for e in re.findall(r"[\w.+-]+@[\w.-]+", " ".join(fm.values()))}
-            aliases = [a.strip().strip('"').strip("'") for a in fm.get("aliases", "").strip("[]").split(",") if a.strip()]
-            trackers.append(Tracker(p, fm["company"], fm.get("stage", ""), domains, aliases))
+            trackers.append(Tracker(p, fm["company"], fm.get("stage", ""), domains, read_list(text, "aliases")))
     return trackers
 
 
