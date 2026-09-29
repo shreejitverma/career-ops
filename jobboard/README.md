@@ -84,6 +84,8 @@ When `command-center/03-Pipeline/` exists (override with `JOBBOARD_COMMAND_CENTE
   The page offers "This is my existing application: <tracker> (<stage>)" per tracker, "New application", and "Not yet".
   The API takes `patch.tracker` (a tracker's `rel` to link, or `"new"`), `mark` takes `--tracker <rel|new>`, and without one the change is refused with the existing trackers named.
   Company names match the registry by exact name first; a suffix-stripped name shared by two firms (Citadel, Citadel Securities) matches neither.
+  A tracker counts for a job by registry id, or by its company name or aliases when its firm is not in `companies.yml` (so an added Talan posting still offers the existing Talan tracker, and "New application" reuses its folder).
+  Adding a job with an application status for such a company saves it as Not Applied and opens the choice on the Jobs tab.
   If that write fails, nothing is recorded.
   The daily Gmail sync then matches replies to it by company name.
 - **My pipeline** lists every tracker, not only board jobs, with its stage and next action (overdue ones in red), plus board jobs you gave a status without a tracker.

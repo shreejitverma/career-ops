@@ -62,7 +62,7 @@ import { getCareerOpsRoot } from '../path-resolver.mjs';
 import { BROWSER_LIKE_USER_AGENT } from '../user-agent.mjs';
 import { isMainModule } from '../lib/is-main-module.mjs';
 import {
-  commandCenterPaths, companyIndex, createTrackerForJob, detectVault, discoverResumes, findTracker, linkTrackersToJobs,
+  candidateTrackers, commandCenterPaths, companyIndex, createTrackerForJob, detectVault, discoverResumes, findTracker, linkTrackersToJobs,
   loadReports, loadTrackers, readFrontmatter, readList, renderJobBoardNote, renderTrackerNote, resolveCompanyId, stageToStatus,
 } from './command-center.mjs';
 
@@ -898,7 +898,7 @@ export function trackerChoice(view, job, patch) {
     return { link };
   }
   if (!STAGE_FOR_STATUS[patch.status] || !view.cc.enabled) return {};
-  const existing = view.trackers.filter((t) => !t.archived && t.companyId && t.companyId === job.companyId);
+  const existing = candidateTrackers(view.trackers, job);
   if (existing.length && patch.tracker !== 'new') {
     throw new Error(`${job.companyName} already has active trackers: ${existing.map((t) => `${t.rel} (${t.stage})`).join(', ')}; `
       + 'link this posting to one (tracker: "<rel>", mark --tracker <rel>) or create a separate one (tracker: "new", mark --tracker new)');
@@ -1001,7 +1001,10 @@ function serve({ port, open }) {
           applicationStatuses: Object.keys(STAGE_FOR_STATUS),
           categories: CATEGORIES,
           seniorities: SENIORITIES,
-          jobs: jobs.map((j) => ({ ...j, state: state.jobs[j.id] || null })),
+          jobs: jobs.map((j) => ({
+            ...j, state: state.jobs[j.id] || null,
+            candidateTrackers: j.tracker ? [] : candidateTrackers(trackers, j).map((t) => ({ rel: t.rel, name: t.name, stage: t.stage })),
+          })),
           companies,
           trackers: trackers.map((t) => ({
             rel: t.rel, name: t.name, company: t.company, companyId: t.companyId, role: t.role, stage: t.stage,
@@ -1053,12 +1056,14 @@ function serve({ port, open }) {
           tags: techTags(title), sources: { manual: { url: jobUrl, seenAt: now, gone: false } }, firstSeen: now,
         };
         const statusPatch = { status: body.status, ...(body.tracker !== undefined ? { tracker: body.tracker } : {}) };
-        const withStatus = body.status && body.status !== 'Not Applied';
+        const pendingChoice = body.tracker === undefined && STAGE_FOR_STATUS[body.status] && view.cc.enabled
+          && candidateTrackers(view.trackers, job).length ? body.status : null;
+        const withStatus = body.status && body.status !== 'Not Applied' && !pendingChoice;
         if (withStatus) trackerChoice(view, job, statusPatch);
         state.manual = [...(state.manual || []), job];
         writeJsonAtomic(paths.state, state);
         const out = withStatus ? updateJob(loadView(), id, statusPatch, now) : null;
-        return send(res, 200, { job, tracker: out?.tracker ?? null });
+        return send(res, 200, { job, tracker: out?.tracker ?? null, linked: out?.linked ?? null, pendingChoice });
       }
       if (url.pathname === '/api/refresh') {
         if (req.method === 'POST' && !refresh.running) {
@@ -1322,10 +1327,14 @@ function selfTest() {
     const statePath = join(tmp, 'state.json');
     const sibling = { ...newJob, id: 'acme:gh-444', title: 'Quant Researcher', category: 'Quant Research', tags: [], url: 'https://job-boards.greenhouse.io/acme/jobs/444', sources: {} };
     const closedApp = { ...newJob, id: 'acme:gh-555', title: 'Risk Developer', url: 'https://job-boards.greenhouse.io/acme/jobs/555', sources: {} };
+    const talanJob = {
+      id: 'manual-talan:talan.test/jobs/9', companyId: 'manual-talan', companyName: 'Talan', title: 'Data Engineer', category: 'Data',
+      tags: [], url: 'https://talan.test/jobs/9', sources: {}, manual: true,
+    };
     const mkView = () => {
       const trackers = loadTrackers(cc, ccReg);
       const state = readJson(statePath, emptyState());
-      const jobs = [{ ...oldJob }, { ...newJob }, { ...sibling }, { ...closedApp }];
+      const jobs = [{ ...oldJob }, { ...newJob }, { ...sibling }, { ...closedApp }, { ...talanJob }];
       const linked = linkTrackersToJobs(trackers, jobs, jobKey, boardLinks(state));
       for (const j of jobs) j.status = linked.get(j.id)?.status || state.jobs[j.id]?.status || 'Not Applied';
       return { jobs, trackers, linked, cc, root: tmp, state, paths: { state: statePath } };
@@ -1384,6 +1393,19 @@ function selfTest() {
     check('tracker: "new" writes a separate tracker dated when you applied, with no follow-up once closed',
       [newOut.tracker.created, newOut.tracker.rel !== trackerRel, closedFm.stage, closedFm.applied, closedFm.next_action, closedFm.next_action_date, readFileSync(join(cc.dir, trackerRel)).equals(trackerBytes)],
       [true, true, 'rejected', '2026-08-01', '', '', true]);
+    const talanDir = join(cc.pipeline, 'Active', 'Talan-SAS');
+    mkdirSync(talanDir);
+    writeFileSync(join(talanDir, 'Talan-Old-Tracker.md'), '---\ncompany: "Talan SAS"\naliases: [Talan]\nrole: Engineer\nstage: applied\nlinks: []\n---\n');
+    const vT = mkView();
+    check('a tracker outside the registry is a candidate for a same-named job, never for another firm',
+      [vT.trackers.find((t) => t.name === 'Talan-Old-Tracker')?.companyId, candidateTrackers(vT.trackers, talanJob).map((t) => t.name),
+        candidateTrackers(vT.trackers, { companyId: 'manual-acme-talent', companyName: 'Acme Talent' }).length],
+      [null, ['Talan-Old-Tracker'], 0]);
+    threw = '';
+    try { updateJob(vT, talanJob.id, { status: 'Applied' }); } catch (err) { threw = err.message; }
+    check('a manual job for an unregistered company with a tracker requires a choice', threw.includes('03-Pipeline/Active/Talan-SAS/Talan-Old-Tracker.md (applied)'), true);
+    check('tracker: "new" for an unregistered company reuses its tracker folder',
+      updateJob(mkView(), talanJob.id, { status: 'Applied', tracker: 'new' }).tracker.rel, '03-Pipeline/Active/Talan-SAS/Talan-Data-Engineer-Tracker.md');
     check('an open stage keeps its follow-up', readFrontmatter(renderTrackerNote(newJob, { today: '2026-09-29', applied: '2026-08-01', stage: 'phone' })).next_action_date, '2026-10-13');
 
     mkdirSync(join(tmp, 'reports'));

@@ -484,10 +484,10 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     return pool.find((r) => r.endsWith('one-page')) || pool[0] || '';
   };
 
-  // The company's active trackers: an application status on an untracked job
-  // must either link one of them or explicitly create a new tracker.
-  const companyTrackers = (j) => data.commandCenter.enabled && !j.tracker
-    ? data.trackers.filter((t) => !t.archived && t.companyId && t.companyId === j.companyId) : [];
+  // The company's active trackers (computed by the server): an application
+  // status on an untracked job must either link one of them or explicitly
+  // create a new tracker.
+  const companyTrackers = (j) => (j.tracker ? [] : j.candidateTrackers || []);
   const needsChoice = (j, status) => data.applicationStatuses.includes(status) && companyTrackers(j).length > 0;
 
   // Show the link-or-new choice for `status` on the Jobs tab, filtered to this
@@ -718,20 +718,16 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   $('#addForm').onsubmit = async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.target).entries());
-    const status = body.status;
-    const application = data.commandCenter.enabled && data.applicationStatuses.includes(status);
-    if (application) delete body.status;
     const res = await fetch('/api/manual', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const out = await res.json();
     $('#addMsg').textContent = res.ok ? 'Added.' : (out.error || 'failed');
     if (!res.ok) return;
     e.target.reset();
     await load();
-    const j = application && byId.get(out.job.id);
-    if (!j || j.tracker) return;
-    if (!needsChoice(j, status)) return patch(j.id, { status });
-    openChoice(j.id, status);
-    $('#addMsg').textContent = 'Added as Not Applied. ' + j.companyName + ' already has a tracker: choose on the Jobs tab whether this is that application or a new one.';
+    if (out.tracker && out.tracker.created) alertBar('Tracker created: command-center/' + out.tracker.rel);
+    if (!out.pendingChoice || !byId.has(out.job.id)) return;
+    openChoice(out.job.id, out.pendingChoice);
+    $('#addMsg').textContent = 'Added as Not Applied. ' + out.job.companyName + ' already has a tracker: choose on the Jobs tab whether this is that application or a new one.';
     alertBar($('#addMsg').textContent);
   };
 

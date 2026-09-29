@@ -194,13 +194,15 @@ export function loadTrackers(cc, registry, vaultInfo = null) {
       const text = readFileSync(path, 'utf-8');
       const fm = readFrontmatter(text);
       if (!fm.company || !('stage' in fm)) continue;
-      const aliases = readList(text, 'aliases');
+      const names = [fm.company, ...readList(text, 'aliases')];
       const rel = relative(cc.dir, path).split(sep).join('/');
       out.push({
         rel,
         name: basename(path, '.md'),
         company: fm.company,
-        companyId: resolveCompanyId([fm.company, ...aliases], index),
+        companyId: resolveCompanyId(names, index),
+        exactKeys: names.map(exactKey).filter(Boolean),
+        strippedKeys: names.map(companyKey).filter((k) => k && !index.ambiguous.has(k)),
         role: fm.role || '',
         stage: fm.stage || '',
         status: stageToStatus(fm.stage),
@@ -215,6 +217,23 @@ export function loadTrackers(cc, registry, vaultInfo = null) {
     }
   }
   return out;
+}
+
+/**
+ * Whether a tracker is for `job`'s company: the same registry id, or the same
+ * company name or alias (exact, or suffix-stripped unless that key is shared by
+ * two registry firms), so trackers for firms outside the registry still count.
+ */
+export function sameCompany(t, job) {
+  if (t.companyId && t.companyId === job.companyId) return true;
+  const e = exactKey(job.companyName);
+  const k = companyKey(job.companyName);
+  return Boolean((e && t.exactKeys.includes(e)) || (k && t.strippedKeys.includes(k)));
+}
+
+/** The non-archived trackers an application on `job` could already be. */
+export function candidateTrackers(trackers, job) {
+  return trackers.filter((t) => !t.archived && sameCompany(t, job));
 }
 
 /**
@@ -346,7 +365,7 @@ export function createTrackerForJob(cc, job, { trackers, linked, today, applied 
   if (!cc.enabled) throw new Error('command center not found (expected command-center/03-Pipeline/Active)');
   const existing = linked.get(job.id);
   if (existing) return { created: false, rel: existing.rel };
-  const sibling = trackers.find((t) => t.companyId && t.companyId === job.companyId);
+  const sibling = trackers.find((t) => sameCompany(t, job));
   const folder = sibling ? sibling.rel.split('/')[2] : slugify(job.companyName, 40);
   const dir = join(cc.pipeline, 'Active', folder);
   mkdirSync(dir, { recursive: true });
