@@ -490,6 +490,19 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     ? data.trackers.filter((t) => !t.archived && t.companyId && t.companyId === j.companyId) : [];
   const needsChoice = (j, status) => data.applicationStatuses.includes(status) && companyTrackers(j).length > 0;
 
+  // Show the link-or-new choice for `status` on the Jobs tab, filtered to this
+  // job; re-rendering everything reverts any select still showing it unsaved.
+  function openChoice(id, status) {
+    const j = byId.get(id);
+    pendingConfirm.set(id, status);
+    f = Object.assign(blankFilters(), { company: [j.companyId], q: j.title, closed: !j.active });
+    shown = PAGE;
+    switchTab('jobs');
+    renderAll();
+    const card = document.querySelector('article.job[data-id="' + CSS.escape(id) + '"]');
+    if (card) card.scrollIntoView({ block: 'center' });
+  }
+
   function confirmHtml(j) {
     const status = pendingConfirm.get(j.id) || 'Applied';
     const fromApply = !pendingConfirm.get(j.id);
@@ -645,7 +658,10 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     if (t.matches('[data-resume]')) { const a = t.closest('.confirm').querySelector('[data-resumepdf]'); if (a) a.href = '/api/resume?variant=' + encodeURIComponent(t.value); return; }
     if (t.matches('[data-status]')) {
       const id = t.closest('[data-id]').dataset.id;
-      if (needsChoice(byId.get(id), t.value)) { pendingConfirm.set(id, t.value); return renderList(); }
+      if (needsChoice(byId.get(id), t.value)) {
+        if (t.closest('article.job')) { pendingConfirm.set(id, t.value); return renderList(); }
+        return openChoice(id, t.value);
+      }
       pendingConfirm.delete(id);
       return patch(id, { status: t.value });
     }
@@ -702,10 +718,21 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   $('#addForm').onsubmit = async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.target).entries());
+    const status = body.status;
+    const application = data.commandCenter.enabled && data.applicationStatuses.includes(status);
+    if (application) delete body.status;
     const res = await fetch('/api/manual', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const out = await res.json();
     $('#addMsg').textContent = res.ok ? 'Added.' : (out.error || 'failed');
-    if (res.ok) { e.target.reset(); await load(); }
+    if (!res.ok) return;
+    e.target.reset();
+    await load();
+    const j = application && byId.get(out.job.id);
+    if (!j || j.tracker) return;
+    if (!needsChoice(j, status)) return patch(j.id, { status });
+    openChoice(j.id, status);
+    $('#addMsg').textContent = 'Added as Not Applied. ' + j.companyName + ' already has a tracker: choose on the Jobs tab whether this is that application or a new one.';
+    alertBar($('#addMsg').textContent);
   };
 
   const refreshBtn = $('#refreshBtn');
