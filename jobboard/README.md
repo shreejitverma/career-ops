@@ -60,7 +60,7 @@ node jobboard/jobboard.mjs --self-test
 | `data/jobboard/jobs.json` | refresh / ingest-wsq / scan | merged job store |
 | `data/jobboard/state.json` | the page and `mark`; `ingest-wsq`/`refresh` only re-key entries when a previously unmapped WSQ firm is added to `companies.yml` | your status, dates, notes, stars, history, manual jobs |
 | `data/jobboard/runs.tsv` | every source run | per-board fetch results, including errors |
-| `data/jobboard/companies.md` | refresh | the company directory as a Markdown table |
+| `data/jobboard/companies.md` | refresh / ingest-wsq / scan | the company directory as a Markdown table |
 
 ## How merging works
 
