@@ -208,7 +208,7 @@ const REGION_TABLE = [
   ['India', /india|mumbai|bangalore|bengaluru|gurgaon|gurugram|hyderabad|chennai|pune|delhi|noida|gift city|kolkata/i],
   ['Asia-Pacific', /singapore|hong kong|sydney|melbourne|tokyo|shanghai|beijing|shenzhen|seoul|taipei|hanoi|ho chi minh|manila|kuala lumpur|australia|japan|china|korea|taiwan|vietnam|philippines|malaysia|\bapac\b/i],
   ['Middle East', /dubai|abu dhabi|tel aviv|ramat gan|israel|riyadh|doha|bahrain|\buae\b|herzliya/i],
-  ['Europe', /london|amsterdam|dublin|paris|frankfurt|zurich|geneva|milan|madrid|barcelona|budapest|warsaw|krakow|prague|berlin|munich|hamburg|aarhus|copenhagen|stockholm|oslo|helsinki|kajaani|lisbon|belfast|bristol|edinburgh|glasgow|cork|luxembourg|brussels|vienna|sofia|bucharest|cluj|limassol|cyprus|malta|gibraltar|jersey\b(?! city)|guernsey|\buk\b|united kingdom|england|ireland|netherlands|france|germany|switzerland|spain|italy|poland|hungary|romania|bulgaria|europe|\bemea\b/i],
+  ['Europe', /london|amsterdam|dublin|paris|frankfurt|zurich|geneva|milan|madrid|barcelona|budapest|warsaw|krakow|prague|berlin|munich|hamburg|aarhus|copenhagen|stockholm|oslo|helsinki|kajaani|lisbon|belfast|bristol|edinburgh|glasgow|cork|luxembourg|brussels|vienna|sofia|bucharest|cluj|limassol|cyprus|malta|gibraltar|(?<!new )jersey\b(?! city)|guernsey|\buk\b|united kingdom|england|ireland|netherlands|france|germany|switzerland|spain|italy|poland|hungary|romania|bulgaria|europe|\bemea\b/i],
   ['Canada', /toronto|montreal|vancouver|calgary|ottawa|canada|quebec/i],
   ['Latin America', /s[aã]o paulo|montevideo|mexico city|buenos aires|bogot|santiago|brazil|uruguay|argentina|colombia|chile/i],
   ['USA', /new york|\bnyc\b|chicago|boston|san francisco|seattle|austin|houston|dallas|miami|denver|boulder|philadelphia|bala cynwyd|stamford|greenwich|norwalk|jersey city|new jersey|berkeley|palo alto|mountain view|menlo park|los angeles|san jose|atlanta|charlotte|richmond|plano|columbus|minneapolis|salt lake|pittsburgh|nashville|washington|wilmington|tampa|phoenix|portland|raleigh|kansas city|st\.? louis|detroit|east setauket|radnor|red bank|princeton|westport|connecticut|florida|texas|california|illinois|massachusetts|pennsylvania|united states|\busa\b|\bus\b|\b(ny|il|ca|tx|fl|ct|nj|wa|pa|ga|nc|va|mn|oh|ut|az|dc|mo|mi|tn)\b/i],
@@ -392,6 +392,20 @@ async function fetchWsq() {
 const VAGUE_REGIONS = new Set(['Multiple', 'Unknown', 'Other']);
 
 /**
+ * Regions of a job, derived from the regions each live source reports, with
+ * `firstKey`'s regions first. A vague region ("2 Locations" from an ATS) is
+ * dropped when another source resolved a specific one.
+ */
+function sourceRegions(sources, firstKey) {
+  const keys = Object.keys(sources).sort((a, b) => (b === firstKey) - (a === firstKey));
+  const regions = [...new Set(keys.flatMap((k) => (!sources[k].gone && sources[k].regions) || []))];
+  const specific = regions.filter((r) => !VAGUE_REGIONS.has(r));
+  return specific.length ? specific : regions.slice(0, 1);
+}
+
+const liveAtsKey = (sources) => Object.keys(sources || {}).find((k) => k.startsWith('ats:') && !sources[k].gone);
+
+/**
  * Fold one successful source run into the store.
  * @param {object} store
  * @param {string} sourceKey   'wsq' or 'ats:<board url>'
@@ -406,19 +420,20 @@ export function applySourceRun(store, sourceKey, incoming, now, scope = () => tr
   for (const job of incoming) {
     seen.add(job.id);
     const prev = store.jobs[job.id];
-    const sources = { ...(prev?.sources || {}), [sourceKey]: { url: job.url, seenAt: now, gone: false } };
+    const ownRegions = (job.regions || [job.region]).filter(Boolean);
+    const sources = { ...(prev?.sources || {}), [sourceKey]: { url: job.url, seenAt: now, gone: false, regions: ownRegions } };
     if (!prev) added++;
     // ATS data wins over WSQ for fields both carry (it is the firm's own board),
     // but never erase a field the other source filled.
-    const atsLive = Object.entries(prev?.sources || {}).some(([k, src]) => k.startsWith('ats:') && !src.gone);
-    const preferIncoming = sourceKey !== 'wsq' || !atsLive;
+    const atsKey = liveAtsKey(prev?.sources);
+    const preferIncoming = sourceKey !== 'wsq' || !atsKey;
     const merged = { ...(preferIncoming ? prev : job), ...(preferIncoming ? job : prev) };
     for (const k of ['salary', 'postedAt', 'location', 'wsqRole']) merged[k] = merged[k] || prev?.[k] || job[k] || (k === 'postedAt' ? null : '');
-    // "2 Locations" from an ATS says less than WSQ's resolved regions.
-    const regions = [...new Set([merged.region, ...(job.regions || [job.region]), ...(prev?.regions || [prev?.region])].filter(Boolean))];
-    const specific = regions.filter((r) => !VAGUE_REGIONS.has(r));
-    merged.regions = specific.length ? specific : regions.slice(0, 1);
-    merged.region = merged.regions[0];
+    const regions = sourceRegions(sources, preferIncoming ? sourceKey : atsKey);
+    if (regions.length) {
+      merged.regions = regions;
+      merged.region = regions[0];
+    }
     merged.tags = [...new Set([...(prev?.tags || []), ...(job.tags || [])])];
     merged.sources = sources;
     merged.firstSeen = prev?.firstSeen || now;
@@ -432,6 +447,11 @@ export function applySourceRun(store, sourceKey, incoming, now, scope = () => tr
     if (!job.sources[sourceKey].gone) {
       job.sources[sourceKey] = { ...job.sources[sourceKey], gone: true };
       const stillLive = Object.values(job.sources).some((s) => !s.gone);
+      const regions = sourceRegions(job.sources, liveAtsKey(job.sources));
+      if (stillLive && regions.length) {
+        job.regions = regions;
+        job.region = regions[0];
+      }
       if (!stillLive && job.active) {
         job.active = false;
         job.closedAt = now;
@@ -935,6 +955,9 @@ function selfTest() {
   check('region nyc', classifyRegions('New York, NY'), ['USA']);
   check('region london', classifyRegions('London, UK'), ['Europe']);
   check('region jersey city', classifyRegions('Jersey City, NJ'), ['USA']);
+  check('region new jersey', classifyRegions('Princeton, New Jersey'), ['USA']);
+  check('region new jersey full', classifyRegions('Red Bank, New Jersey, United States'), ['USA']);
+  check('region channel island jersey', classifyRegions('St Helier, Jersey'), ['Europe']);
   check('region india', classifyRegions('Gurugram'), ['India']);
   check('region multi-city', classifyRegions('New York / Toronto'), ['USA', 'Canada']);
   check('region separators', classifyRegions('London; Singapore | Chicago · Mumbai or Dubai'), ['Europe', 'Asia-Pacific', 'USA', 'India', 'Middle East']);
@@ -1036,6 +1059,16 @@ function selfTest() {
   check('merge keeps specific regions over vague', [rStore.jobs['r:gh-1'].region, rStore.jobs['r:gh-1'].regions], ['USA', ['USA', 'Canada']]);
   applySourceRun(rStore, 'ats:r', [{ ...rJob, region: 'Europe', regions: ['Europe'] }], 't3');
   check('merge unions regions across sources', [rStore.jobs['r:gh-1'].region, rStore.jobs['r:gh-1'].regions], ['Europe', ['Europe', 'USA', 'Canada']]);
+  applySourceRun(rStore, 'wsq', [], 't4');
+  check('regions drop a source that stopped listing the job', rStore.jobs['r:gh-1'].regions, ['Europe']);
+  const legacy = emptyStore();
+  legacy.jobs['l:gh-1'] = { id: 'l:gh-1', companyId: 'l', title: 'L', url: 'u', tags: [], location: 'Montreal', region: 'USA', sources: { wsq: { url: 'u', seenAt: 't0', gone: false } }, firstSeen: 't0', active: true };
+  applySourceRun(legacy, 'wsq', [{ id: 'l:gh-1', companyId: 'l', title: 'L', url: 'u', tags: [], location: 'Montreal', region: 'Canada', regions: ['Canada'] }], 't1');
+  check('legacy stale region replaced on re-ingest', [legacy.jobs['l:gh-1'].region, legacy.jobs['l:gh-1'].regions], ['Canada', ['Canada']]);
+  const moved = emptyStore();
+  applySourceRun(moved, 'ats:m', [{ id: 'm:gh-1', companyId: 'm', title: 'M', url: 'u', tags: [], region: 'Europe', regions: ['Europe'] }], 't1');
+  applySourceRun(moved, 'ats:m', [{ id: 'm:gh-1', companyId: 'm', title: 'M', url: 'u', tags: [], region: 'USA', regions: ['USA'] }], 't2');
+  check('ats location change replaces regions', moved.jobs['m:gh-1'].regions, ['USA']);
 
   // State patches.
   const st = emptyState();
