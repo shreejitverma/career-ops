@@ -2,8 +2,9 @@
 
 # Pin the gate to the checks upstream CI runs (.github/workflows/test.yml:
 # `npm run lint`, then `npm install --ignore-scripts` and `node test-all.mjs
-# --quick`). referrals.mjs and jobboard/ are fork-local, so test-all never runs
-# their self-tests; they are named here so every push still does.
+# --quick`). referrals.mjs, jobboard/ and the command-center pipeline scripts
+# are fork-local, so test-all never runs their tests; they are named here so
+# every push still does.
 commands:
   lint: 'npm run lint'
-  test: 'npm install --ignore-scripts --no-audit --no-fund && node test-all.mjs --quick && node referrals.mjs --self-test && node jobboard/jobboard.mjs --self-test'
+  test: 'npm install --ignore-scripts --no-audit --no-fund && node test-all.mjs --quick && node referrals.mjs --self-test && node jobboard/jobboard.mjs --self-test && python3 -m unittest discover -s command-center/03-Pipeline/tests'
