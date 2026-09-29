@@ -1,0 +1,183 @@
+# jobboard/companies.yml - company registry for the job board (jobboard.mjs).
+#
+# FORK-LOCAL. Declared in config/local-paths.txt so the updater never touches it.
+#
+# Each entry:
+#   id       stable slug; job ids and your application state key off it - never rename
+#   name     display name
+#   type     HFT | Prop Trading | Hedge Fund | Asset Mgmt | Bank | Crypto |
+#            Prediction Market | Exchange/Fintech
+#   wsq      firm names used by thewallstreetquants.com/openings, so its postings
+#            map onto this company (omit when WSQ does not list the firm)
+#   boards   public ATS boards `jobboard.mjs scan` fetches through providers/
+#            (Greenhouse, Lever, Ashby, Workday, Eightfold, Oracle Cloud, ...).
+#            Empty means no scannable board: postings come from WSQ only and the
+#            company still shows in the directory with its careers link.
+#   website  careers page to open by hand
+#   filter   all  = keep every posting that classifies as a tech/quant role (small
+#                   quant firms, where nearly every role is relevant)
+#            strict = also require a quant/C++/Python/AI signal in the title
+#                   (large banks, asset managers and fintechs with thousands of
+#                   unrelated postings). Default: all.
+#
+# Board slugs were resolved against the public ATS directories
+# (github.com/Feashliaa/job-board-aggregator) and probed live on 2026-09-29.
+
+companies:
+  # -- HFT / prop trading / market making -------------------------------------
+  - { id: jane-street, name: Jane Street, type: Prop Trading, wsq: [Jane Street], boards: [https://job-boards.greenhouse.io/janestreet], website: https://www.janestreet.com/join-jane-street/open-roles/ }
+  - { id: citadel-securities, name: Citadel Securities, type: Prop Trading, wsq: [Citadel Securities], boards: [], website: https://www.citadelsecurities.com/careers/open-opportunities/ }
+  - { id: hrt, name: Hudson River Trading, type: HFT, wsq: [HRT], boards: [https://job-boards.greenhouse.io/wehrtyou], website: https://www.hudsonrivertrading.com/careers/ }
+  - { id: jump, name: Jump Trading, type: HFT, wsq: [Jump], boards: [https://job-boards.greenhouse.io/jumptrading], website: https://www.jumptrading.com/careers/ }
+  - { id: tower, name: Tower Research Capital, type: HFT, wsq: [Tower], boards: [https://job-boards.greenhouse.io/towerresearchcapital], website: https://www.tower-research.com/open-positions/ }
+  - { id: virtu, name: Virtu Financial, type: HFT, wsq: [Virtu], boards: [https://job-boards.greenhouse.io/virtu], website: https://www.virtu.com/careers/ }
+  - { id: vatic, name: Vatic Investments, type: HFT, wsq: [Vatic Investments], boards: [https://job-boards.greenhouse.io/vaticlabs], website: https://vaticlabs.com/careers }
+  - { id: optiver, name: Optiver, type: Prop Trading, wsq: [Optiver], boards: [https://job-boards.greenhouse.io/optiverus], website: https://optiver.com/working-at-optiver/career-opportunities/ }
+  - { id: imc, name: IMC Trading, type: Prop Trading, wsq: [IMC], boards: [https://job-boards.greenhouse.io/imc], website: https://www.imc.com/us/careers }
+  - { id: sig, name: Susquehanna (SIG), type: Prop Trading, wsq: [SIG], boards: [], website: https://careers.sig.com/ }
+  - { id: drw, name: DRW, type: Prop Trading, wsq: [DRW], boards: [https://job-boards.greenhouse.io/drweng, https://job-boards.greenhouse.io/drwuniversityjobs], website: https://drw.com/work-at-drw/listings }
+  - { id: akuna, name: Akuna Capital, type: Prop Trading, wsq: [Akuna], boards: [https://job-boards.greenhouse.io/akunacapital], website: https://akunacapital.com/careers }
+  - { id: old-mission, name: Old Mission Capital, type: Prop Trading, wsq: [Old Mission], boards: [https://job-boards.greenhouse.io/oldmissioncapital], website: https://www.oldmissioncapital.com/careers/ }
+  - { id: flow-traders, name: Flow Traders, type: Prop Trading, wsq: [Flow], boards: [https://job-boards.greenhouse.io/flowtraders], website: https://www.flowtraders.com/careers }
+  - { id: five-rings, name: Five Rings, type: Prop Trading, wsq: [Five Rings], boards: [https://job-boards.greenhouse.io/fiveringsllc], website: https://fiverings.com/careers/ }
+  - { id: ctc, name: Chicago Trading Company, type: Prop Trading, wsq: [CTC], boards: [https://job-boards.greenhouse.io/chicagotrading, https://job-boards.greenhouse.io/chicagotradingcampus], website: https://www.chicagotrading.com/careers }
+  - { id: radix, name: Radix Trading, type: Prop Trading, wsq: [Radix Trading], boards: [https://job-boards.greenhouse.io/radixexperienced, https://job-boards.greenhouse.io/radixuniversity], website: https://www.radix-trading.com/ }
+  - { id: gelber, name: Gelber Group, type: Prop Trading, wsq: [Gelber], boards: [https://job-boards.greenhouse.io/gelbergroup], website: https://www.gelbergroup.com/careers }
+  - { id: belvedere, name: Belvedere Trading, type: Prop Trading, wsq: [Belvedere], boards: [https://jobs.lever.co/belvederetrading], website: https://www.belvederetrading.com/careers }
+  - { id: peak6, name: PEAK6, type: Prop Trading, wsq: [Peak6], boards: [https://peak6group.wd1.myworkdayjobs.com/peak6], website: https://peak6.com/careers/ }
+  - { id: wolverine, name: Wolverine Trading, type: Prop Trading, wsq: [Wolverine], boards: [], website: https://www.wolve.com/careers }
+  - { id: xtx, name: XTX Markets, type: Prop Trading, wsq: [XTX], boards: [https://job-boards.greenhouse.io/xtxmarketstechnologies], website: https://www.xtxmarkets.com/careers/ }
+  - { id: quadrature, name: Quadrature Capital, type: Prop Trading, wsq: [Quadrature], boards: [https://job-boards.greenhouse.io/quadraturecapital], website: https://www.quadrature.ai/careers }
+  - { id: headlands, name: Headlands Technologies, type: HFT, boards: [], website: https://www.headlandstech.com/careers/ }
+  - { id: da-vinci, name: Da Vinci Trading, type: Prop Trading, boards: [https://job-boards.greenhouse.io/davinciderivatives], website: https://davincitrading.com/careers/ }
+  - { id: geneva-trading, name: Geneva Trading, type: Prop Trading, boards: [https://job-boards.greenhouse.io/genevatrading], website: https://www.genevatrading.com/careers }
+  - { id: teza, name: Teza Technologies, type: HFT, boards: [https://jobs.ashbyhq.com/teza-technologies], website: https://www.teza.com/careers }
+  - { id: transmarket, name: TransMarket Group, type: Prop Trading, boards: [https://job-boards.greenhouse.io/transmarketgroup], website: https://www.transmarketgroup.com/careers }
+  - { id: simplex, name: Simplex Trading, type: Prop Trading, boards: [https://job-boards.greenhouse.io/simplextrading], website: https://www.simplextrading.com/careers }
+  - { id: graviton, name: Graviton Research Capital, type: HFT, boards: [https://job-boards.greenhouse.io/gravitonresearchcapital], website: https://www.gravitontrading.com/careers.html }
+  - { id: maven, name: Maven Securities, type: Prop Trading, boards: [https://job-boards.greenhouse.io/mavensecuritiesholdingltd], website: https://job-boards.greenhouse.io/mavensecuritiesholdingltd }
+  - { id: quantlab, name: Quantlab, type: HFT, boards: [], website: https://www.quantlab.com/careers }
+  - { id: xr-trading, name: XR Trading, type: Prop Trading, boards: [], website: https://www.xrtrading.com/ }
+  - { id: hehmeyer, name: Hehmeyer, type: Prop Trading, boards: [], website: https://www.hehmeyer.com/careers }
+  - { id: tibra, name: Tibra Capital, type: Prop Trading, boards: [], website: https://tibra.com/careers }
+  - { id: quadeye, name: Quadeye, type: HFT, boards: [], website: https://www.quadeye.com/careers }
+  - { id: hap-capital, name: HAP Capital, type: Prop Trading, boards: [https://jobs.lever.co/hap-capital], website: https://www.hapcapital.com/ }
+
+  # -- Hedge funds / systematic ------------------------------------------------
+  - { id: citadel, name: Citadel, type: Hedge Fund, wsq: [Citadel], boards: [], website: https://www.citadel.com/careers/open-opportunities/ }
+  - { id: two-sigma, name: Two Sigma, type: Hedge Fund, wsq: [Two Sigma], boards: [], website: https://careers.twosigma.com/careers/OpenRoles }
+  - { id: de-shaw, name: D. E. Shaw, type: Hedge Fund, wsq: [DE Shaw], boards: [], website: https://www.deshaw.com/careers }
+  - { id: renaissance, name: Renaissance Technologies, type: Hedge Fund, wsq: [Renaissance], boards: [], website: https://www.rentec.com/Careers.action }
+  - { id: millennium, name: Millennium, type: Hedge Fund, wsq: [Millennium], boards: [https://mlp.eightfold.ai/careers], website: https://www.mlp.com/careers/ }
+  - { id: point72, name: Point72 / Cubist, type: Hedge Fund, wsq: [Point72/Cubist], boards: [https://job-boards.greenhouse.io/point72], website: https://careers.point72.com/ }
+  - { id: squarepoint, name: Squarepoint Capital, type: Hedge Fund, wsq: [Squarepoint], boards: [https://job-boards.greenhouse.io/squarepointcapital], website: https://www.squarepoint-capital.com/open-opportunities }
+  - { id: qube, name: Qube Research & Technologies, type: Hedge Fund, wsq: [Qube], boards: [https://job-boards.greenhouse.io/quberesearchandtechnologies], website: https://www.qube-rt.com/careers }
+  - { id: worldquant, name: WorldQuant, type: Hedge Fund, wsq: [World Quant], boards: [https://job-boards.greenhouse.io/worldquant], website: https://www.worldquant.com/career-listing/ }
+  - { id: schonfeld, name: Schonfeld, type: Hedge Fund, wsq: [Schonfeld], boards: [https://job-boards.greenhouse.io/schonfeld], website: https://www.schonfeld.com/careers/ }
+  - { id: g-research, name: G-Research, type: Hedge Fund, wsq: [G Research], boards: [https://gresearch.wd103.myworkdayjobs.com/en-US/G-Research], website: https://www.gresearch.com/join-us/ }
+  - { id: voleon, name: The Voleon Group, type: Hedge Fund, wsq: [Voleon], boards: [https://jobs.ashbyhq.com/voleon], website: https://jobs.ashbyhq.com/voleon }
+  - { id: trexquant, name: Trexquant, type: Hedge Fund, wsq: [Trexquant], boards: [], website: https://trexquant.com/careers }
+  - { id: scm, name: SCM (Seven Eight / Stevens Capital), type: Hedge Fund, wsq: [SCM], boards: [https://job-boards.greenhouse.io/scm], website: https://job-boards.greenhouse.io/scm }
+  - { id: verition, name: Verition Fund Management, type: Hedge Fund, wsq: [Verition], boards: [], website: https://www.verition.com/open-positions }
+  - { id: capstone, name: Capstone Investment Advisors, type: Hedge Fund, wsq: [Capstone], boards: [https://job-boards.greenhouse.io/capstoneinvestmentadvisors], website: https://www.capstoneco.com/careers/ }
+  - { id: pdt, name: PDT Partners, type: Hedge Fund, wsq: [PDT], boards: [https://job-boards.greenhouse.io/pdtpartners], website: https://pdtpartners.com/careers }
+  - { id: bridgewater, name: Bridgewater Associates, type: Hedge Fund, wsq: [Bridgewater], boards: [https://job-boards.greenhouse.io/bridgewater89], website: https://www.bridgewater.com/working-at-bridgewater }
+  - { id: aquatic, name: Aquatic Capital, type: Hedge Fund, wsq: [Aquatic], boards: [https://job-boards.greenhouse.io/aquaticcapitalmanagement], website: https://aquaticcapital.com/careers }
+  - { id: gsa, name: GSA Capital, type: Hedge Fund, wsq: [GSA], boards: [https://job-boards.greenhouse.io/gsacapital], website: https://www.gsacapital.com/careers/ }
+  - { id: tudor, name: Tudor Investment Corp, type: Hedge Fund, wsq: [Tudor], boards: [https://job-boards.greenhouse.io/tudorgroup], website: https://www.tudor.com/careers }
+  - { id: alphagrep, name: AlphaGrep, type: Hedge Fund, wsq: [AlphaGrep], boards: [https://job-boards.greenhouse.io/alphagrepsecurities], website: https://job-boards.greenhouse.io/alphagrepsecurities }
+  - { id: exodus-point, name: ExodusPoint Capital, type: Hedge Fund, wsq: [Exodus Point], boards: [https://job-boards.greenhouse.io/exoduspoint], website: https://job-boards.greenhouse.io/exoduspoint }
+  - { id: balyasny, name: Balyasny Asset Management, type: Hedge Fund, boards: [], website: https://www.bamfunds.com/careers }
+  - { id: marshall-wace, name: Marshall Wace, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/marshallwace], website: https://job-boards.greenhouse.io/marshallwace }
+  - { id: man-group, name: Man Group, type: Hedge Fund, boards: [https://mangroupplc.wd3.myworkdayjobs.com/Man_Group_Careers, https://mangroupplc.wd3.myworkdayjobs.com/AHL_Careers], website: https://www.man.com/careers }
+  - { id: brevan-howard, name: Brevan Howard, type: Hedge Fund, boards: [https://brevanhoward.wd3.myworkdayjobs.com/BH_ExternalCareers], website: https://www.brevanhoward.com/careers/ }
+  - { id: graham-capital, name: Graham Capital Management, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/grahamcapitalmanagement], website: https://www.grahamcapital.com/careers }
+  - { id: winton, name: Winton, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/winton], website: https://job-boards.greenhouse.io/winton }
+  - { id: engineers-gate, name: Engineers Gate, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/engineersgate], website: https://www.engineersgate.com/careers }
+  - { id: garda, name: Garda Capital Partners, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/gardacp], website: https://www.gardacp.com/careers }
+  - { id: weiss, name: Weiss Multi-Strategy, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/weissassetmanagement], website: https://www.weissasset.com/careers }
+  - { id: walleye, name: Walleye Capital, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/walleyecapital-external-students], website: https://www.walleyecapital.com/careers }
+  - { id: crabel, name: Crabel Capital Management, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/crabel], website: https://www.crabel.com/careers }
+  - { id: magnetar, name: Magnetar, type: Hedge Fund, boards: [https://job-boards.greenhouse.io/magnetar], website: https://www.magnetar.com/careers }
+  - { id: jain-global, name: Jain Global, type: Hedge Fund, boards: [], website: https://www.jainglobal.com/careers }
+  - { id: hudson-bay, name: Hudson Bay Capital, type: Hedge Fund, boards: [], website: https://www.hudsonbaycapital.com/careers }
+  - { id: symmetry, name: Symmetry Investments, type: Hedge Fund, boards: [https://jobs.lever.co/symmetryinvestments], website: https://www.symmetryinvestments.com/ }
+
+  # -- Asset managers ----------------------------------------------------------
+  - { id: aqr, name: AQR Capital Management, type: Asset Mgmt, wsq: [AQR], boards: [https://job-boards.greenhouse.io/aqr], website: https://careers.aqr.com/ }
+  - { id: arrowstreet, name: Arrowstreet Capital, type: Asset Mgmt, wsq: [Arrowstreet], boards: [https://arrowstreetcapital.wd5.myworkdayjobs.com/Arrowstreet], website: https://arrowstreetcapital.wd5.myworkdayjobs.com/Arrowstreet }
+  - { id: acadian, name: Acadian Asset Management, type: Asset Mgmt, wsq: [Acadian], boards: [https://job-boards.greenhouse.io/acadianassetmanagementllc], website: https://www.acadian-asset.com/careers }
+  - { id: alliance-bernstein, name: AllianceBernstein, type: Asset Mgmt, wsq: [Alliance Bernstein], boards: [https://abglobal.wd1.myworkdayjobs.com/alliancebernsteincareers], website: https://abglobal.wd1.myworkdayjobs.com/alliancebernsteincareers, filter: strict }
+  - { id: gmo, name: GMO, type: Asset Mgmt, wsq: [GMO], boards: [https://jobs.lever.co/gmo], website: https://www.gmo.com/americas/careers/ }
+  - { id: blackrock, name: BlackRock, type: Asset Mgmt, boards: [https://blackrock.wd1.myworkdayjobs.com/BlackRock_Professional], website: https://careers.blackrock.com/, filter: strict }
+  - { id: pimco, name: PIMCO, type: Asset Mgmt, boards: [https://pimco.wd1.myworkdayjobs.com/PIMCO-Careers], website: https://www.pimco.com/us/en/about-us/careers, filter: strict }
+  - { id: fidelity, name: Fidelity Investments, type: Asset Mgmt, boards: [https://fmr.wd1.myworkdayjobs.com/FidelityCareers], website: https://jobs.fidelity.com/, filter: strict }
+  - { id: vanguard, name: Vanguard, type: Asset Mgmt, boards: [https://vanguard.wd5.myworkdayjobs.com/vanguard_external], website: https://www.vanguardjobs.com/, filter: strict }
+
+  # -- Banks -------------------------------------------------------------------
+  - { id: jpmorgan, name: JPMorgan Chase, type: Bank, wsq: [JP Morgan], boards: [https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001], website: https://careers.jpmorgan.com/, filter: strict }
+  - { id: goldman-sachs, name: Goldman Sachs, type: Bank, boards: [], website: https://higher.gs.com/results }
+  - { id: morgan-stanley, name: Morgan Stanley, type: Bank, boards: [], website: https://www.morganstanley.com/careers/career-opportunities-search }
+  - { id: bank-of-america, name: Bank of America, type: Bank, boards: [], website: https://careers.bankofamerica.com/en-us/job-search }
+  - { id: citi, name: Citi, type: Bank, boards: [], website: https://jobs.citi.com/ }
+  - { id: barclays, name: Barclays, type: Bank, boards: [https://barclays.wd3.myworkdayjobs.com/External_Career_Site_Barclays], website: https://search.jobs.barclays/, filter: strict }
+  - { id: mizuho, name: Mizuho Americas, type: Bank, boards: [https://mizuho.wd1.myworkdayjobs.com/MizuhoAmericas], website: https://www.mizuhoamericas.com/careers, filter: strict }
+  - { id: capital-one, name: Capital One, type: Bank, boards: [https://capitalone.wd12.myworkdayjobs.com/Capital_One], website: https://www.capitalonecareers.com/, filter: strict }
+  - { id: state-street, name: State Street, type: Bank, boards: [https://statestreet.wd1.myworkdayjobs.com/Global], website: https://careers.statestreet.com/, filter: strict }
+  - { id: wells-fargo, name: Wells Fargo, type: Bank, boards: [https://wf.wd1.myworkdayjobs.com/WellsFargoJobs], website: https://www.wellsfargojobs.com/, filter: strict }
+  - { id: deutsche-bank, name: Deutsche Bank, type: Bank, boards: [], website: https://careers.db.com/ }
+  - { id: ubs, name: UBS, type: Bank, boards: [], website: https://www.ubs.com/global/en/careers.html }
+  - { id: bnp-paribas, name: BNP Paribas, type: Bank, boards: [], website: https://group.bnpparibas/en/careers }
+
+  # -- Crypto / digital assets -------------------------------------------------
+  - { id: wintermute, name: Wintermute, type: Crypto, wsq: [Wintermute], boards: [https://jobs.lever.co/wintermute-trading], website: https://www.wintermute.com/careers }
+  - { id: coinbase, name: Coinbase, type: Crypto, boards: [https://job-boards.greenhouse.io/coinbase], website: https://www.coinbase.com/careers/positions, filter: strict }
+  - { id: kraken, name: Kraken, type: Crypto, boards: [https://jobs.ashbyhq.com/kraken.com], website: https://www.kraken.com/careers, filter: strict }
+  - { id: gemini, name: Gemini, type: Crypto, boards: [https://job-boards.greenhouse.io/gemini], website: https://www.gemini.com/careers, filter: strict }
+  - { id: jump-crypto, name: Jump Crypto, type: Crypto, boards: [https://job-boards.greenhouse.io/jumpcrypto], website: https://jumpcrypto.com/ }
+  - { id: paxos, name: Paxos, type: Crypto, boards: [https://jobs.ashbyhq.com/paxos], website: https://paxos.com/careers/, filter: strict }
+  - { id: gauntlet, name: Gauntlet, type: Crypto, boards: [https://jobs.lever.co/gauntlet], website: https://www.gauntlet.xyz/careers }
+  - { id: gsr, name: GSR, type: Crypto, boards: [https://job-boards.greenhouse.io/gsrmarkets], website: https://www.gsr.io/careers }
+  - { id: falconx, name: FalconX, type: Crypto, boards: [https://job-boards.greenhouse.io/falconx], website: https://www.falconx.io/careers }
+  - { id: galaxy, name: Galaxy Digital, type: Crypto, boards: [https://job-boards.greenhouse.io/galaxydigitalservices], website: https://www.galaxy.com/careers }
+  - { id: b2c2, name: B2C2, type: Crypto, boards: [https://job-boards.greenhouse.io/b2c2], website: https://job-boards.greenhouse.io/b2c2 }
+  - { id: keyrock, name: Keyrock, type: Crypto, boards: [https://jobs.ashbyhq.com/keyrock], website: https://keyrock.com/careers/ }
+  - { id: auros, name: Auros, type: Crypto, boards: [https://job-boards.greenhouse.io/aurosglobal], website: https://www.auros.global/careers }
+  - { id: amber, name: Amber Group, type: Crypto, boards: [https://jobs.lever.co/ambergroup], website: https://www.ambergroup.io/careers }
+  - { id: talos, name: Talos, type: Crypto, boards: [https://jobs.ashbyhq.com/talos-trading], website: https://www.talos.com/careers }
+  - { id: anchorage, name: Anchorage Digital, type: Crypto, boards: [https://jobs.lever.co/anchorage], website: https://www.anchorage.com/careers, filter: strict }
+  - { id: bitgo, name: BitGo, type: Crypto, boards: [https://job-boards.greenhouse.io/bitgo], website: https://www.bitgo.com/company/careers, filter: strict }
+  - { id: circle, name: Circle, type: Crypto, boards: [], website: https://www.circle.com/careers, filter: strict }
+  - { id: ripple, name: Ripple, type: Crypto, boards: [https://job-boards.greenhouse.io/ripple], website: https://ripple.com/careers/, filter: strict }
+  - { id: fireblocks, name: Fireblocks, type: Crypto, boards: [https://job-boards.greenhouse.io/fireblocks], website: https://www.fireblocks.com/careers/, filter: strict }
+  - { id: chainalysis, name: Chainalysis, type: Crypto, boards: [https://jobs.ashbyhq.com/chainalysis-careers], website: https://www.chainalysis.com/careers/, filter: strict }
+  - { id: consensys, name: Consensys, type: Crypto, boards: [https://job-boards.greenhouse.io/consensys], website: https://job-boards.greenhouse.io/consensys, filter: strict }
+  - { id: okx, name: OKX, type: Crypto, boards: [https://job-boards.greenhouse.io/okx], website: https://www.okx.com/join-us, filter: strict }
+  - { id: binance, name: Binance, type: Crypto, boards: [https://jobs.lever.co/binance], website: https://www.binance.com/en/careers, filter: strict }
+  - { id: bullish, name: Bullish, type: Crypto, boards: [https://bullish.wd3.myworkdayjobs.com/Bullish], website: https://bullish.com/careers, filter: strict }
+  - { id: dydx, name: dYdX, type: Crypto, boards: [], website: https://www.dydx.xyz/ }
+  - { id: uniswap, name: Uniswap Labs, type: Crypto, boards: [https://jobs.ashbyhq.com/uniswap], website: https://jobs.ashbyhq.com/uniswap, filter: strict }
+  - { id: chainlink, name: Chainlink Labs, type: Crypto, boards: [], website: https://chainlinklabs.com/careers, filter: strict }
+  - { id: flashbots, name: Flashbots, type: Crypto, boards: [], website: https://www.flashbots.net/ }
+  - { id: offchain-labs, name: Offchain Labs, type: Crypto, boards: [https://jobs.lever.co/offchainlabs], website: https://offchainlabs.com/careers, filter: strict }
+  - { id: aptos, name: Aptos Labs, type: Crypto, boards: [https://job-boards.greenhouse.io/aptoslabs], website: https://aptoslabs.com/careers, filter: strict }
+  - { id: figure, name: Figure, type: Crypto, boards: [https://job-boards.greenhouse.io/figure], website: https://www.figure.com/careers/, filter: strict }
+
+  # -- Prediction markets / sports & event trading ------------------------------
+  - { id: kalshi, name: Kalshi, type: Prediction Market, boards: [https://jobs.ashbyhq.com/kalshi], website: https://kalshi.com/careers }
+  - { id: polymarket, name: Polymarket, type: Prediction Market, boards: [https://jobs.ashbyhq.com/polymarket], website: https://polymarket.com/careers }
+  - { id: novig, name: Novig, type: Prediction Market, boards: [https://jobs.ashbyhq.com/novig], website: https://www.novig.us/careers }
+  - { id: sporttrade, name: Sporttrade, type: Prediction Market, boards: [], website: https://sporttrade.com/careers }
+  - { id: underdog, name: Underdog, type: Prediction Market, boards: [https://job-boards.greenhouse.io/underdog], website: https://underdogfantasy.com/careers, filter: strict }
+  - { id: draftkings, name: DraftKings, type: Prediction Market, boards: [https://draftkings.wd1.myworkdayjobs.com/DraftKings], website: https://careers.draftkings.com/, filter: strict }
+  - { id: fanduel, name: FanDuel, type: Prediction Market, boards: [https://job-boards.greenhouse.io/fanduel], website: https://www.fanduel.careers/, filter: strict }
+
+  # -- Exchanges / brokers / trading fintech -----------------------------------
+  - { id: robinhood, name: Robinhood, type: Exchange/Fintech, boards: [https://job-boards.greenhouse.io/robinhood], website: https://careers.robinhood.com/, filter: strict }
+  - { id: nasdaq, name: Nasdaq, type: Exchange/Fintech, boards: [https://nasdaq.wd1.myworkdayjobs.com/Global_External_Site], website: https://www.nasdaq.com/about/careers, filter: strict }
+  - { id: cme, name: CME Group, type: Exchange/Fintech, boards: [https://cmegroup.wd1.myworkdayjobs.com/cme_careers], website: https://www.cmegroup.com/careers.html, filter: strict }
+  - { id: cboe, name: Cboe Global Markets, type: Exchange/Fintech, boards: [https://cboe.wd1.myworkdayjobs.com/External_Career_CBOE], website: https://www.cboe.com/about/careers/, filter: strict }
+  - { id: iex, name: IEX, type: Exchange/Fintech, boards: [https://job-boards.greenhouse.io/iex], website: https://www.iex.io/careers }
+  - { id: clear-street, name: Clear Street, type: Exchange/Fintech, boards: [https://job-boards.greenhouse.io/clearstreet], website: https://clearstreet.io/careers, filter: strict }
+  - { id: tastytrade, name: tastytrade, type: Exchange/Fintech, boards: [https://job-boards.greenhouse.io/tastytrade], website: https://tastytrade.com/careers/, filter: strict }
+  - { id: marketaxess, name: MarketAxess, type: Exchange/Fintech, boards: [https://job-boards.greenhouse.io/marketaxesscorporation], website: https://www.marketaxess.com/careers, filter: strict }
