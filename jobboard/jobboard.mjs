@@ -599,6 +599,31 @@ function dedupeById(jobs) {
   return [...byId.values()];
 }
 
+/**
+ * Jobs one board run folds into the store: its relevant rows, plus rows still
+ * listed but no longer relevant (e.g. after a classifier change) that WSQ
+ * curates or you track, which stay seen on this board instead of looking
+ * closed. Other irrelevant rows are deleted from the store. Location and
+ * regions always come from the board's own row.
+ */
+export function boardJobs(store, company, listed, trackedIds) {
+  const kept = dedupeById(listed.map((r) => atsToJob(r, company)).filter(Boolean));
+  const keptIds = new Set(kept.map((j) => j.id));
+  const rowById = new Map(listed.map((r) => [jobKey(company.id, r.url), r]));
+  for (const [id, r] of rowById) {
+    const prev = store.jobs[id];
+    if (keptIds.has(id) || !prev) continue;
+    if (!prev.sources?.wsq && !trackedIds.has(id)) {
+      delete store.jobs[id];
+      continue;
+    }
+    const location = String(r.location || '').trim();
+    const regions = classifyRegions(location);
+    kept.push({ ...prev, location, region: regions[0], regions, category: classifyCategory(prev.title, { wsqRole: prev.wsqRole }) ?? prev.category });
+  }
+  return kept;
+}
+
 async function withTimeout(promise, ms, label) {
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label}: timed out after ${ms / 1000}s`)), ms); });
@@ -632,18 +657,7 @@ async function runScan({ only = null, quiet = false } = {}) {
           const hit = resolveProvider(entry, providers, { skipIds: ['local-parser'] });
           if (!hit || hit.error) throw new Error(hit?.error || 'no provider recognizes this board URL');
           const raw = await withTimeout(hit.provider.fetch(entry, ctx), BOARD_TIMEOUT_MS, `${company.id} ${hit.provider.id}`);
-          const listed = raw.filter((r) => r?.title && r?.url);
-          const kept = dedupeById(listed.map((r) => atsToJob(r, company)).filter(Boolean));
-          // Still listed but not a relevant role (e.g. after a classifier change):
-          // drop it, unless WSQ curates it or you are tracking it - then it just
-          // stays seen on this board instead of looking closed.
-          const keptIds = new Set(kept.map((j) => j.id));
-          for (const id of new Set(listed.map((r) => jobKey(company.id, r.url)))) {
-            const prev = store.jobs[id];
-            if (keptIds.has(id) || !prev) continue;
-            if (prev.sources?.wsq || trackedIds.has(id)) kept.push({ ...prev, category: classifyCategory(prev.title, { wsqRole: prev.wsqRole }) ?? prev.category });
-            else delete store.jobs[id];
-          }
+          const kept = boardJobs(store, company, raw.filter((r) => r?.title && r?.url), trackedIds);
           const res = applySourceRun(store, sourceKey, kept, now, (j) => j.companyId === company.id);
           Object.assign(row, { status: 'ok', provider: hit.provider.id, fetched: raw.length, kept: kept.length, added: res.added, closed: res.gone });
         } catch (err) {
@@ -1069,6 +1083,18 @@ function selfTest() {
   applySourceRun(moved, 'ats:m', [{ id: 'm:gh-1', companyId: 'm', title: 'M', url: 'u', tags: [], region: 'Europe', regions: ['Europe'] }], 't1');
   applySourceRun(moved, 'ats:m', [{ id: 'm:gh-1', companyId: 'm', title: 'M', url: 'u', tags: [], region: 'USA', regions: ['USA'] }], 't2');
   check('ats location change replaces regions', moved.jobs['m:gh-1'].regions, ['USA']);
+  const bCo = { id: 'b', name: 'B', type: 'Bank', filter: 'strict' };
+  const bUrl = 'https://job-boards.greenhouse.io/b/jobs/555';
+  const bStore = emptyStore();
+  applySourceRun(bStore, 'wsq', [{ id: jobKey('b', bUrl), companyId: 'b', title: 'Executive Assistant', url: bUrl, tags: [], location: 'New York / Toronto', region: 'USA', regions: ['USA', 'Canada'] }], 't1');
+  bStore.jobs['b:gh-556'] = { id: 'b:gh-556', companyId: 'b', title: 'Receptionist', sources: { 'ats:b': { gone: false } } };
+  const bKept = boardJobs(bStore, bCo, [{ title: 'Executive Assistant', url: bUrl, location: 'Montreal' }, { title: 'Receptionist', url: 'https://job-boards.greenhouse.io/b/jobs/556' }], new Set());
+  check('irrelevant untracked board row deleted', bStore.jobs['b:gh-556'], undefined);
+  applySourceRun(bStore, 'ats:b', bKept, 't2', (j) => j.companyId === 'b');
+  check('irrelevant kept board row records its own regions', bStore.jobs['b:gh-555'].sources['ats:b'].regions, ['Canada']);
+  check('irrelevant kept board row regions are the live union', bStore.jobs['b:gh-555'].regions, ['Canada', 'USA']);
+  applySourceRun(bStore, 'wsq', [], 't3');
+  check('irrelevant kept board row sheds wsq regions', bStore.jobs['b:gh-555'].regions, ['Canada']);
 
   // State patches.
   const st = emptyState();
