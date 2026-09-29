@@ -52,6 +52,7 @@ import * as yaml from 'js-yaml';
 
 import { getCareerOpsRoot } from '../path-resolver.mjs';
 import { BROWSER_LIKE_USER_AGENT } from '../user-agent.mjs';
+import { isMainModule } from '../lib/is-main-module.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..');
@@ -1169,8 +1170,7 @@ async function main(argv) {
   return process.exitCode ?? 0;
 }
 
-const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
   main(process.argv.slice(2)).then((code) => { if (code !== null && code !== undefined) process.exitCode = code; }).catch((err) => {
     console.error(`jobboard: ${err.message}`);
     process.exitCode = 1;
