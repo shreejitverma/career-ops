@@ -64,7 +64,7 @@ node jobboard/jobboard.mjs --self-test
 ## How merging works
 
 A job's id is `{companyId}:{ATS requisition id}`.
-The requisition id is the Greenhouse `gh_jid`, a Lever/Ashby UUID, a Workday `_R123` suffix, or an Eightfold/Oracle `/job/N`.
+The requisition id is the Greenhouse `gh_jid`, a Lever/Ashby UUID, a Workday `_R123` or `_R-533492` suffix (a trailing repost `-1` is dropped), or an Eightfold/Oracle `/job/N`.
 WSQ often links a firm's own domain (`?gh_jid=N`) while the board links `job-boards.greenhouse.io/.../jobs/N`, and both collapse into one job.
 
 A job is **closed** only when every source that listed it has since fetched successfully without it.
@@ -79,6 +79,10 @@ Postings that are still listed but no longer classify as relevant roles are remo
    `headlandsresearch` on Greenhouse, for example, is a clinical-research firm, not Headlands Technologies.
 3. Add an entry to `companies.yml`, using `filter: strict` for large banks and fintechs.
 4. Run `node jobboard/jobboard.mjs scan --company <id>`.
+
+A WSQ firm that is missing from `companies.yml` is filed under a `wsq-<slug>` id.
+Once you list that firm name under the entry's `wsq:` aliases, the next `ingest-wsq` or `refresh` moves its jobs and your tracked state to the registry id.
+State already recorded under the new id is never overwritten.
 
 Firms with no public ATS API (Citadel, Citadel Securities, Two Sigma, D. E. Shaw, SIG, Renaissance, Trexquant, Wolverine, Verition, Goldman Sachs, Morgan Stanley, and others) are listed with `boards: []`.
 Their roles come from WSQ where WSQ covers them, and the Companies tab links to their careers pages.

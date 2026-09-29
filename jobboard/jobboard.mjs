@@ -212,8 +212,12 @@ const REGION_TABLE = [
   ['USA', /new york|\bnyc\b|chicago|boston|san francisco|seattle|austin|houston|dallas|miami|denver|boulder|philadelphia|bala cynwyd|stamford|greenwich|norwalk|jersey city|new jersey|berkeley|palo alto|mountain view|menlo park|los angeles|san jose|atlanta|charlotte|richmond|plano|columbus|minneapolis|salt lake|pittsburgh|nashville|washington|wilmington|tampa|phoenix|portland|raleigh|kansas city|st\.? louis|detroit|east setauket|radnor|red bank|princeton|westport|connecticut|florida|texas|california|illinois|massachusetts|pennsylvania|united states|\busa\b|\bus\b|\b(ny|il|ca|tx|fl|ct|nj|wa|pa|ga|nc|va|mn|oh|ut|az|dc|mo|mi|tn)\b/i],
 ];
 
+// WSQ's 'North America' and 'Global' span several regions (Montreal, Sao Paulo),
+// so those listings are placed by their cities instead.
+const WSQ_BROAD_REGIONS = new Set(['North America', 'Global']);
+
 export function classifyRegion(location, wsqRegion) {
-  if (wsqRegion) return wsqRegion === 'North America' ? 'USA' : wsqRegion;
+  if (wsqRegion && !WSQ_BROAD_REGIONS.has(wsqRegion)) return wsqRegion;
   const loc = String(location || '');
   if (!loc) return 'Unknown';
   for (const [region, re] of REGION_TABLE) if (re.test(loc)) return region;
@@ -260,8 +264,8 @@ export function externalId(url) {
     if (m) return `uuid-${m[0].toLowerCase()}`;
   }
   if (host.endsWith('myworkdayjobs.com') || host.endsWith('myworkdaysite.com')) {
-    const m = path.match(/_((?:[A-Z]{1,4}-?)?\d{3,}(?:-\d+)?)\/?$/);
-    if (m) return `wd-${m[1].replace(/-\d+$/, '')}`;
+    const m = path.match(/_((?:[A-Z]{1,4}-?)?\d{3,})(?:-\d+)?\/?$/);
+    if (m) return `wd-${m[1]}`;
   }
   if (host.endsWith('eightfold.ai') || host.endsWith('oraclecloud.com')) {
     const m = path.match(/\/job\/(\d+)/);
@@ -283,6 +287,15 @@ function normalizedUrl(url) {
     return `${u.hostname.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/$/, '')}${u.search}`;
   } catch {
     return String(url).trim().toLowerCase();
+  }
+}
+
+export function isHttpUrl(url) {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 
@@ -410,9 +423,46 @@ export function applySourceRun(store, sourceKey, incoming, now, scope = () => tr
   return { added, gone, total: incoming.length };
 }
 
+function wsqFallbackId(firm) {
+  return `wsq-${String(firm).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+/**
+ * Re-key jobs filed under a WSQ fallback company id (`wsq-<slug>`) once that
+ * firm is mapped in companies.yml, so tracked state follows the posting.
+ * Existing store records and state under the new id are never overwritten;
+ * conflicting old state is left in place rather than dropped.
+ * @param {Map<string, {id: string, name: string, type: string}>} renames old companyId -> registry company
+ */
+export function migrateCompanyIds(store, state, renames) {
+  const rekey = (id) => {
+    const at = id.indexOf(':');
+    const company = at > 0 ? renames.get(id.slice(0, at)) : undefined;
+    return company ? { company, id: `${company.id}${id.slice(at)}` } : null;
+  };
+  let jobs = 0;
+  let tracked = 0;
+  for (const [oldId, job] of Object.entries(store.jobs)) {
+    const next = rekey(oldId);
+    if (!next) continue;
+    if (!store.jobs[next.id]) store.jobs[next.id] = { ...job, id: next.id, companyId: next.company.id, companyName: next.company.name, firmType: next.company.type };
+    delete store.jobs[oldId];
+    jobs++;
+  }
+  for (const [oldId, rec] of Object.entries(state.jobs)) {
+    const next = rekey(oldId);
+    if (!next || state.jobs[next.id]) continue;
+    state.jobs[next.id] = rec;
+    delete state.jobs[oldId];
+    tracked++;
+  }
+  return { jobs, tracked };
+}
+
 function wsqToJob(raw, companyByWsq) {
+  if (!isHttpUrl(raw.url)) return null;
   const company = companyByWsq.get(raw.firm);
-  const companyId = company?.id ?? `wsq-${raw.firm.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  const companyId = company?.id ?? wsqFallbackId(raw.firm);
   const cities = Array.isArray(raw.cities) && raw.cities.length ? raw.cities : [raw.city].filter(Boolean);
   const title = String(raw.title).trim();
   return {
@@ -434,6 +484,7 @@ function wsqToJob(raw, companyByWsq) {
 }
 
 function atsToJob(raw, company) {
+  if (!isHttpUrl(raw.url)) return null;
   const title = String(raw.title || '').trim();
   const category = classifyCategory(title, { strict: company.filter === 'strict' });
   if (!category) return null;
@@ -468,18 +519,28 @@ async function runIngestWsq({ quiet = false } = {}) {
   const paths = dataPaths();
   const registry = loadRegistry();
   const companyByWsq = new Map();
-  for (const c of registry) for (const alias of c.wsq) companyByWsq.set(alias, c);
+  const renames = new Map();
+  for (const c of registry) {
+    for (const alias of c.wsq) {
+      companyByWsq.set(alias, c);
+      renames.set(wsqFallbackId(alias), c);
+    }
+  }
   const t0 = Date.now();
   const now = new Date().toISOString();
   const raw = await fetchWsq();
   const unmapped = [...new Set(raw.map((r) => r.firm).filter((f) => !companyByWsq.has(f)))];
-  const jobs = raw.map((r) => wsqToJob(r, companyByWsq));
+  const jobs = raw.map((r) => wsqToJob(r, companyByWsq)).filter(Boolean);
   const store = readJson(paths.jobs, emptyStore());
+  const state = readJson(paths.state, emptyState());
+  const migrated = migrateCompanyIds(store, state, renames);
+  if (migrated.tracked) writeJsonAtomic(paths.state, state);
   const res = applySourceRun(store, 'wsq', dedupeById(jobs), now);
   writeJsonAtomic(paths.jobs, store);
   logRun(paths, { at: now, source: 'wsq', company: '*', status: 'ok', fetched: raw.length, kept: res.total, added: res.added, closed: res.gone, ms: Date.now() - t0 });
   if (!quiet) {
     console.log(`wsq: ${raw.length} listings, ${res.added} new, ${res.gone} closed`);
+    if (migrated.jobs) console.log(`wsq: moved ${migrated.jobs} jobs (${migrated.tracked} tracked) from wsq-* ids to their companies.yml ids`);
     if (unmapped.length) console.log(`wsq: firms not in companies.yml (given a wsq-* id; add them): ${unmapped.join(', ')}`);
   }
   return { ...res, fetched: raw.length, unmapped };
@@ -565,7 +626,7 @@ function loadView() {
   const state = readJson(paths.state, emptyState());
   const registry = loadRegistry();
   const jobs = Object.values(store.jobs).map((j) => ({ ...j, status: state.jobs[j.id]?.status || 'Not Applied' }));
-  for (const m of state.manual || []) jobs.push({ ...m, manual: true, active: true, status: state.jobs[m.id]?.status || 'Not Applied' });
+  for (const m of state.manual || []) if (!store.jobs[m.id]) jobs.push({ ...m, manual: true, active: true, status: state.jobs[m.id]?.status || 'Not Applied' });
   return { paths, store, state, registry, jobs };
 }
 
@@ -755,12 +816,12 @@ function serve({ port, open }) {
         const title = String(body.title || '').trim();
         const companyName = String(body.companyName || '').trim();
         const jobUrl = String(body.url || '').trim();
-        if (!title || !companyName || !/^https?:\/\//.test(jobUrl)) return send(res, 400, { error: 'title, company and an http(s) url are required' });
-        const { paths, state, registry } = loadView();
+        if (!title || !companyName || !isHttpUrl(jobUrl)) return send(res, 400, { error: 'title, company and an http(s) url are required' });
+        const { paths, store, state, registry } = loadView();
         const company = registry.find((c) => c.name.toLowerCase() === companyName.toLowerCase() || c.id === companyName.toLowerCase());
         const companyId = company?.id ?? `manual-${companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
         const id = `${jobKey(companyId, jobUrl)}`;
-        if ((state.manual || []).some((m) => m.id === id)) return send(res, 409, { error: 'already added' });
+        if (store.jobs[id] || (state.manual || []).some((m) => m.id === id)) return send(res, 409, { error: 'already on the board' });
         const location = String(body.location || '').trim();
         const now = new Date().toISOString();
         const job = {
@@ -850,7 +911,11 @@ function selfTest() {
   check('region london', classifyRegion('London, UK'), 'Europe');
   check('region jersey city', classifyRegion('Jersey City, NJ'), 'USA');
   check('region india', classifyRegion('Gurugram'), 'India');
-  check('region wsq', classifyRegion('x', 'North America'), 'USA');
+  check('region wsq', classifyRegion('x', 'Europe'), 'Europe');
+  check('region wsq north america montreal', classifyRegion('Montreal', 'North America'), 'Canada');
+  check('region wsq north america sao paulo', classifyRegion('Sao Paulo', 'North America'), 'Latin America');
+  check('region wsq north america new york', classifyRegion('New York', 'North America'), 'USA');
+  check('region wsq global uses cities', classifyRegion('Montreal', 'Global'), 'Canada');
   check('tags', techTags('Senior C++ Developer', 'Python and kdb+ required, low-latency'), ['C++', 'Python', 'KDB/q', 'Low Latency']);
 
   // External ids: WSQ's firm-domain link and the ATS link collapse together.
@@ -861,6 +926,10 @@ function selfTest() {
   check('lever', externalId('https://jobs.lever.co/wintermute-trading/d962dc39-8839-4e13-a37a-baba49e52b44'), 'uuid-d962dc39-8839-4e13-a37a-baba49e52b44');
   check('workday', externalId('https://gresearch.wd103.myworkdayjobs.com/en-US/G-Research/job/London-UK/Platform-Desktop-Engineering-Manager_R3738'), 'wd-R3738');
   check('workday suffix', externalId('https://arrowstreetcapital.wd5.myworkdayjobs.com/en-US/Arrowstreet/job/Boston/Pre-Trade-Investment-Services_R1511-1'), 'wd-R1511');
+  check('workday dashed id', externalId('https://wd1.myworkdaysite.com/en-US/recruiting/wf/WellsFargoJobs/job/Charlotte-NC/Quantitative-Analytics-Specialist_R-533492'), 'wd-R-533492');
+  check('workday dashed JR id', externalId('https://barclays.wd3.myworkdayjobs.com/en-US/External_Career_Site_Barclays/job/London/Quant-Developer_JR-0000098158'), 'wd-JR-0000098158');
+  check('workday dashed id suffix', externalId('https://barclays.wd3.myworkdayjobs.com/en-US/External_Career_Site_Barclays/job/London/Quant-Developer_JR-0000114814-1'), 'wd-JR-0000114814');
+  check('workday dashed ids stay distinct', externalId('https://statestreet.wd1.myworkdayjobs.com/en-US/Global/job/Boston/A_R-771234') === externalId('https://statestreet.wd1.myworkdayjobs.com/en-US/Global/job/Boston/B_R-771235'), false);
   check('eightfold', externalId('https://mlp.eightfold.ai/careers/job/755958015047'), 'job-755958015047');
   check('no id', externalId('https://www.rentec.com/Careers.action?jobs=true&selectedPosition=x'), null);
   check('jobKey fallback stable', jobKey('rentec', 'https://www.rentec.com/Careers.action?selectedPosition=x#top'), jobKey('rentec', 'https://rentec.com/Careers.action?selectedPosition=x'));
@@ -878,6 +947,34 @@ function selfTest() {
   const wj = wsqToJob(listing, new Map([['Optiver', { id: 'optiver', name: 'Optiver', type: 'Prop Trading' }]]));
   check('wsq salary cleaned', wj.salary, '$1 - $2');
   check('wsq job id', wj.id, 'optiver:gh-1234567');
+  check('wsq drops javascript url', wsqToJob({ ...listing, url: 'javascript:alert(1)' }, new Map()), null);
+  check('wsq drops data url', wsqToJob({ ...listing, url: 'data:text/html,x' }, new Map()), null);
+  const atsCo = { id: 'optiver', name: 'Optiver', type: 'Prop Trading', filter: 'all' };
+  check('ats drops javascript url', atsToJob({ title: 'Quantitative Developer', url: 'javascript:alert(1)' }, atsCo), null);
+  check('ats keeps https url', atsToJob({ title: 'Quantitative Developer', url: 'https://jobs.lever.co/x/d962dc39-8839-4e13-a37a-baba49e52b44' }, atsCo)?.category, 'Quant Dev');
+
+  // Mapping a WSQ fallback firm moves its jobs and tracked state to the registry id.
+  const fallback = wsqToJob({ ...listing, firm: 'Foo Capital' }, new Map());
+  check('wsq fallback id', fallback.id, 'wsq-foo-capital:gh-1234567');
+  const mStore = emptyStore();
+  const mState = emptyState();
+  mStore.jobs[fallback.id] = { ...fallback, firstSeen: 't0' };
+  mStore.jobs['wsq-foo-capital:gh-2'] = { id: 'wsq-foo-capital:gh-2', companyId: 'wsq-foo-capital', firstSeen: 't0' };
+  mStore.jobs['foo:gh-2'] = { id: 'foo:gh-2', companyId: 'foo', firstSeen: 't1' };
+  mStore.jobs['other:gh-3'] = { id: 'other:gh-3', companyId: 'other' };
+  mState.jobs[fallback.id] = { status: 'Applied' };
+  mState.jobs['wsq-foo-capital:gh-2'] = { status: 'Saved' };
+  mState.jobs['foo:gh-2'] = { status: 'Interviewing' };
+  const foo = { id: 'foo', name: 'Foo Capital', type: 'Hedge Fund' };
+  const mig = migrateCompanyIds(mStore, mState, new Map([['wsq-foo-capital', foo]]));
+  check('migrate counts', mig, { jobs: 2, tracked: 1 });
+  check('migrate store rekeyed', Object.keys(mStore.jobs).sort(), ['foo:gh-1234567', 'foo:gh-2', 'other:gh-3']);
+  check('migrate store fields', [mStore.jobs['foo:gh-1234567'].id, mStore.jobs['foo:gh-1234567'].companyId, mStore.jobs['foo:gh-1234567'].companyName, mStore.jobs['foo:gh-1234567'].firstSeen], ['foo:gh-1234567', 'foo', 'Foo Capital', 't0']);
+  check('migrate keeps existing store record', mStore.jobs['foo:gh-2'].firstSeen, 't1');
+  check('migrate moves state', [mState.jobs['foo:gh-1234567']?.status, mState.jobs[fallback.id]], ['Applied', undefined]);
+  check('migrate never overwrites new-id state', [mState.jobs['foo:gh-2'].status, mState.jobs['wsq-foo-capital:gh-2'].status], ['Interviewing', 'Saved']);
+  check('migrate idempotent', migrateCompanyIds(mStore, mState, new Map([['wsq-foo-capital', foo]])), { jobs: 0, tracked: 0 });
+  check('wsq job lands on migrated id', wsqToJob({ ...listing, firm: 'Foo Capital' }, new Map([['Foo Capital', foo]])).id, 'foo:gh-1234567');
 
   // Merge: dedupe across sources, gone/closed only on successful runs, reopen.
   const store = emptyStore();

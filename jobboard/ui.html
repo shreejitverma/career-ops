@@ -576,7 +576,10 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   $('#exportBtn').onclick = () => {
     const rows = sorted(data.jobs.filter((j) => matches(j)));
     const cols = ['status', 'companyName', 'title', 'category', 'seniority', 'firmType', 'location', 'region', 'salary', 'postedAt', 'url', 'appliedAt', 'notes'];
-    const cell = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const cell = (v) => {
+      const s = String(v ?? '');
+      return '"' + (/^[=+\-@\t\r]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"';
+    };
     const csv = [cols.join(',')].concat(rows.map((j) => cols.map((c) => cell(c === 'appliedAt' || c === 'notes' ? (j.state || {})[c] : j[c])).join(','))).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
