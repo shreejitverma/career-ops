@@ -26,6 +26,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
+import { isNestedCheckout } from '../lib/mjs-files.mjs';
 
 export const TRACKER_STAGES = ['sourced', 'applied', 'recruiter', 'OA', 'phone', 'onsite', 'offer', 'rejected', 'withdrawn', 'ghosted'];
 
@@ -125,7 +126,8 @@ function walkMarkdown(dir) {
   for (const name of readdirSync(dir).sort()) {
     const p = join(dir, name);
     const st = statSync(p);
-    if (st.isDirectory()) out.push(...walkMarkdown(p));
+    // A checkout parked under 03-Pipeline/ holds someone else's notes, not trackers (#3762).
+    if (st.isDirectory()) { if (!isNestedCheckout(p)) out.push(...walkMarkdown(p)); }
     else if (name.endsWith('.md')) out.push(p);
   }
   return out;

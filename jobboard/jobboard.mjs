@@ -1290,12 +1290,17 @@ function selfTest() {
     mkdirSync(dirname(oldNote), { recursive: true });
     writeFileSync(oldNote, '---\ncompany: "Acme Capital"\naliases:\n  - Acme\nrole: Quant Dev\nstage: rejected\nlinks: [https://www.acme.test/careers?gh_jid=111]\n---\n# old\n');
     writeFileSync(join(cc.pipeline, 'Active', 'notes-only.md'), '# no frontmatter\n');
+    const nested = join(cc.pipeline, 'Active', 'parked-clone');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, '.git'), 'gitdir: /elsewhere\n');
+    writeFileSync(join(nested, 'Other-Tracker.md'), '---\ncompany: "Other Co"\nstage: applied\n---\n');
     const ccReg = [
       { id: 'acme', name: 'Acme Capital', type: 'HFT', wsq: ['ACME'] },
       { id: 'fidelity', name: 'Fidelity Investments', type: 'Asset Mgmt', wsq: [] },
       { id: 'point72', name: 'Point72 / Cubist', type: 'Hedge Fund', wsq: ['Point72/Cubist'] },
     ];
     const tr = loadTrackers(cc, ccReg);
+    check('cc skips notes inside a nested checkout', tr.some((t) => t.company === 'Other Co'), false);
     check('cc loads only notes with company and stage', tr.map((t) => [t.companyId, t.stage, t.archived]), [['acme', 'rejected', true]]);
     check('cc reads block-form lists', readList(readFileSync(oldNote, 'utf-8'), 'aliases'), ['Acme']);
     check('cc company resolution', [['Fidelity Investments'], ['Fidelity'], ['Point72'], ['Two Sigma']].map((n) => resolveCompanyId(n, companyIndex(ccReg))), ['fidelity', 'fidelity', 'point72', null]);
