@@ -36,7 +36,7 @@ The page has a **Refresh jobs** button that runs the same refresh in the backgro
   A board with Saved / Applied / Interviewing / Offer / Rejected columns.
   An Applied role with no update after 14 days shows a follow-up nudge.
 - **Companies.**
-  Every firm with its type, open roles, not-applied and applied counts, and source (company board, or WSQ only when no public ATS exists).
+  Every firm with its type, open roles, not-applied count, your command-center trackers, and source (company board, or WSQ only when no public ATS exists).
   It also links to each firm's careers page.
   Click a company to see its jobs.
 - **Add a job.**
