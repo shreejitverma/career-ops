@@ -5,9 +5,9 @@ status: solid
 
 # Pipeline dashboard
 
-[[Pipeline-Board|Board]] - [[_Inbox-Review|Inbox review]] - [[_Pipeline-Stats|Statistics]] - [[_Application-Schema|Schema]]
+[[Pipeline-Board|Board]] - [[_Inbox-Review|Inbox review]] - [[_Pipeline-Stats|Statistics]] - [[_Job-Board|Job board]] - [[_Application-Schema|Schema]]
 
-The daily sync (09:00) refreshes the inbox review, the statistics, and the board.
+The daily sync (09:00) refreshes the inbox review, the statistics, the board, and the job board.
 Tables below are live: they read tracker frontmatter every time the note opens.
 
 ## Overdue follow-ups

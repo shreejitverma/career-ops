@@ -139,13 +139,17 @@ Step 4: Vault Automatically Updated
 
 ## Automated sync (the maintained pipeline)
 
-The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note:
+The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note, then refreshes the job board:
 
 1. `sync_job_emails.py --mode daily --apply` reads recent mail from the Apple Mail accounts listed in the script, keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received), matches it to a tracker by company name (or one of the tracker's `aliases`) or recruiter domain, and appends new events to `.sync/events.jsonl`.
    It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
    An email matched only by sender domain (for example an agency recruiter, who also writes about other companies) is listed in the review note as "domain match, check" and never appended.
    It never edits frontmatter; update `stage` yourself when the review suggests it.
+   Bulk mail (GitHub CI notifications, newsletters, marketing, career-center events, job-alert digests) is dropped by `NOISE_RE` even from dedicated job labels, and hidden from the review even if it was recorded earlier.
+   "Possible untracked applications" looks back 180 days, because a missing tracker matters long after the email.
 2. `pipeline_views.py` rewrites [[_Pipeline-Stats]] (funnel, response rate by source, rejection reasons) and [[Pipeline-Board]].
+3. `node jobboard/jobboard.mjs refresh` (in the career-ops repo) re-fetches every job posting and rewrites [[_Job-Board]] from the trackers step 1 just updated.
+   A failed board is logged in `sync.log` and never stops the sync.
 
 Useful commands:
 
