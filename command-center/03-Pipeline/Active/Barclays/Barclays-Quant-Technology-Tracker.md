@@ -50,3 +50,7 @@ links: []
 - **Cognitive & Logical Reasoning**: Numerical reasoning, graph interpretation
 - **Coding Assessment**: Data structures & algorithm challenges
 - **Situational Judgement**: Values & cultural alignment questions
+
+## Timeline
+
+- 2024-10-09 assessment: Invitation to complete an online assessment <!-- evt:24f97713bdfb -->

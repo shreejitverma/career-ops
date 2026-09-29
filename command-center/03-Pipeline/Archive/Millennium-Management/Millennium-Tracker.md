@@ -39,3 +39,8 @@ links: []
 ## 2. Post-Mortem & Strategic Key Learnings
 - **Core Insight**: Multi-manager pod model; requires direct pod PM sponsorship.
 - **Actionable Adjustment**: Keep monitoring engineering openings and re-apply once cooldown expires.
+
+## Timeline
+
+- 2026-07-20 rejection: Shreejit, following up from Millennium <!-- evt:6a7d1f85ba95 -->
+- 2026-07-28 rejection: Shreejit, following up from Millennium <!-- evt:7439ec1e6ea5 -->

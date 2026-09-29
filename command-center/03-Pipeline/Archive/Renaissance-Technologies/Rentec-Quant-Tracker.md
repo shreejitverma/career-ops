@@ -39,3 +39,7 @@ links: []
 ## 2. Post-Mortem & Strategic Key Learnings
 - **Core Insight**: Apply with published math/stats papers or proven signal generation track record.
 - **Actionable Adjustment**: Keep monitoring engineering openings and re-apply once cooldown expires.
+
+## Timeline
+
+- 2026-07-30 rejection: Shreejit Verma <!-- evt:7808ad94f336 -->

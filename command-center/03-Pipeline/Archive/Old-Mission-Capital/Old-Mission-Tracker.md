@@ -39,3 +39,7 @@ links: []
 ## 2. Post-Mortem & Strategic Key Learnings
 - **Core Insight**: ETF market making specialist; requires ultra-low-latency C++.
 - **Actionable Adjustment**: Keep monitoring engineering openings and re-apply once cooldown expires.
+
+## Timeline
+
+- 2026-07-30 rejection: Thank You from Old Mission <!-- evt:b81ea3f9e72e -->

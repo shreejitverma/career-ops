@@ -60,3 +60,8 @@ links: []
    - Bond pricing, interest rate risk, Monte Carlo simulation basics
 3. **Data Science & Alphawise Analytics**:
    - Alternative data processing, time-series anomaly detection, feature engineering in pandas/numpy
+
+## Timeline
+
+- 2024-10-02 assessment: 2024 FID Strats HackerRank Online Exam Invitation <!-- evt:63b2ae98c6bc -->
+- 2024-11-01 assessment: Action Required: Morgan Stanley Alphawise HackerRank Exam <!-- evt:661d395505c7 -->
