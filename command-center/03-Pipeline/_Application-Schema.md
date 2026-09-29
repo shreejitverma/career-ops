@@ -6,6 +6,7 @@ status: solid
 # Application schema
 
 Every application is one tracker note in `Active/<Company>/` or `Archive/<Company>/`.
+The career-ops job board (`jobboard/jobboard.mjs serve`) writes a new one when you confirm an application there, in the company's existing folder when it has one; it never edits or overwrites an existing note, and afterwards it reads the job's status from this note's `stage`.
 Its frontmatter is the source of truth for the dashboard, the board, and the inbox review.
 `normalize_trackers.py` migrates old notes to this schema; `sync_job_emails.py` never edits frontmatter.
 
@@ -32,7 +33,9 @@ Its frontmatter is the source of truth for the dashboard, the board, and the inb
 | `reached` | a non-terminal stage | Optional: the furthest stage a `rejected`, `withdrawn`, or `ghosted` application got to; the funnel in [[_Pipeline-Stats]] counts it up to that stage. |
 | `rejection_reason` | text | Set when `stage: rejected`. |
 | `recruiter`, `recruiter_email`, `stakeholders` | text or list | Contacts. |
-| `links` | list | Job posting, portal, prep notes. |
+| `links` | list | Job posting, portal, prep notes. The job board links a tracker to a posting when one of these is that posting's URL. |
+| `resume` | text | Resume variant sent, as `<track>/<length>` under career-ops `resume/`, for example `quant/one-page`; set by the job board. |
+| `jobboard_id` | text | The job board's id for the posting, set when the job board created the tracker. |
 
 List fields may use the inline form (`[a, b]`) or the block form Obsidian's Properties panel writes (`key:` then indented `- a` lines); the pipeline scripts read `aliases` and `track` in either form through `tracker_frontmatter.py`.
 

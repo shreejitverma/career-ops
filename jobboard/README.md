@@ -61,6 +61,32 @@ node jobboard/jobboard.mjs --self-test
 | `data/jobboard/state.json` | the page and `mark`; `ingest-wsq`/`refresh` only re-key entries when a previously unmapped WSQ firm is added to `companies.yml` | your status, dates, notes, stars, history, manual jobs |
 | `data/jobboard/runs.tsv` | every source run | per-board fetch results, including errors |
 | `data/jobboard/companies.md` | refresh / ingest-wsq / scan | the company directory as a Markdown table |
+| `command-center/03-Pipeline/<Active>/<Company>/*-Tracker.md` | the page and `mark`, when you set an application status on a job with no tracker | a new tracker note (never edits or overwrites an existing one) |
+| `command-center/03-Pipeline/_Job-Board.md` | refresh / ingest-wsq / scan | the board as an Obsidian note (gitignored) |
+
+## Command center, resumes and reports
+
+When `command-center/03-Pipeline/` exists (override with `JOBBOARD_COMMAND_CENTER`), its tracker notes own the status of real applications:
+
+- **Reading trackers.**
+  Every tracker with a `company` and a `stage` is read.
+  A tracker is linked to a board job when one of its `links` is that job's posting, matched by requisition id, so a firm-domain `?gh_jid=` link and a `job-boards.greenhouse.io` link are the same job.
+  A linked job's status comes from the tracker's `stage` (applied/recruiter/OA -> Applied, phone/onsite -> Interviewing, offer -> Offer, rejected/ghosted -> Rejected, withdrawn -> Not Interested, sourced -> Saved).
+  The board refuses to change it and names the note to edit instead; notes and stars still save.
+- **Writing trackers.**
+  Setting Applied, Interviewing, Offer or Rejected on an untracked job writes a schema-compliant tracker first, in the company's existing folder when there is one.
+  If that write fails, nothing is recorded.
+  The daily Gmail sync then matches replies to it by company name.
+- **My pipeline** lists every tracker, not only board jobs, with its stage and next action (overdue ones in red), plus board jobs you gave a status without a tracker.
+- **Resumes.**
+  Confirming an application offers the `resume/<track>/<length>/*.pdf` variants, remembers the last one per role category, and records the choice on the job and in the tracker.
+  `GET /api/resume?variant=` serves only discovered variants.
+- **Reports.**
+  A posting evaluated by career-ops (`reports/*.md` with a `**URL:**` header) shows a "Report NNN - score" badge that opens the report.
+- **Obsidian.**
+  Tracker links open in Obsidian when the vault folder mirroring `command-center/` is found (`JOBBOARD_VAULT_DIR`, or the default documented in `command-center/README.md`, used only when its `03-Pipeline` resolves to this command center).
+
+Without a command center the board keeps statuses in `state.json` only, as before.
 
 ## How merging works
 
