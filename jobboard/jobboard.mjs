@@ -613,7 +613,8 @@ export function boardJobs(store, company, listed, trackedIds) {
   for (const [id, r] of rowById) {
     const prev = store.jobs[id];
     if (keptIds.has(id) || !prev) continue;
-    if (!prev.sources?.wsq && !trackedIds.has(id)) {
+    const wsqLists = prev.sources?.wsq && !prev.sources.wsq.gone;
+    if (!wsqLists && !trackedIds.has(id)) {
       delete store.jobs[id];
       continue;
     }
@@ -1095,6 +1096,9 @@ function selfTest() {
   check('irrelevant kept board row regions are the live union', bStore.jobs['b:gh-555'].regions, ['Canada', 'USA']);
   applySourceRun(bStore, 'wsq', [], 't3');
   check('irrelevant kept board row sheds wsq regions', bStore.jobs['b:gh-555'].regions, ['Canada']);
+  const bRow = [{ title: 'Executive Assistant', url: bUrl, location: 'Montreal' }];
+  check('irrelevant row kept after wsq drops it when tracked', boardJobs(bStore, bCo, bRow, new Set(['b:gh-555'])).map((j) => j.id), ['b:gh-555']);
+  check('irrelevant row pruned after wsq drops it when untracked', [boardJobs(bStore, bCo, bRow, new Set()).length, bStore.jobs['b:gh-555']], [0, undefined]);
 
   // State patches.
   const st = emptyState();
