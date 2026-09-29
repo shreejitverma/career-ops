@@ -58,7 +58,7 @@ function fmLines(text) {
   return (end < 0 ? '' : text.slice(4, end)).split('\n');
 }
 
-const unquote = (s) => s.trim().replace(/^["']|["']$/g, '');
+const unquote = (s) => s.trim().replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '');
 
 export function readFrontmatter(text) {
   const fm = {};
@@ -75,7 +75,7 @@ export function readList(text, key) {
     const m = lines[i].match(KEY_RE);
     if (!m || m[1] !== key) continue;
     const inline = m[2].trim();
-    if (inline) return inline.replace(/^\[|\]$/g, '').split(',').map(unquote).filter(Boolean);
+    if (inline) return inline.replace(/^[[\]]+|[[\]]+$/g, '').split(',').map(unquote).filter(Boolean);
     const items = [];
     for (const next of lines.slice(i + 1)) {
       const item = next.match(ITEM_RE);
@@ -135,30 +135,43 @@ function walkMarkdown(dir) {
 
 const LEGAL_SUFFIX_RE = /\b(capital|management|group|llc|l\.?p\.?|inc|ltd|co|company|technologies|technology|trading|securities|partners|investments|asset|advisors|holdings|the)\b/g;
 
+const exactKey = (name) => String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 export function companyKey(name) {
   const lower = String(name || '').toLowerCase().replace(/&/g, ' and ');
   const stripped = lower.replace(LEGAL_SUFFIX_RE, ' ').replace(/[^a-z0-9]/g, '');
   return stripped || lower.replace(/[^a-z0-9]/g, '');
 }
 
-/** Map of normalized company names (registry name, id, WSQ aliases) to registry ids. */
+/**
+ * Registry names, ids and WSQ aliases, normalized two ways: `exact` (lowercase
+ * alphanumerics) and `stripped` (legal suffixes removed too). A stripped key
+ * shared by two registry ids (Citadel / Citadel Securities) is `ambiguous` and
+ * resolves to neither.
+ */
 export function companyIndex(registry) {
-  const index = new Map();
+  const exact = new Map();
+  const stripped = new Map();
+  const ambiguous = new Set();
   for (const c of registry) {
     for (const n of [c.name, c.id, ...(c.wsq || [])]) {
+      const e = exactKey(n);
+      if (e && !exact.has(e)) exact.set(e, c.id);
       const k = companyKey(n);
-      if (k && !index.has(k)) index.set(k, c.id);
+      if (!k || ambiguous.has(k)) continue;
+      if (stripped.has(k) && stripped.get(k) !== c.id) { stripped.delete(k); ambiguous.add(k); } else stripped.set(k, c.id);
     }
   }
-  return index;
+  return { exact, stripped, ambiguous };
 }
 
-/** Registry id for any of a tracker's names: exact key first, then a prefix of 5+ characters either way. */
+/** Registry id for any of a tracker's names: exact name, then stripped key, then a stripped prefix of 5+ characters either way. */
 export function resolveCompanyId(names, index) {
-  const keys = names.map(companyKey).filter(Boolean);
-  for (const k of keys) if (index.has(k)) return index.get(k);
+  for (const n of names) if (index.exact.has(exactKey(n))) return index.exact.get(exactKey(n));
+  const keys = names.map(companyKey).filter((k) => k && !index.ambiguous.has(k));
+  for (const k of keys) if (index.stripped.has(k)) return index.stripped.get(k);
   for (const k of keys) {
-    for (const [ik, id] of index) {
+    for (const [ik, id] of index.stripped) {
       const [short, long] = k.length <= ik.length ? [k, ik] : [ik, k];
       if (short.length >= 5 && long.startsWith(short)) return id;
     }
@@ -205,25 +218,43 @@ export function loadTrackers(cc, registry, vaultInfo = null) {
 }
 
 /**
+ * The tracker a board-side link names. Archiving moves a note from Active/ to
+ * Archive/ under the same company folder, so the path below that folder is
+ * matched when the exact rel is gone.
+ */
+export function findTracker(trackers, rel) {
+  const below = (r) => String(r).split('/').slice(2).join('/');
+  return trackers.find((t) => t.rel === rel) || (below(rel) && trackers.find((t) => below(t.rel) === below(rel))) || null;
+}
+
+/**
  * Link trackers to board jobs by posting URL. `keyFor(companyId, url)` is the
  * board's jobKey, so a firm-domain ?gh_jid= link and a job-boards.greenhouse.io
  * link to the same requisition land on the same job. A tracker whose company
- * is unknown can still link through an exact job URL.
+ * is unknown can still link through an exact job URL. `boardLinks` (job id ->
+ * tracker rel, kept in the board's state) link a posting to a tracker without
+ * editing the note, and count exactly like a URL link.
  * @returns {Map<string, object>} job id -> tracker (the most recently applied wins)
  */
-export function linkTrackersToJobs(trackers, jobs, keyFor) {
+export function linkTrackersToJobs(trackers, jobs, keyFor, boardLinks = {}) {
   const jobIds = new Set(jobs.map((j) => j.id));
   const byUrl = new Map();
   for (const j of jobs) for (const u of [j.url, ...Object.values(j.sources || {}).map((s) => s.url)]) if (u) byUrl.set(u, j.id);
   const linked = new Map();
+  const link = (id, t) => {
+    const prev = linked.get(id);
+    if (!prev || String(t.applied) > String(prev.applied)) linked.set(id, t);
+    t.jobId = id;
+  };
   for (const t of trackers) {
-    for (const link of t.links) {
-      const id = (t.companyId && jobIds.has(keyFor(t.companyId, link)) && keyFor(t.companyId, link)) || byUrl.get(link);
-      if (!id) continue;
-      const prev = linked.get(id);
-      if (!prev || String(t.applied) > String(prev.applied)) linked.set(id, t);
-      t.jobId = id;
+    for (const url of t.links) {
+      const id = (t.companyId && jobIds.has(keyFor(t.companyId, url)) && keyFor(t.companyId, url)) || byUrl.get(url);
+      if (id) link(id, t);
     }
+  }
+  for (const [id, rel] of Object.entries(boardLinks)) {
+    const t = jobIds.has(id) && findTracker(trackers, rel);
+    if (t) link(id, t);
   }
   return linked;
 }
@@ -256,8 +287,15 @@ function addDays(isoDate, n) {
   return d.toISOString().slice(0, 10);
 }
 
-/** The tracker note for a job you just applied to (schema: 03-Pipeline/_Application-Schema.md). */
-export function renderTrackerNote(job, { today, resume = '', source = 'Job board', stage = 'applied' }) {
+const TERMINAL_STAGES = new Set(['offer', 'rejected']);
+
+/**
+ * The tracker note for a job you just applied to (schema:
+ * 03-Pipeline/_Application-Schema.md). `applied` is the date you applied
+ * (default today); a terminal stage gets no follow-up next action.
+ */
+export function renderTrackerNote(job, { today, applied = today, resume = '', source = 'Job board', stage = 'applied' }) {
+  const followUp = !TERMINAL_STAGES.has(stage);
   const tracks = [...new Set([TRACK_FOR_CATEGORY[job.category] || 'sde', ...((job.tags || []).includes('Low Latency') ? ['low-latency'] : [])])];
   const lines = [
     '---',
@@ -270,9 +308,9 @@ export function renderTrackerNote(job, { today, resume = '', source = 'Job board
     `level: ${q(job.seniority || '')}`,
     `source: ${q(source)}`,
     'referrer:',
-    `applied: ${today}`,
-    `next_action: ${q('Follow up if no reply')}`,
-    `next_action_date: ${addDays(today, 14)}`,
+    `applied: ${applied}`,
+    followUp ? `next_action: ${q('Follow up if no reply')}` : 'next_action:',
+    followUp ? `next_action_date: ${addDays(today, 14)}` : 'next_action_date:',
     'priority: medium',
     'confidence: 3',
     `comp_band: ${q(job.salary || '')}`,
@@ -304,7 +342,7 @@ export function renderTrackerNote(job, { today, resume = '', source = 'Job board
  * linked to the job is returned instead of writing anything.
  * @returns {{created: boolean, rel: string}}
  */
-export function createTrackerForJob(cc, job, { trackers, linked, today, resume = '', source, stage = 'applied' }) {
+export function createTrackerForJob(cc, job, { trackers, linked, today, applied = today, resume = '', source, stage = 'applied' }) {
   if (!cc.enabled) throw new Error('command center not found (expected command-center/03-Pipeline/Active)');
   const existing = linked.get(job.id);
   if (existing) return { created: false, rel: existing.rel };
@@ -313,7 +351,7 @@ export function createTrackerForJob(cc, job, { trackers, linked, today, resume =
   const dir = join(cc.pipeline, 'Active', folder);
   mkdirSync(dir, { recursive: true });
   const stem = `${slugify(job.companyName, 40)}-${slugify(job.title)}-Tracker`;
-  const text = renderTrackerNote(job, { today, resume, source, stage });
+  const text = renderTrackerNote(job, { today, applied, resume, source, stage });
   for (let n = 1; n < 100; n++) {
     const path = join(dir, `${stem}${n === 1 ? '' : `-${n}`}.md`);
     try {

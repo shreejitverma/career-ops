@@ -253,14 +253,16 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   const PAGE = 60;
   const PIPE = ['Saved', 'Applied', 'Interviewing', 'Offer', 'Rejected'];
 
-  let data = { jobs: [], companies: [], statuses: [], categories: [], seniorities: [], trackers: [], resumes: [], commandCenter: { enabled: false } };
+  let data = { jobs: [], companies: [], statuses: [], applicationStatuses: [], categories: [], seniorities: [], trackers: [], resumes: [], commandCenter: { enabled: false } };
   let byId = new Map();
   let shown = PAGE;
   const blankFilters = () => ({ q: '', status: [], category: [], firmType: [], seniority: [], region: [], tags: [], company: [], source: [], posted: 'any', starred: false, closed: false, fresh: false });
   let f = Object.assign(blankFilters(), store.get('filters', {}));
   let coSort = { key: 'open', dir: -1 };
   let coType = [];
-  const pendingConfirm = new Set();
+  // job id -> '' after Apply (did you submit?), or the application status picked
+  // in the dropdown while the company's existing trackers are offered.
+  const pendingConfirm = new Map();
   const openNotes = new Set();
 
   // ── data ────────────────────────────────────────────────────────────────
@@ -283,6 +285,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     if (!res.ok) { alertBar(body.error || 'save failed'); return; }
     if (p.status !== undefined) {
       if (body.tracker && body.tracker.created) alertBar('Tracker created: command-center/' + body.tracker.rel);
+      if (body.linked) alertBar('Linked to command-center/' + body.linked);
       return load();
     }
     const j = byId.get(id);
@@ -461,7 +464,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
         '<button class="star" data-star aria-pressed="' + Boolean(st.starred) + '" title="Star">&#9733;</button>' +
         '<button class="btn" data-notes>' + (st.notes ? 'Notes*' : 'Notes') + '</button>' +
       '</div>' +
-      (pendingConfirm.has(j.id) ? confirmHtml(j) : '') +
+      (pendingConfirm.has(j.id) && !j.tracker ? confirmHtml(j) : '') +
       (openNotes.has(j.id) ? '<div class="notes"><textarea data-notearea placeholder="Referral, recruiter, next steps...">' + esc(st.notes || '') + '</textarea>' + (hist ? '<div class="hist">History: ' + esc(hist) + '</div>' : '') + '</div>' : '') +
     '</article>';
   }
@@ -481,15 +484,31 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     return pool.find((r) => r.endsWith('one-page')) || pool[0] || '';
   };
 
+  // The company's active trackers: an application status on an untracked job
+  // must either link one of them or explicitly create a new tracker.
+  const companyTrackers = (j) => data.commandCenter.enabled && !j.tracker
+    ? data.trackers.filter((t) => !t.archived && t.companyId && t.companyId === j.companyId) : [];
+  const needsChoice = (j, status) => data.applicationStatuses.includes(status) && companyTrackers(j).length > 0;
+
   function confirmHtml(j) {
+    const status = pendingConfirm.get(j.id) || 'Applied';
+    const fromApply = !pendingConfirm.get(j.id);
+    const existing = companyTrackers(j);
     const pick = resumeFor(j);
-    const resume = data.resumes.length
+    const resume = fromApply && data.resumes.length
       ? ' <label>Resume <select class="inp" data-resume>' + data.resumes.map((r) => '<option' + (r === pick ? ' selected' : '') + '>' + esc(r) + '</option>').join('') + '</select></label>' +
         ' <a data-resumepdf href="/api/resume?variant=' + encodeURIComponent(pick) + '" target="_blank" rel="noopener">PDF</a>'
       : '';
-    return '<div class="confirm">Opened the posting. Did you submit the application?' + resume +
-      ' <button class="btn primary" data-mark="Applied">Yes, mark applied</button><button class="btn" data-mark="Saved">Save for later</button><button class="btn" data-mark="">Not yet</button>' +
-      (data.commandCenter.enabled ? '<span class="updated">Marking applied creates a command-center tracker.</span>' : '') + '</div>';
+    const mark = (label, cls, tracker) => '<button class="btn' + cls + '" data-mark="' + esc(status) + '"' + (tracker ? ' data-tracker="' + esc(tracker) + '"' : '') + '>' + label + '</button>';
+    const choices = existing.length
+      ? existing.map((t) => mark('This is my existing application: ' + esc(t.name) + ' (' + esc(t.stage) + ')', '', t.rel)).join('') + mark('New application', ' primary', 'new')
+      : mark('Yes, mark applied', ' primary');
+    const note = !data.commandCenter.enabled ? ''
+      : existing.length ? 'Linking only records it on the board; the tracker note is not changed. New application creates a separate tracker.'
+      : 'Marking applied creates a command-center tracker.';
+    return '<div class="confirm">' + (fromApply ? 'Opened the posting. Did you submit the application?' : esc(j.companyName) + ' already has a command-center tracker. Is this posting one of them?') + resume +
+      ' ' + choices + (fromApply ? '<button class="btn" data-mark="Saved">Save for later</button>' : '') + '<button class="btn" data-mark="">Not yet</button>' +
+      (note ? '<span class="updated">' + note + '</span>' : '') + '</div>';
   }
 
   // The pipeline: every command-center tracker plus board jobs you set a status on without one.
@@ -604,16 +623,18 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const ap = t.closest('[data-apply]');
     if (ap) {
       if (ap.dataset.apply === '1') window.open(job.url, '_blank', 'noopener,noreferrer');
-      if (job.status === 'Not Applied' || job.status === 'Saved') { pendingConfirm.add(id); renderList(); }
+      if (!job.tracker && (job.status === 'Not Applied' || job.status === 'Saved')) { pendingConfirm.set(id, ''); renderList(); }
       return;
     }
     const mk = t.closest('[data-mark]');
     if (mk) {
       pendingConfirm.delete(id);
       if (!mk.dataset.mark) return renderList();
+      const p = { status: mk.dataset.mark };
+      if (mk.dataset.tracker) p.tracker = mk.dataset.tracker;
       const sel = art.querySelector('[data-resume]');
-      if (mk.dataset.mark === 'Applied' && sel) { store.set('resume.' + job.category, sel.value); return patch(id, { status: 'Applied', resume: sel.value }); }
-      return patch(id, { status: mk.dataset.mark });
+      if (mk.dataset.mark === 'Applied' && sel && (!p.tracker || p.tracker === 'new')) { store.set('resume.' + job.category, sel.value); p.resume = sel.value; }
+      return patch(id, p);
     }
     if (t.closest('[data-star]')) return patch(id, { starred: !(job.state && job.state.starred) });
     if (t.closest('[data-notes]')) { openNotes.has(id) ? openNotes.delete(id) : openNotes.add(id); return renderList(); }
@@ -622,7 +643,12 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.matches('[data-resume]')) { const a = t.closest('.confirm').querySelector('[data-resumepdf]'); if (a) a.href = '/api/resume?variant=' + encodeURIComponent(t.value); return; }
-    if (t.matches('[data-status]')) { const id = t.closest('[data-id]').dataset.id; pendingConfirm.delete(id); return patch(id, { status: t.value }); }
+    if (t.matches('[data-status]')) {
+      const id = t.closest('[data-id]').dataset.id;
+      if (needsChoice(byId.get(id), t.value)) { pendingConfirm.set(id, t.value); return renderList(); }
+      pendingConfirm.delete(id);
+      return patch(id, { status: t.value });
+    }
     if (t.id === 'posted') { f.posted = t.value; shown = PAGE; return renderAll(); }
     if (t.id === 'starred') { f.starred = t.checked; shown = PAGE; return renderAll(); }
     if (t.id === 'fresh') { f.fresh = t.checked; shown = PAGE; return renderAll(); }

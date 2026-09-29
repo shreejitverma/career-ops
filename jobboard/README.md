@@ -29,6 +29,8 @@ The page has a **Refresh jobs** button that runs the same refresh in the backgro
 - **Apply.**
   Clicking Apply opens the posting in a new tab and asks whether you submitted the application.
   "Yes" marks the role Applied and records the date.
+  When the company already has an active command-center tracker, you pick instead: link the posting to one of those trackers, start a new application, or "Not yet" (see below).
+  A job already linked to a tracker only opens the posting.
   Each role's status dropdown, star, and notes save immediately.
 - **My pipeline.**
   A board with Saved / Applied / Interviewing / Offer / Rejected columns.
@@ -47,7 +49,7 @@ The page has a **Refresh jobs** button that runs the same refresh in the backgro
 ```sh
 node jobboard/jobboard.mjs                  # summary + next steps
 node jobboard/jobboard.mjs list --status "Not Applied" --category "Quant Dev" --region USA [--q text] [--limit N | --full]
-node jobboard/jobboard.mjs mark <jobId> Applied --note "referred by ..."
+node jobboard/jobboard.mjs mark <jobId> Applied --note "referred by ..." [--resume <variant>] [--tracker <rel|new>]
 node jobboard/jobboard.mjs companies
 node jobboard/jobboard.mjs scan --company <id>
 node jobboard/jobboard.mjs --self-test
@@ -58,7 +60,7 @@ node jobboard/jobboard.mjs --self-test
 | File | Written by | Holds |
 |---|---|---|
 | `data/jobboard/jobs.json` | refresh / ingest-wsq / scan | merged job store |
-| `data/jobboard/state.json` | the page and `mark`; `ingest-wsq`/`refresh` only re-key entries when a previously unmapped WSQ firm is added to `companies.yml` | your status, dates, notes, stars, history, manual jobs |
+| `data/jobboard/state.json` | the page and `mark`; `ingest-wsq`/`refresh` only re-key entries when a previously unmapped WSQ firm is added to `companies.yml` | your status, dates, notes, stars, history, manual jobs, and board-side tracker links (`jobs[id].tracker`) |
 | `data/jobboard/runs.tsv` | every source run | per-board fetch results, including errors |
 | `data/jobboard/companies.md` | refresh / ingest-wsq / scan | the company directory as a Markdown table |
 | `command-center/03-Pipeline/<Active>/<Company>/*-Tracker.md` | the page and `mark`, when you set an application status on a job with no tracker | a new tracker note (never edits or overwrites an existing one) |
@@ -71,10 +73,17 @@ When `command-center/03-Pipeline/` exists (override with `JOBBOARD_COMMAND_CENTE
 - **Reading trackers.**
   Every tracker with a `company` and a `stage` is read.
   A tracker is linked to a board job when one of its `links` is that job's posting, matched by requisition id, so a firm-domain `?gh_jid=` link and a `job-boards.greenhouse.io` link are the same job.
+  A tracker is also linked to a posting you tied to it on the board (`tracker` on that job in `state.json`); the note itself is never edited, and the link survives the note moving from `Active/` to `Archive/`.
   A linked job's status comes from the tracker's `stage` (applied/recruiter/OA -> Applied, phone/onsite -> Interviewing, offer -> Offer, rejected/ghosted -> Rejected, withdrawn -> Not Interested, sourced -> Saved).
   The board refuses to change it and names the note to edit instead; notes and stars still save.
 - **Writing trackers.**
   Setting Applied, Interviewing, Offer or Rejected on an untracked job writes a schema-compliant tracker first, in the company's existing folder when there is one.
+  Its `applied` date is the one the board already recorded for the job, else today; an Offer or Rejected tracker gets no follow-up next action.
+- **Link or new.**
+  When the job's company already has non-archived trackers, that application status needs an explicit choice, so an existing application is never double-counted.
+  The page offers "This is my existing application: <tracker> (<stage>)" per tracker, "New application", and "Not yet".
+  The API takes `patch.tracker` (a tracker's `rel` to link, or `"new"`), `mark` takes `--tracker <rel|new>`, and without one the change is refused with the existing trackers named.
+  Company names match the registry by exact name first; a suffix-stripped name shared by two firms (Citadel, Citadel Securities) matches neither.
   If that write fails, nothing is recorded.
   The daily Gmail sync then matches replies to it by company name.
 - **My pipeline** lists every tracker, not only board jobs, with its stage and next action (overdue ones in red), plus board jobs you gave a status without a tracker.

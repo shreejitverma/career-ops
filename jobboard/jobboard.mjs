@@ -50,7 +50,7 @@
  *   node jobboard/jobboard.mjs --self-test
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -62,7 +62,7 @@ import { getCareerOpsRoot } from '../path-resolver.mjs';
 import { BROWSER_LIKE_USER_AGENT } from '../user-agent.mjs';
 import { isMainModule } from '../lib/is-main-module.mjs';
 import {
-  commandCenterPaths, companyIndex, createTrackerForJob, detectVault, discoverResumes, linkTrackersToJobs,
+  commandCenterPaths, companyIndex, createTrackerForJob, detectVault, discoverResumes, findTracker, linkTrackersToJobs,
   loadReports, loadTrackers, readFrontmatter, readList, renderJobBoardNote, renderTrackerNote, resolveCompanyId, stageToStatus,
 } from './command-center.mjs';
 
@@ -715,6 +715,7 @@ function sourceLabel(j) {
 
 /**
  * Jobs with their effective status. A job linked to a command-center tracker
+ * (by one of its links, or by the board-side link in state.jobs[id].tracker)
  * takes its status from the tracker's stage; otherwise from the board's state.
  */
 function loadView() {
@@ -728,7 +729,7 @@ function loadView() {
   const cc = commandCenterPaths(root);
   const vault = cc.enabled ? detectVault(cc.dir) : null;
   const trackers = loadTrackers(cc, registry, vault);
-  const linked = linkTrackersToJobs(trackers, jobs, jobKey);
+  const linked = linkTrackersToJobs(trackers, jobs, jobKey, boardLinks(state));
   const reports = new Map(loadReports(root).map((r) => [postingIdentity(r.url), r]));
   for (const j of jobs) {
     const t = linked.get(j.id);
@@ -738,6 +739,10 @@ function loadView() {
     if (report) j.report = { num: report.num, score: report.score };
   }
   return { paths, root, store, state, registry, jobs, cc, vault, trackers, linked };
+}
+
+export function boardLinks(state) {
+  return Object.fromEntries(Object.entries(state.jobs).filter(([, s]) => s.tracker).map(([id, s]) => [id, s.tracker]));
 }
 
 const FOCUS_CATEGORIES = ['Quant Dev', 'Quant Research', 'AI/ML', 'Software Eng'];
@@ -880,11 +885,34 @@ export function applyStatePatch(state, id, patch, now = new Date().toISOString()
 const STAGE_FOR_STATUS = { Applied: 'applied', Interviewing: 'phone', Offer: 'offer', Rejected: 'rejected' };
 
 /**
+ * What an untracked job's patch does with the command center: `link` an
+ * existing tracker (patch.tracker = its rel), `create` a new one (an
+ * application status, with patch.tracker = 'new' when the company already has
+ * active trackers), or neither. An application status on a job whose company
+ * has active trackers and no explicit choice is refused, naming them.
+ */
+export function trackerChoice(view, job, patch) {
+  if (patch.tracker !== undefined && patch.tracker !== 'new') {
+    const link = view.trackers.find((t) => t.rel === patch.tracker);
+    if (!link) throw new Error(`unknown tracker "${patch.tracker}"`);
+    return { link };
+  }
+  if (!STAGE_FOR_STATUS[patch.status] || !view.cc.enabled) return {};
+  const existing = view.trackers.filter((t) => !t.archived && t.companyId && t.companyId === job.companyId);
+  if (existing.length && patch.tracker !== 'new') {
+    throw new Error(`${job.companyName} already has active trackers: ${existing.map((t) => `${t.rel} (${t.stage})`).join(', ')}; `
+      + 'link this posting to one (tracker: "<rel>", mark --tracker <rel>) or create a separate one (tracker: "new", mark --tracker new)');
+  }
+  return { create: true };
+}
+
+/**
  * Change one job's status, notes, star or resume. A job linked to a
  * command-center tracker takes its status from that tracker, so a status
- * change here is refused with the tracker's path. An application status on an
- * untracked job first writes a new tracker (when the command center exists);
- * if that fails nothing is recorded.
+ * change here is refused with the tracker's path. On an untracked job,
+ * trackerChoice decides whether to link an existing tracker (recorded on the
+ * board only; the note is never edited) or write a new one first; if that
+ * write fails nothing is recorded.
  */
 export function updateJob(view, id, patch, now = new Date().toISOString()) {
   const job = view.jobs.find((j) => j.id === id);
@@ -894,29 +922,34 @@ export function updateJob(view, id, patch, now = new Date().toISOString()) {
   }
   const tracker = view.linked.get(id);
   const statusChange = patch.status !== undefined && patch.status !== job.status;
-  if (tracker && statusChange) throw new Error(`tracked in the command center: change stage in ${tracker.rel}`);
+  if (tracker && (statusChange || patch.tracker !== undefined)) throw new Error(`tracked in the command center: change stage in ${tracker.rel}`);
+  const choice = tracker || !(statusChange || patch.tracker !== undefined) ? {} : trackerChoice(view, job, patch);
   let created = null;
-  if (!tracker && statusChange && STAGE_FOR_STATUS[patch.status] && view.cc.enabled) {
+  if (choice.create) {
+    const today = now.slice(0, 10);
     created = createTrackerForJob(view.cc, job, {
-      trackers: view.trackers, linked: view.linked, today: now.slice(0, 10), resume: patch.resume || '',
-      stage: STAGE_FOR_STATUS[patch.status], source: sourceLabel(job),
+      trackers: view.trackers, linked: view.linked, today, applied: view.state.jobs[id]?.appliedAt?.slice(0, 10) || today,
+      resume: patch.resume || '', stage: STAGE_FOR_STATUS[patch.status], source: sourceLabel(job),
     });
   }
-  const rec = applyStatePatch(view.state, id, tracker ? { ...patch, status: undefined } : patch, now);
+  const rec = applyStatePatch(view.state, id, tracker || choice.link ? { ...patch, status: undefined } : patch, now);
+  if (choice.link) rec.tracker = choice.link.rel;
   if (created?.created) rec.tracker = created.rel;
   writeJsonAtomic(view.paths.state, view.state);
-  return { state: rec, tracker: created };
+  return { state: rec, tracker: created, linked: choice.link?.rel ?? null };
 }
 
 function runMark(positional, flags) {
   const [id, ...statusWords] = positional;
   const status = statusWords.join(' ');
-  if (!id || !status) throw new Error('usage: mark <jobId> <status> [--note text] [--resume <variant>]');
+  if (!id || !status) throw new Error('usage: mark <jobId> <status> [--note text] [--resume <variant>] [--tracker <rel|new>]');
   const view = loadView();
-  const { state, tracker } = updateJob(view, id, {
+  const { state, tracker, linked } = updateJob(view, id, {
     status, ...(flags.note ? { notes: flags.note } : {}), ...(typeof flags.resume === 'string' ? { resume: flags.resume } : {}),
+    ...(typeof flags.tracker === 'string' ? { tracker: flags.tracker } : {}),
   });
-  console.log(`marked ${id} -> ${state.status}${tracker?.created ? `; tracker created: command-center/${tracker.rel}` : ''}`);
+  if (linked) console.log(`linked ${id} to command-center/${linked}; its stage now sets the status`);
+  else console.log(`marked ${id} -> ${state.status}${tracker?.created ? `; tracker created: command-center/${tracker.rel}` : ''}`);
 }
 
 // ── Server ────────────────────────────────────────────────────────────────
@@ -965,6 +998,7 @@ function serve({ port, open }) {
         return send(res, 200, {
           updatedAt: store.updatedAt,
           statuses: STATUSES,
+          applicationStatuses: Object.keys(STAGE_FOR_STATUS),
           categories: CATEGORIES,
           seniorities: SENIORITIES,
           jobs: jobs.map((j) => ({ ...j, state: state.jobs[j.id] || null })),
@@ -1003,7 +1037,8 @@ function serve({ port, open }) {
         const companyName = String(body.companyName || '').trim();
         const jobUrl = String(body.url || '').trim();
         if (!title || !companyName || !isHttpUrl(jobUrl)) return send(res, 400, { error: 'title, company and an http(s) url are required' });
-        const { paths, store, state, registry } = loadView();
+        const view = loadView();
+        const { paths, store, state, registry } = view;
         const company = registry.find((c) => c.name.toLowerCase() === companyName.toLowerCase() || c.id === companyName.toLowerCase());
         const companyId = company?.id ?? `manual-${companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
         const id = `${jobKey(companyId, jobUrl)}`;
@@ -1017,9 +1052,12 @@ function serve({ port, open }) {
           seniority: classifySeniority(title), salary: String(body.salary || ''), postedAt: null, url: jobUrl,
           tags: techTags(title), sources: { manual: { url: jobUrl, seenAt: now, gone: false } }, firstSeen: now,
         };
+        const statusPatch = { status: body.status, ...(body.tracker !== undefined ? { tracker: body.tracker } : {}) };
+        const withStatus = body.status && body.status !== 'Not Applied';
+        if (withStatus) trackerChoice(view, job, statusPatch);
         state.manual = [...(state.manual || []), job];
         writeJsonAtomic(paths.state, state);
-        const out = body.status && body.status !== 'Not Applied' ? updateJob(loadView(), id, { status: body.status }, now) : null;
+        const out = withStatus ? updateJob(loadView(), id, statusPatch, now) : null;
         return send(res, 200, { job, tracker: out?.tracker ?? null });
       }
       if (url.pathname === '/api/refresh') {
@@ -1256,6 +1294,14 @@ function selfTest() {
     check('cc loads only notes with company and stage', tr.map((t) => [t.companyId, t.stage, t.archived]), [['acme', 'rejected', true]]);
     check('cc reads block-form lists', readList(readFileSync(oldNote, 'utf-8'), 'aliases'), ['Acme']);
     check('cc company resolution', [['Fidelity Investments'], ['Fidelity'], ['Point72'], ['Two Sigma']].map((n) => resolveCompanyId(n, companyIndex(ccReg))), ['fidelity', 'fidelity', 'point72', null]);
+    const citadelIdx = companyIndex([
+      { id: 'citadel-securities', name: 'Citadel Securities', wsq: ['Citadel Securities'] },
+      { id: 'citadel', name: 'Citadel', wsq: ['Citadel'] },
+    ]);
+    check('exact names win over a suffix-stripped key shared by two firms', [['Citadel'], ['Citadel Securities'], ['citadel-securities'], ['Citadel LLC']].map((n) => resolveCompanyId(n, citadelIdx)),
+      ['citadel', 'citadel-securities', 'citadel-securities', null]);
+    check('frontmatter quotes strip like tracker_frontmatter.py', [readFrontmatter('---\nrole: "Engineer \'Core\'"\nx: \'\'"a"\'\'\n---\n').role, readFrontmatter('---\nx: \'"a"\'\n---\n').x, readList('---\nl: [[a, "b"]]\n---\n', 'l')],
+      ["Engineer 'Core", '"a"', ['a', 'b']]);
     check('cc stage to status', ['applied', 'OA', 'phone', 'onsite', 'offer', 'ghosted', 'withdrawn', 'sourced'].map(stageToStatus),
       ['Applied', 'Applied', 'Interviewing', 'Interviewing', 'Offer', 'Rejected', 'Not Interested', 'Saved']);
     const oldJob = { id: 'acme:gh-111', companyId: 'acme', companyName: 'Acme Capital', title: 'Quant Dev', url: 'https://job-boards.greenhouse.io/acme/jobs/111' };
@@ -1274,12 +1320,15 @@ function selfTest() {
     check('resume variants discovered, lock files and odd folders skipped', discoverResumes(tmp).map((r) => r.variant), ['quant/one-page']);
 
     const statePath = join(tmp, 'state.json');
+    const sibling = { ...newJob, id: 'acme:gh-444', title: 'Quant Researcher', category: 'Quant Research', tags: [], url: 'https://job-boards.greenhouse.io/acme/jobs/444', sources: {} };
+    const closedApp = { ...newJob, id: 'acme:gh-555', title: 'Risk Developer', url: 'https://job-boards.greenhouse.io/acme/jobs/555', sources: {} };
     const mkView = () => {
       const trackers = loadTrackers(cc, ccReg);
-      const jobs = [{ ...oldJob }, { ...newJob }];
-      const linked = linkTrackersToJobs(trackers, jobs, jobKey);
-      for (const j of jobs) j.status = linked.get(j.id)?.status || 'Not Applied';
-      return { jobs, trackers, linked, cc, root: tmp, state: readJson(statePath, emptyState()), paths: { state: statePath } };
+      const state = readJson(statePath, emptyState());
+      const jobs = [{ ...oldJob }, { ...newJob }, { ...sibling }, { ...closedApp }];
+      const linked = linkTrackersToJobs(trackers, jobs, jobKey, boardLinks(state));
+      for (const j of jobs) j.status = linked.get(j.id)?.status || state.jobs[j.id]?.status || 'Not Applied';
+      return { jobs, trackers, linked, cc, root: tmp, state, paths: { state: statePath } };
     };
     const out = updateJob(mkView(), 'acme:gh-222', { status: 'Applied', resume: 'quant/one-page' }, '2026-09-29T12:00:00.000Z');
     check('applying writes a tracker in the company\'s existing folder', out.tracker,
@@ -1304,6 +1353,38 @@ function selfTest() {
     threw = false;
     try { updateJob(mkView(), 'acme:gh-111', { resume: '../../etc/passwd' }); } catch { threw = true; }
     check('an unknown resume variant is refused', threw, true);
+
+    const activeDir = join(cc.pipeline, 'Active', 'Acme-Capital-LLC');
+    const trackerRel = out.tracker.rel;
+    const trackerBytes = readFileSync(join(cc.dir, trackerRel));
+    const filesBefore = readdirSync(activeDir).sort();
+    threw = '';
+    try { updateJob(mkView(), 'acme:gh-444', { status: 'Interviewing' }); } catch (err) { threw = err.message; }
+    check('an application status on an untracked job of a tracked company is refused, naming the trackers',
+      [threw.includes(`${trackerRel} (applied)`), readdirSync(activeDir).sort(), readJson(statePath, emptyState()).jobs['acme:gh-444']], [true, filesBefore, undefined]);
+    threw = false;
+    try { updateJob(mkView(), 'acme:gh-444', { status: 'Applied', tracker: '03-Pipeline/Active/nope.md' }); } catch { threw = true; }
+    check('linking an unknown tracker is refused', threw, true);
+    const linkOut = updateJob(mkView(), 'acme:gh-444', { status: 'Interviewing', tracker: trackerRel });
+    const v4 = mkView();
+    check('a board-side link makes the job follow the tracker without touching the note',
+      [linkOut.linked, v4.linked.get('acme:gh-444')?.rel, v4.jobs[2].status, readFileSync(join(cc.dir, trackerRel)).equals(trackerBytes), readdirSync(activeDir).sort()],
+      [trackerRel, trackerRel, 'Applied', true, filesBefore]);
+    threw = false;
+    try { updateJob(v4, 'acme:gh-444', { status: 'Offer' }); } catch (err) { threw = err.message.includes(trackerRel); }
+    check('a board-linked job refuses status changes like a URL-linked one', threw, true);
+    check('the obsidian note lists board-linked postings',
+      renderJobBoardNote({ today: '2026-09-29', jobs: v4.jobs.map((j) => ({ ...j, active: true })), trackers: v4.trackers, linked: v4.linked, focus: [], companies: [] })
+        .includes('| Acme Capital | Quant Researcher | applied | [[Acme-Capital-Senior-C-Developer-Tracker]] |'), true);
+    check('a board link survives archiving the note', findTracker(tr, '03-Pipeline/Active/Acme-Capital-LLC/Acme-Old-Tracker.md')?.rel, '03-Pipeline/Archive/Acme-Capital-LLC/Acme-Old-Tracker.md');
+
+    updateJob(mkView(), 'acme:gh-555', { appliedAt: '2026-08-01T10:00:00.000Z' });
+    const newOut = updateJob(mkView(), 'acme:gh-555', { status: 'Rejected', tracker: 'new' }, '2026-09-29T12:00:00.000Z');
+    const closedFm = readFrontmatter(readFileSync(join(cc.dir, newOut.tracker.rel), 'utf-8'));
+    check('tracker: "new" writes a separate tracker dated when you applied, with no follow-up once closed',
+      [newOut.tracker.created, newOut.tracker.rel !== trackerRel, closedFm.stage, closedFm.applied, closedFm.next_action, closedFm.next_action_date, readFileSync(join(cc.dir, trackerRel)).equals(trackerBytes)],
+      [true, true, 'rejected', '2026-08-01', '', '', true]);
+    check('an open stage keeps its follow-up', readFrontmatter(renderTrackerNote(newJob, { today: '2026-09-29', applied: '2026-08-01', stage: 'phone' })).next_action_date, '2026-10-13');
 
     mkdirSync(join(tmp, 'reports'));
     writeFileSync(join(tmp, 'reports', '007-acme-2026-08-06.md'), '# Eval\n\n**URL:** https://www.acme.test/careers?gh_jid=222\n**Score:** 4.5/5\n');
