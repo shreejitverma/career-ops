@@ -23,6 +23,7 @@ The page has a **Refresh jobs** button that runs the same refresh in the backgro
 - **Jobs.**
   Every open role gets a status badge, and it starts as **NOT APPLIED** (amber).
   You can filter by status, role category (Quant Research, Quant Dev, AI/ML, Software Eng, Data, Trading, Risk), firm type, seniority, region, tech tags (C++, Python, Rust, OCaml, KDB/q, FPGA, low latency, ML, LLM), source, posting age, and starred.
+  A role listed in several cities carries every region they map to, and matches a region filter if any of them is selected.
   The "My focus" preset shows US experienced QD/QR/AI/SWE roles you have not applied to.
   Filters, sort, tab, and theme are remembered per browser.
 - **Apply.**
@@ -57,7 +58,7 @@ node jobboard/jobboard.mjs --self-test
 | File | Written by | Holds |
 |---|---|---|
 | `data/jobboard/jobs.json` | refresh / ingest-wsq / scan | merged job store |
-| `data/jobboard/state.json` | the page and `mark` only | your status, dates, notes, stars, history, manual jobs |
+| `data/jobboard/state.json` | the page and `mark`; `ingest-wsq`/`refresh` only re-key entries when a previously unmapped WSQ firm is added to `companies.yml` | your status, dates, notes, stars, history, manual jobs |
 | `data/jobboard/runs.tsv` | every source run | per-board fetch results, including errors |
 | `data/jobboard/companies.md` | refresh | the company directory as a Markdown table |
 

@@ -296,6 +296,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const d = Math.floor((Date.now() - new Date(iso).getTime()) / DAY);
     return d <= 0 ? 'today' : d === 1 ? 'yesterday' : ago(iso);
   }
+  const regionsOf = (j) => (j.regions && j.regions.length ? j.regions : [j.region]);
   const srcOf = (j) => j.manual ? 'Manual' : Object.keys(j.sources || {}).some((k) => k.startsWith('ats:') && !j.sources[k].gone) ? 'Company board' : 'WSQ only';
   // Undated postings sort after dated ones instead of pretending to be new.
   const postedTs = (j) => (j.postedAt ? new Date(j.postedAt).getTime() : 0);
@@ -309,7 +310,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     if (skip !== 'category' && f.category.length && !f.category.includes(j.category)) return false;
     if (skip !== 'firmType' && f.firmType.length && !f.firmType.includes(j.firmType)) return false;
     if (skip !== 'seniority' && f.seniority.length && !f.seniority.includes(j.seniority)) return false;
-    if (skip !== 'region' && f.region.length && !f.region.includes(j.region)) return false;
+    if (skip !== 'region' && f.region.length && !regionsOf(j).some((r) => f.region.includes(r))) return false;
     if (skip !== 'tags' && f.tags.length && !f.tags.some((t) => (j.tags || []).includes(t))) return false;
     if (skip !== 'company' && f.company.length && !f.company.includes(j.companyId)) return false;
     if (skip !== 'source' && f.source.length && !f.source.includes(srcOf(j))) return false;
@@ -400,7 +401,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
       facet('category', data.categories, 'Role') +
       facet('firmType', typesPresent, 'Firm type') +
       facet('seniority', data.seniorities, 'Seniority') +
-      facet('region', null, 'Region') +
+      facet('region', null, 'Region', regionsOf) +
       facet('tags', null, 'Tech', (j) => j.tags || []) +
       facet('source', ['Company board', 'WSQ only', 'Manual'], 'Source', (j) => [srcOf(j)]) +
       (f.company.length ? facet('company', null, 'Company', (j) => [j.companyId]) : '') +
@@ -421,7 +422,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
       '<div>' +
         '<div class="jt"><a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer" data-apply="0">' + esc(j.title) + '</a></div>' +
         '<div class="meta"><button class="co" data-company="' + esc(j.companyId) + '" title="Show only this company">' + esc(j.companyName) + '</button>' +
-          '<span>' + esc(j.firmType) + '</span><span>' + esc(j.location || j.region) + '</span>' +
+          '<span>' + esc(j.firmType) + '</span><span>' + esc(j.location || regionsOf(j).join(' / ')) + '</span>' +
           (j.postedAt ? '<span title="' + esc(j.postedAt) + '">posted ' + dayAgo(j.postedAt) + '</span>' : '<span>found ' + ago(j.firstSeen) + '</span>') +
           (st.appliedAt ? '<span>applied ' + ago(st.appliedAt) + '</span>' : '') + '</div>' +
         '<div class="badges"><span class="b status st-' + slug(j.status) + '">' + esc(j.status) + '</span>' +
@@ -461,7 +462,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
           const st = j.state || {};
           const since = st.appliedAt ? (Date.now() - new Date(st.appliedAt).getTime()) / DAY : 0;
           return '<div class="card" data-id="' + esc(j.id) + '"><div class="t"><a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer">' + esc(j.title) + '</a></div>' +
-            '<div class="m">' + esc(j.companyName) + ' - ' + esc(j.location || j.region) + (st.appliedAt ? ' - applied ' + ago(st.appliedAt) : '') + (j.active ? '' : ' - posting closed') + '</div>' +
+            '<div class="m">' + esc(j.companyName) + ' - ' + esc(j.location || regionsOf(j).join(' / ')) + (st.appliedAt ? ' - applied ' + ago(st.appliedAt) : '') + (j.active ? '' : ' - posting closed') + '</div>' +
             (s === 'Applied' && since > 14 ? '<div class="nudge">No update in ' + Math.round(since) + ' days - follow up</div>' : '') +
             '<select class="inp" data-status>' + data.statuses.map((x) => '<option' + (x === j.status ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select></div>';
         }).join('') : '<div class="updated">Nothing here yet.</div>') + '</div>';
@@ -575,12 +576,12 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
 
   $('#exportBtn').onclick = () => {
     const rows = sorted(data.jobs.filter((j) => matches(j)));
-    const cols = ['status', 'companyName', 'title', 'category', 'seniority', 'firmType', 'location', 'region', 'salary', 'postedAt', 'url', 'appliedAt', 'notes'];
+    const cols = ['status', 'companyName', 'title', 'category', 'seniority', 'firmType', 'location', 'regions', 'salary', 'postedAt', 'url', 'appliedAt', 'notes'];
     const cell = (v) => {
       const s = String(v ?? '');
       return '"' + (/^[=+\-@\t\r]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"';
     };
-    const csv = [cols.join(',')].concat(rows.map((j) => cols.map((c) => cell(c === 'appliedAt' || c === 'notes' ? (j.state || {})[c] : j[c])).join(','))).join('\n');
+    const csv = [cols.join(',')].concat(rows.map((j) => cols.map((c) => cell(c === 'appliedAt' || c === 'notes' ? (j.state || {})[c] : c === 'regions' ? regionsOf(j).join(' / ') : j[c])).join(','))).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     a.download = 'jobboard-' + new Date().toISOString().slice(0, 10) + '.csv';

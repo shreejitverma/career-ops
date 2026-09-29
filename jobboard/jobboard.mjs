@@ -24,7 +24,9 @@
  * DATA (user layer, gitignored)
  *   data/jobboard/jobs.json      merged job store, rewritten by refresh/ingest/scan
  *   data/jobboard/state.json     YOUR application state per job + manual jobs;
- *                                written only by `serve` and `mark`, never by scans
+ *                                written by `serve` and `mark`. ingest-wsq/refresh
+ *                                only re-key entries when a previously unmapped
+ *                                WSQ firm is added to companies.yml
  *   data/jobboard/runs.tsv       one line per source run (for "last refreshed")
  *   data/jobboard/companies.md   the company directory, regenerated on refresh
  *
@@ -216,13 +218,28 @@ const REGION_TABLE = [
 // so those listings are placed by their cities instead.
 const WSQ_BROAD_REGIONS = new Set(['North America', 'Global']);
 
-export function classifyRegion(location, wsqRegion) {
-  if (wsqRegion && !WSQ_BROAD_REGIONS.has(wsqRegion)) return wsqRegion;
-  const loc = String(location || '');
-  if (!loc) return 'Unknown';
-  for (const [region, re] of REGION_TABLE) if (re.test(loc)) return region;
-  if (/\d+\s+locations/i.test(loc)) return 'Multiple';
-  return 'Other';
+const LOCATION_SEPARATOR_RE = /\s*[;/|·]\s*|\s+or\s+/i;
+
+function matchRegion(location) {
+  for (const [region, re] of REGION_TABLE) if (re.test(location)) return region;
+  return null;
+}
+
+/**
+ * Every region a posting's locations map to, primary first.
+ * @param {string|string[]} locations WSQ's city list, or a location string
+ *   split on ; / | · and "or"; each part is classified on its own.
+ * @param {string} [wsqRegion] WSQ's own region, which leads unless it is broad.
+ */
+export function classifyRegions(locations, wsqRegion) {
+  const parts = (Array.isArray(locations) ? locations : String(locations || '').split(LOCATION_SEPARATOR_RE))
+    .map((p) => String(p).trim())
+    .filter(Boolean);
+  const found = [wsqRegion && !WSQ_BROAD_REGIONS.has(wsqRegion) ? wsqRegion : null, ...parts.map(matchRegion)].filter(Boolean);
+  if (found.length) return [...new Set(found)];
+  const loc = parts.join(' ');
+  if (!loc) return ['Unknown'];
+  return [/\d+\s+locations/i.test(loc) ? 'Multiple' : 'Other'];
 }
 
 const TECH_TAGS = [
@@ -397,8 +414,11 @@ export function applySourceRun(store, sourceKey, incoming, now, scope = () => tr
     const preferIncoming = sourceKey !== 'wsq' || !atsLive;
     const merged = { ...(preferIncoming ? prev : job), ...(preferIncoming ? job : prev) };
     for (const k of ['salary', 'postedAt', 'location', 'wsqRole']) merged[k] = merged[k] || prev?.[k] || job[k] || (k === 'postedAt' ? null : '');
-    // "2 Locations" from an ATS says less than WSQ's resolved region.
-    if (VAGUE_REGIONS.has(merged.region)) merged.region = [job.region, prev?.region].find((r) => r && !VAGUE_REGIONS.has(r)) || merged.region;
+    // "2 Locations" from an ATS says less than WSQ's resolved regions.
+    const regions = [...new Set([merged.region, ...(job.regions || [job.region]), ...(prev?.regions || [prev?.region])].filter(Boolean))];
+    const specific = regions.filter((r) => !VAGUE_REGIONS.has(r));
+    merged.regions = specific.length ? specific : regions.slice(0, 1);
+    merged.region = merged.regions[0];
     merged.tags = [...new Set([...(prev?.tags || []), ...(job.tags || [])])];
     merged.sources = sources;
     merged.firstSeen = prev?.firstSeen || now;
@@ -465,6 +485,7 @@ function wsqToJob(raw, companyByWsq) {
   const companyId = company?.id ?? wsqFallbackId(raw.firm);
   const cities = Array.isArray(raw.cities) && raw.cities.length ? raw.cities : [raw.city].filter(Boolean);
   const title = String(raw.title).trim();
+  const regions = classifyRegions(cities, raw.region);
   return {
     id: jobKey(companyId, raw.url),
     title,
@@ -472,7 +493,8 @@ function wsqToJob(raw, companyByWsq) {
     companyName: company?.name ?? raw.firm,
     firmType: company?.type ?? raw.firmType ?? '',
     location: cities.join(' / '),
-    region: classifyRegion(cities.join(' '), raw.region),
+    region: regions[0],
+    regions,
     category: classifyCategory(title, { wsqRole: raw.role }) ?? 'Software Eng',
     seniority: classifySeniority(title, raw.xp),
     wsqRole: raw.role || '',
@@ -489,6 +511,7 @@ function atsToJob(raw, company) {
   const category = classifyCategory(title, { strict: company.filter === 'strict' });
   if (!category) return null;
   const location = String(raw.location || '').trim();
+  const regions = classifyRegions(location);
   return {
     id: jobKey(company.id, raw.url),
     title,
@@ -496,7 +519,8 @@ function atsToJob(raw, company) {
     companyName: company.name,
     firmType: company.type,
     location,
-    region: classifyRegion(location),
+    region: regions[0],
+    regions,
     category,
     seniority: classifySeniority(title),
     salary: formatSalary(raw.salary),
@@ -716,7 +740,7 @@ function printList(flags) {
     .filter((j) => !flags.category || eq(j.category, flags.category))
     .filter((j) => !flags.company || eq(j.companyId, flags.company))
     .filter((j) => !flags.type || eq(j.firmType, flags.type))
-    .filter((j) => !flags.region || eq(j.region, flags.region))
+    .filter((j) => !flags.region || (j.regions || [j.region]).some((r) => eq(r, flags.region)))
     .filter((j) => !q || `${j.title} ${j.companyName} ${j.location}`.toLowerCase().includes(q))
     .sort((a, b) => String(b.postedAt || '').localeCompare(String(a.postedAt || '')) || String(b.firstSeen).localeCompare(String(a.firstSeen)));
   const limit = flags.full ? rows.length : Number(flags.limit || 25);
@@ -823,10 +847,11 @@ function serve({ port, open }) {
         const id = `${jobKey(companyId, jobUrl)}`;
         if (store.jobs[id] || (state.manual || []).some((m) => m.id === id)) return send(res, 409, { error: 'already on the board' });
         const location = String(body.location || '').trim();
+        const regions = classifyRegions(location);
         const now = new Date().toISOString();
         const job = {
           id, title, companyId, companyName: company?.name ?? companyName, firmType: company?.type ?? String(body.firmType || 'Other'),
-          location, region: classifyRegion(location), category: classifyCategory(title) ?? 'Software Eng',
+          location, region: regions[0], regions, category: classifyCategory(title) ?? 'Software Eng',
           seniority: classifySeniority(title), salary: String(body.salary || ''), postedAt: null, url: jobUrl,
           tags: techTags(title), sources: { manual: { url: jobUrl, seenAt: now, gone: false } }, firstSeen: now,
         };
@@ -907,15 +932,20 @@ function selfTest() {
   check('new grad', classifySeniority('Software Engineer - New Grad'), 'New Grad');
   check('senior', classifySeniority('Staff Software Engineer'), 'Senior+');
   check('wsq xp', classifySeniority('Quant Researcher', 'Entry Lvl'), 'Entry');
-  check('region nyc', classifyRegion('New York, NY'), 'USA');
-  check('region london', classifyRegion('London, UK'), 'Europe');
-  check('region jersey city', classifyRegion('Jersey City, NJ'), 'USA');
-  check('region india', classifyRegion('Gurugram'), 'India');
-  check('region wsq', classifyRegion('x', 'Europe'), 'Europe');
-  check('region wsq north america montreal', classifyRegion('Montreal', 'North America'), 'Canada');
-  check('region wsq north america sao paulo', classifyRegion('Sao Paulo', 'North America'), 'Latin America');
-  check('region wsq north america new york', classifyRegion('New York', 'North America'), 'USA');
-  check('region wsq global uses cities', classifyRegion('Montreal', 'Global'), 'Canada');
+  check('region nyc', classifyRegions('New York, NY'), ['USA']);
+  check('region london', classifyRegions('London, UK'), ['Europe']);
+  check('region jersey city', classifyRegions('Jersey City, NJ'), ['USA']);
+  check('region india', classifyRegions('Gurugram'), ['India']);
+  check('region multi-city', classifyRegions('New York / Toronto'), ['USA', 'Canada']);
+  check('region separators', classifyRegions('London; Singapore | Chicago · Mumbai or Dubai'), ['Europe', 'Asia-Pacific', 'USA', 'India', 'Middle East']);
+  check('region vague', [classifyRegions('2 Locations'), classifyRegions(''), classifyRegions('Mars')], [['Multiple'], ['Unknown'], ['Other']]);
+  check('region wsq', classifyRegions(['x'], 'Europe'), ['Europe']);
+  check('region wsq unions cities', classifyRegions(['London', 'New York'], 'Europe'), ['Europe', 'USA']);
+  check('region wsq north america montreal', classifyRegions(['Montreal'], 'North America'), ['Canada']);
+  check('region wsq north america sao paulo', classifyRegions(['Sao Paulo'], 'North America'), ['Latin America']);
+  check('region wsq north america new york', classifyRegions(['New York'], 'North America'), ['USA']);
+  check('region wsq global uses cities', classifyRegions(['Montreal'], 'Global'), ['Canada']);
+  check('region wsq global without cities', classifyRegions([], 'Global'), ['Unknown']);
   check('tags', techTags('Senior C++ Developer', 'Python and kdb+ required, low-latency'), ['C++', 'Python', 'KDB/q', 'Low Latency']);
 
   // External ids: WSQ's firm-domain link and the ATS link collapse together.
@@ -947,6 +977,8 @@ function selfTest() {
   const wj = wsqToJob(listing, new Map([['Optiver', { id: 'optiver', name: 'Optiver', type: 'Prop Trading' }]]));
   check('wsq salary cleaned', wj.salary, '$1 - $2');
   check('wsq job id', wj.id, 'optiver:gh-1234567');
+  const multi = wsqToJob({ ...listing, region: 'North America', cities: ['Montreal', 'London', 'Singapore'] }, new Map());
+  check('wsq multi-city regions', [multi.region, multi.regions], ['Canada', ['Canada', 'Europe', 'Asia-Pacific']]);
   check('wsq drops javascript url', wsqToJob({ ...listing, url: 'javascript:alert(1)' }, new Map()), null);
   check('wsq drops data url', wsqToJob({ ...listing, url: 'data:text/html,x' }, new Map()), null);
   const atsCo = { id: 'optiver', name: 'Optiver', type: 'Prop Trading', filter: 'all' };
@@ -997,6 +1029,13 @@ function selfTest() {
   check('wsq updates its own jobs', [store.jobs['x:gh-2'].title, store.jobs['x:gh-2'].category], ['B renamed', 'Quant Research']);
   applySourceRun(store, 'wsq', [{ ...a, title: 'A from wsq' }, b], 't7');
   check('wsq defers to a live ats record', store.jobs['x:gh-1'].title, 'A');
+  const rStore = emptyStore();
+  const rJob = { id: 'r:gh-1', companyId: 'r', title: 'R', url: 'u', tags: [] };
+  applySourceRun(rStore, 'wsq', [{ ...rJob, region: 'USA', regions: ['USA', 'Canada'] }], 't1');
+  applySourceRun(rStore, 'ats:r', [{ ...rJob, region: 'Multiple', regions: ['Multiple'] }], 't2');
+  check('merge keeps specific regions over vague', [rStore.jobs['r:gh-1'].region, rStore.jobs['r:gh-1'].regions], ['USA', ['USA', 'Canada']]);
+  applySourceRun(rStore, 'ats:r', [{ ...rJob, region: 'Europe', regions: ['Europe'] }], 't3');
+  check('merge unions regions across sources', [rStore.jobs['r:gh-1'].region, rStore.jobs['r:gh-1'].regions], ['Europe', ['Europe', 'USA', 'Canada']]);
 
   // State patches.
   const st = emptyState();
