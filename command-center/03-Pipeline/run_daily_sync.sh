@@ -9,7 +9,9 @@ LOG="$DIR/sync.log"
 
 {
   echo "== $(date '+%Y-%m-%d %H:%M:%S') daily sync"
-  /usr/bin/python3 "$DIR/sync_job_emails.py" --mode daily --apply
+  # Reads every account completely (IMAP where an app password is stored, Mail.app
+  # otherwise); exits 2 and posts a notification if any mailbox fails.
+  /usr/bin/python3 "$DIR/sync_job_emails.py" --apply --notify
   /usr/bin/python3 "$DIR/pipeline_views.py"
   # Job board: re-fetch WSQ and every company board, then regenerate
   # _Job-Board.md from the trackers the email sync just updated. A failed

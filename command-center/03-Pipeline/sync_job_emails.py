@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
-"""Sync job-search email from Apple Mail into the Interview Command Center.
+"""Sync job-search email into the Interview Command Center, without missing any.
 
 Pipeline:
-  1. fetch   - read recent messages from the Apple Mail accounts below (AppleScript),
-               or from a JSON fixture with --from-json (no Mail needed; used by tests).
-  2. filter  - keep job-related messages (dedicated folders, or keyword match).
+  1. fetch   - read every new message from every mail account (mail_sources.py):
+               Gmail-hosted and other IMAP accounts with an app password in the
+               Keychain are read over IMAP by UID (exact); every other account,
+               and those without a password, through Mail.app, every folder
+               including nested ones, Junk and Trash. Each mailbox keeps a
+               checkpoint of what was actually read, committed only after the
+               messages are recorded, so nothing is skipped when a run fails,
+               times out or runs out of its time budget. --from-json reads a
+               fixture instead (tests; no Mail needed).
+  2. filter  - keep job-related messages: anything filed in a job folder or
+               label, anything from an applicant-tracking or assessment platform
+               or naming a company you track, and keyword matches; bulk mail
+               (CI notifications, newsletters, marketing) is dropped.
   3. classify- label each message: offer, rejection, assessment, interview,
                recruiter, received, or other; suggest the pipeline stage it implies.
   4. match   - link it to a tracker note by company name or recruiter email domain.
-  5. record  - append new events to .sync/events.jsonl (keyed by a content hash,
-               so re-running never duplicates anything).
-  6. review  - regenerate _Inbox-Review.md: recent events, and the trackers whose
-               current stage disagrees with what the email suggests.
+  5. record  - append new events to .sync/events.jsonl, keyed by the message's
+               Message-ID, so a message seen twice (two labels, two sources,
+               overlapping runs) is recorded once.
+  6. review  - regenerate _Inbox-Review.md: sync health, recent events, and the
+               trackers whose current stage disagrees with what the email suggests.
   7. apply   - with --apply, add one dated line per name-matched event to the tracker's
                "## Timeline" section, tagged with its event id so it is added once.
                Domain-only matches (e.g. an agency recruiter) appear only in the review note.
@@ -20,15 +31,22 @@ Frontmatter is never modified: stage and every other field stay under human
 control; the review note only suggests changes.
 
 Usage:
-  sync_job_emails.py --mode daily            # fetch, record, refresh review note
-  sync_job_emails.py --mode daily --apply    # also append tracker timeline lines
-  sync_job_emails.py --dry-run               # show what would change, write nothing
-  sync_job_emails.py --from-json FILE        # use a fixture instead of Apple Mail
+  sync_job_emails.py --apply --notify            # the daily run (run_daily_sync.sh)
+  sync_job_emails.py --doctor                    # accounts, method, credentials, coverage
+  sync_job_emails.py --backfill-days 365 --apply # extend coverage further back (resumable)
+  sync_job_emails.py --dry-run                   # read and report; write nothing
+  sync_job_emails.py --account Google            # one account (repeatable)
+  sync_job_emails.py --from-json FILE            # use a fixture instead of real mail
+
+Gmail over IMAP needs an app password stored once per address:
+  security add-generic-password -s career-ops-mail -a you@gmail.com -T /usr/bin/security -w
 """
 
 from __future__ import annotations
 
 import argparse
+import email.utils
+from collections import Counter
 import hashlib
 import json
 import re
@@ -38,27 +56,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import mail_sources as ms
 from tracker_frontmatter import read_frontmatter, read_list
 
 PIPELINE = Path(__file__).resolve().parent
 STATE_DIR = PIPELINE / ".sync"
 EVENTS = STATE_DIR / "events.jsonl"
+CHECKPOINTS = STATE_DIR / "checkpoints.json"  # per-mailbox coverage (local; gitignored)
+SEEN = STATE_DIR / "seen.json"                # recently read message ids (local; gitignored)
+HEALTH = STATE_DIR / "health.json"            # last run's per-mailbox result (local; gitignored)
+DEFAULT_BACKFILL_DAYS = 180
+DEFAULT_BUDGET_MINUTES = 45
 REVIEW = PIPELINE / "_Inbox-Review.md"
 TRACKER_DIRS = ("Active", "Archive")
-
-# Accounts and mailboxes to monitor.
-TARGET_ACCOUNTS = [
-    ("Exchange", ["Interviews", "Rejections", "In Progress", "GA Job", "BigInterview", "Career Brew", "Bloomberg", "Ford", "Inbox"]),
-    ("Google", ["Bank of America", "Rejections", "Job"]),
-    ("sverma357@gatech.edu", ["JOB", "Inbox"]),
-    ("shreejitverma1234@gmail.com", ["Work", "INBOX"]),
-    ("shreejitfinance@gmail.com", ["INBOX"]),
-    ("shreejitabroad@gmail.com", ["INBOX"]),
-    ("vermashreejit@gmail.com", ["INBOX"]),
-    ("sverma16@stevens.edu", ["INBOX"]),
-    ("iCloud", ["INBOX"]),
-]
-DEDICATED_HINTS = ("interview", "rejection", "job", "bank of america")
 
 # Shared ATS and platform domains: they send mail for many companies, so they never identify a tracker.
 SHARED_DOMAINS = (
@@ -67,13 +77,30 @@ SHARED_DOMAINS = (
     "smartrecruiters.com", "jobvite.com", "taleo.net",
 )
 
+# Applicant-tracking, scheduling and assessment platforms: mail from them is
+# job mail even when neither subject nor body names a job keyword.
+ATS_SENDER_DOMAINS = tuple(d for d in SHARED_DOMAINS if d != "linkedin.com") + (
+    "myworkdayjobs.com", "myworkdaysite.com", "successfactors.com", "successfactors.eu", "oraclecloud.com",
+    "avature.net", "eightfold.ai", "hirevue.com", "codesignal.com", "codility.com", "karat.com", "karat.io",
+    "coderpad.io", "testgorilla.com", "modernhire.com", "pymetrics.ai", "pymetrics.com", "hackerearth.com",
+    "gem.com", "paradox.ai", "workablemail.com", "workable.com", "recruitee.com", "bamboohr.com", "breezy.hr",
+    "teamtailor.com", "jazzhr.com", "applytojob.com", "ultipro.com", "ukg.com", "phenompeople.com",
+    "brassring.com", "kenexa.com", "goodtime.io", "hireez.com", "rippling.com", "dover.com",
+    "wellfound.com", "otta.com", "welcometothejungle.com", "handshake-mail.com",
+)
+# LinkedIn sends everything from one domain; only these senders are about applications
+# ("Your application was sent to ...", recruiter InMail).
+ATS_SENDER_RE = re.compile(r"\b(jobs-noreply|jobs-listings|inmail-hit-reply|hit-reply)@linkedin\.com\b", re.I)
+
 JOB_KEYWORDS = [
     "interview", "application", "assessment", "hackerrank", "codesignal",
     "karat", "codility", "recruiter", "hiring", "offer", "rejection",
     "status of your application", "next steps", "phone screen", "technical round",
     "onsite", "take-home", "right to represent", "congratulations",
     "thank you for your interest", "applied", "candidacy", "position", "candidate",
-    "rtr", "exclusivity", "screening",
+    "rtr", "exclusivity", "screening", "your application", "recruiting", "talent acquisition",
+    "hiring manager", "hirevue", "coderpad", "background check", "offer letter", "next round",
+    "final round", "superday", "your candidacy", "job opportunity",
 ]
 EXCLUDE_PATTERNS = [
     "job alert", "jobs you may like", "recommended jobs", "daily job alert",
@@ -92,21 +119,42 @@ NOISE_RE = re.compile(
     r"career (center|services|development)|\bsave \d+%|\d+% off|monthly payment|"
     r"jobs you may like|job alert|jobalert|recommended jobs|hot tech jobs|\bmore\b.{0,40}\bjobs\b|"
     r"new jobs for|\bdigest\b|a scan has been completed|"
-    r"@(e2ma\.net|substack\.com|symplicity\.com|careereco\.com|manhattanprep\.com|flipboard\.com)",
+    r"event schedule|upcoming events|you'?re invited|fireside chat|career fair|register today|fire safety report|"
+    r"@(e2ma\.net|substack\.com|symplicity\.com|careereco\.com|manhattanprep\.com|flipboard\.com)|"
+    r"@([\w-]+\.)*(nytimes\.com|wsj\.com)\b",
     re.I,
 )
 
-# Signal -> pattern, checked in priority order (an offer email may also say "interview").
-SIGNALS: list[tuple[str, re.Pattern]] = [
-    ("offer", re.compile(r"pleased to (extend|offer)|offer (letter|of employment)|extend (you )?an offer", re.I)),
-    ("rejection", re.compile(
-        r"regret to inform|not (be )?moving forward|decided to (move|proceed) forward with other|"
-        r"pursue other candidates|position has been filled|no longer under consideration|"
-        r"will not be (progressing|proceeding)|unfortunately,? (we|after)", re.I)),
-    ("assessment", re.compile(r"hackerrank|codesignal|codility|\bkarat\b|assessment|take-home|coding challenge|online test", re.I)),
-    ("interview", re.compile(r"interview|phone screen|onsite|on-site|superday|final round|schedule (a )?(call|time)|your availability", re.I)),
-    ("recruiter", re.compile(r"right to represent|\brtr\b|exclusivity|recruiter|opportunity", re.I)),
-    ("received", re.compile(r"thank you for (applying|your application|your interest)|application (was )?(received|submitted)|we have received", re.I)),
+# Signal -> (subject pattern, body pattern), checked in priority order (an offer
+# email may also say "interview"). Subjects are short and specific, so a bare word
+# counts there; in a body it must be job phrasing, because newsletters and news
+# articles mention "interviews" and "assessments" all the time.
+_OFFER = r"pleased to (extend|offer)|offer (letter|of employment)|extend (you )?an offer"
+_REJECTION = (r"regret to inform|not (be )?moving forward|decided to (move|proceed) forward with other|"
+              r"pursue other candidates|position has been filled|no longer under consideration|"
+              r"will not be (progressing|proceeding)|unfortunately,? (we|after)")
+_RECEIVED = (r"thank you for (applying|your application|your interest)|application (was )?(received|submitted)|"
+             r"we have received")
+SIGNALS: list[tuple[str, re.Pattern, re.Pattern]] = [
+    ("offer", re.compile(_OFFER, re.I), re.compile(_OFFER, re.I)),
+    ("rejection", re.compile(_REJECTION, re.I), re.compile(_REJECTION, re.I)),
+    ("assessment",
+     re.compile(r"hackerrank|codesignal|codility|\bkarat\b|assessment|take-home|coding challenge|online test", re.I),
+     re.compile(r"hackerrank|codesignal|codility|\bkarat\b|coding challenge|online (assessment|test)|take-home|"
+                r"complete (the|an|your) (online |technical )?assessment|assessment (link|invitation)", re.I)),
+    ("interview",
+     re.compile(r"interview|phone screen|onsite|on-site|superday|final round|schedule (a )?(call|time)|your availability", re.I),
+     re.compile(r"schedule (an|your|a) (\w+ )?interview|interview (invitation|request|confirmation|schedule|slot)|"
+                r"invite you to (an? )?(\w+ )?interview|phone screen|onsite interview|superday|final round|"
+                r"next round|your availability", re.I)),
+    ("recruiter",
+     re.compile(r"right to represent|\brtr\b|exclusivity|recruiter|opportunity", re.I),
+     re.compile(r"right to represent|\brtr\b|exclusivity|i'?m a recruiter|i am a recruiter|recruiter (at|with|for)|"
+                r"reaching out (about|regarding|with) (a|an|the) (\w+ )?(role|position|opportunity)", re.I)),
+    ("received", re.compile(_RECEIVED, re.I), re.compile(_RECEIVED, re.I)),
+    # A reply or forward on job mail is a conversation with a person (a recruiter
+    # thread about a role), even when no other signal word appears.
+    ("reply", re.compile(r"^\s*(re|fw|fwd)\s*:", re.I), re.compile(r"(?!x)x")),
 ]
 ONSITE_RE = re.compile(r"onsite|on-site|superday|final round", re.I)
 
@@ -147,81 +195,10 @@ class Event:
     suggested_stage: str | None
     tracker: str | None  # path relative to PIPELINE
     match: str | None = None  # "name" (company named in the email) or "domain" (sender domain only)
+    message_id: str | None = None  # RFC Message-ID; absent on events recorded before it was kept
 
     def to_json(self) -> str:
         return json.dumps(self.__dict__, sort_keys=True)
-
-
-# -- fetch -----------------------------------------------------------------------
-
-def run_applescript(script: str, timeout_sec: int = 50) -> str:
-    try:
-        p = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout_sec)
-        return p.stdout.strip()
-    except subprocess.TimeoutExpired:
-        return ""
-    except OSError as e:
-        print(f"warning: AppleScript error: {e}", file=sys.stderr)
-        return ""
-
-
-def fetch_mailbox_messages(acc: str, mb_name: str, limit: int = 30) -> list[dict]:
-    script = f"""
-    tell application "Mail"
-        set accObj to account "{acc}"
-        set mbList to (every mailbox of accObj whose name is "{mb_name}")
-        if (count of mbList) is 0 then return "EMPTY"
-        set mb to item 1 of mbList
-        set msgCount to count of messages of mb
-        if msgCount is 0 then return "EMPTY"
-        set maxItems to {limit}
-        if msgCount < maxItems then set maxItems to msgCount
-        set outText to ""
-        repeat with i from 1 to maxItems
-            try
-                set m to message i of mb
-                set s to subject of m
-                set snd to sender of m
-                set dt to (date received of m as string)
-                set msgContent to content of m
-                set snippetLen to length of msgContent
-                if snippetLen > 400 then set snippetLen to 400
-                if snippetLen > 0 then
-                    set snip to text 1 thru snippetLen of msgContent
-                else
-                    set snip to ""
-                end if
-                set outText to outText & s & "\u00abFIELD\u00bb" & snd & "\u00abFIELD\u00bb" & dt & "\u00abFIELD\u00bb" & snip & "\u00abRECORD\u00bb"
-            end try
-        end repeat
-        return outText
-    end tell
-    """
-    raw = run_applescript(script)
-    if not raw or raw == "EMPTY":
-        return []
-    records = []
-    for entry in raw.split("\u00abRECORD\u00bb"):
-        parts = entry.split("\u00abFIELD\u00bb")
-        if entry.strip() and len(parts) >= 4:
-            records.append({
-                "account": acc, "mailbox": mb_name, "subject": parts[0].strip(), "sender": parts[1].strip(),
-                "date": parts[2].strip(), "snippet": parts[3].strip().replace("\r", " ").replace("\n", " "),
-            })
-    return records
-
-
-def fetch_all(mode: str) -> list[dict]:
-    limit = 20 if mode == "daily" else 60
-    out = []
-    for acc, mailboxes in TARGET_ACCOUNTS:
-        for mb in mailboxes:
-            dedicated = any(w in mb.lower() for w in DEDICATED_HINTS)
-            msgs = fetch_mailbox_messages(acc, mb, limit=limit if dedicated else (15 if mode == "daily" else 40))
-            for m in msgs:
-                m["dedicated"] = dedicated
-            out += msgs
-    return out
 
 
 # -- filter, classify, match ------------------------------------------------------
@@ -230,10 +207,23 @@ def is_noise(subject: str, sender: str) -> bool:
     return bool(NOISE_RE.search(f"{subject} {sender}"))
 
 
-def is_job_related(msg: dict) -> bool:
+def sender_domain(sender: str) -> str:
+    return (re.findall(r"@([\w.-]+)", sender) or [""])[-1].lower()
+
+
+def is_ats_sender(sender: str) -> bool:
+    d = sender_domain(sender)
+    return bool(ATS_SENDER_RE.search(sender)) or (bool(d) and any(d == x or d.endswith("." + x) for x in ATS_SENDER_DOMAINS))
+
+
+def is_job_related(msg: dict, trackers: list[Tracker] = ()) -> bool:
     if is_noise(msg["subject"], msg["sender"]):
         return False
-    if msg.get("dedicated"):
+    if msg.get("dedicated") or is_ats_sender(msg["sender"]):
+        return True
+    # A tracker's own recruiter domain is precise; a company name alone is not (Bank of
+    # America or Fidelity also send statements), so name matches still need job wording.
+    if trackers and match_tracker(msg, trackers)[1] == "domain":
         return True
     combined = f"{msg['subject']} {msg['sender']} {msg.get('snippet', '')}".lower()
     if any(ex in combined for ex in EXCLUDE_PATTERNS):
@@ -242,8 +232,8 @@ def is_job_related(msg: dict) -> bool:
 
 
 def classify(msg: dict) -> str:
-    text = f"{msg['subject']} {msg.get('snippet', '')}"
-    return next((name for name, rx in SIGNALS if rx.search(text)), "other")
+    subject, body = msg["subject"], msg.get("snippet", "")
+    return next((name for name, subj, bod in SIGNALS if subj.search(subject) or bod.search(body)), "other")
 
 
 def parse_date(raw: str) -> str:
@@ -316,9 +306,18 @@ def match_tracker(msg: dict, trackers: list[Tracker]) -> tuple[Tracker | None, s
 
 
 def event_id(msg: dict) -> str:
-    """Keyed on the message, not the mailbox: one Gmail message under two labels is one event."""
-    key = "|".join(msg.get(k, "") for k in ("account", "subject", "sender", "date"))
+    """Keyed on the message, not the mailbox: its Message-ID when it has one (the same message
+    read from two labels or two sources is one event); otherwise account, subject, sender, date."""
+    mid = ms.clean_mid(msg.get("message_id"))
+    key = f"mid:{mid}" if mid else "|".join(msg.get(k, "") for k in ("account", "subject", "sender", "date"))
     return hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+def fingerprint(date: str, subject: str, sender: str) -> tuple[str, str, str]:
+    """Day, subject and sender address. Events recorded before Message-IDs were kept have
+    content-hash ids, so a re-read of one of those messages is recognised by this instead."""
+    addr = (re.findall(r"[\w.+-]+@[\w.-]+", sender) or [sender])[-1].lower()
+    return parse_date(date), norm(subject)[:80], addr
 
 
 def find_tracker(rel: str, root: Path = PIPELINE) -> Path | None:
@@ -338,6 +337,7 @@ def to_event(msg: dict, trackers: list[Tracker], root: Path = PIPELINE) -> Event
         subject=msg["subject"], sender=msg["sender"], signal=signal,
         suggested_stage=suggest_stage(signal, f"{msg['subject']} {msg.get('snippet', '')}"),
         tracker=str(t.path.relative_to(root)) if t else None, match=how,
+        message_id=ms.clean_mid(msg.get("message_id")) or None,
     )
 
 
@@ -357,10 +357,19 @@ def load_events(path: Path = EVENTS) -> dict[str, Event]:
 def record(new: list[Event], path: Path = EVENTS, dry_run: bool = False) -> list[Event]:
     known = load_events(path)
     fresh, seen = [], set(known)
+    # Each legacy event (no Message-ID) stands for exactly one message: it absorbs one
+    # re-read with its fingerprint and no more, so two different messages with the same
+    # day, subject and sender are both kept even when only one was recorded before.
+    legacy = Counter(fingerprint(e.date, e.subject, e.sender) for e in known.values() if not e.message_id)
     for e in new:
-        if e.id not in seen:
-            fresh.append(e)
-            seen.add(e.id)
+        if e.id in seen:
+            continue
+        fp = fingerprint(e.date, e.subject, e.sender)
+        if e.message_id and legacy[fp] > 0:
+            legacy[fp] -= 1
+            continue
+        fresh.append(e)
+        seen.add(e.id)
     if fresh and not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
@@ -377,8 +386,40 @@ def stage_rank(stage: str) -> int:
     return -1
 
 
+def health_lines(health: dict | None, today: str) -> list[str]:
+    """The review's "Sync health" section: any mailbox that failed or is behind,
+    and accounts not read the complete way, so a gap is never silent."""
+    lines = ["## Sync health", ""]
+    if not health:
+        return lines + ["No sync has recorded its health yet.", ""]
+    boxes = health.get("mailboxes", [])
+    errors = [b for b in boxes if b["status"] == "error"]
+    partial = [b for b in boxes if b["status"] == "partial"]
+    ran = health.get("finished_at", "")[:16].replace("T", " ")
+    stale = health.get("finished_at", "")[:10] < (datetime.fromisoformat(today) - timedelta(days=2)).date().isoformat()
+    lines.append(f"Last run {ran}: {len(boxes)} mailboxes in {len({b['account'] for b in boxes})} accounts, "
+                 f"{sum(b['read'] for b in boxes)} messages read, {sum(b['kept'] for b in boxes)} new to check.")
+    if stale:
+        lines.append(f"**The last run is more than two days old: check the launchd job and sync.log.**")
+    if not errors and not partial:
+        lines.append("Every mailbox read completely.")
+    if errors:
+        lines += ["", f"**{len(errors)} mailbox(es) failed; they are read again next run:**", "",
+                  "| Account | Mailbox | Error |", "| :--- | :--- | :--- |"]
+        lines += [f"| {b['account']} | {b['mailbox']} | {b['error'].replace('|', '/')} |" for b in errors]
+    if partial:
+        lines += ["", f"{len(partial)} mailbox(es) hit the time budget and continue next run: "
+                  + ", ".join(f"{b['account']}/{b['mailbox']}" for b in partial[:8]) + ("..." if len(partial) > 8 else "")]
+    fallback = sorted({b["account"] for b in boxes if "gmail fallback" in b["method"]})
+    if fallback:
+        lines += ["", "Read through Mail.app, which is slow for Gmail and can miss a message that Mail downloads more "
+                  f"than two days late: {', '.join(fallback)}. Store an app password to read them exactly over IMAP "
+                  "(`sync_job_emails.py --doctor` prints the command)."]
+    return lines + [""]
+
+
 def render_review(events: dict[str, Event], trackers: list[Tracker], today: str, days: int = 30,
-                  root: Path = PIPELINE, untracked_days: int = 180) -> str:
+                  root: Path = PIPELINE, untracked_days: int = 180, health: dict | None = None) -> str:
     def window(n: int) -> list[Event]:
         since = (datetime.fromisoformat(today) - timedelta(days=n)).date().isoformat()
         return sorted((e for e in events.values()
@@ -405,6 +446,7 @@ def render_review(events: dict[str, Event], trackers: list[Tracker], today: str,
         "# Inbox review", "",
         f"Generated by `sync_job_emails.py` on {today}; it is overwritten on every run.",
         "The sync never edits tracker frontmatter: update `stage` yourself when a suggestion is right.", "",
+        *health_lines(health, today),
         "## Needs attention", "",
     ]
     if attention:
@@ -423,11 +465,15 @@ def render_review(events: dict[str, Event], trackers: list[Tracker], today: str,
     else:
         lines.append("None.")
     lines += ["", f"## Last {days} days", ""]
-    if recent:
+    # Everything matched to a tracker or carrying a clear signal; the rest is counted, not listed.
+    shown = [e for e in recent if e.tracker or e.signal != "other"]
+    if shown:
         lines += ["| Date | Tracker | Signal | Subject |", "| :--- | :--- | :--- | :--- |"]
-        lines += [f"| {e.date} | {link(e)} | {e.signal} | {e.subject.replace('|', '/')} |" for e in recent]
+        lines += [f"| {e.date} | {link(e)} | {e.signal} | {e.subject.replace('|', '/')} |" for e in shown]
     else:
-        lines.append("No job-related email in this window.")
+        lines.append("No job-related email with a clear signal in this window.")
+    if len(recent) > len(shown):
+        lines += ["", f"{len(recent) - len(shown)} more job-related emails without a clear signal are recorded in `.sync/events.jsonl`."]
     return "\n".join(lines) + "\n"
 
 
@@ -462,31 +508,146 @@ def apply_timeline(events: list[Event], root: Path = PIPELINE, dry_run: bool = F
     return added
 
 
+def fetch_messages(args, known: dict[str, Event], cps: ms.Checkpoints, seen: ms.SeenCache,
+                   trackers: list[Tracker] = ()) -> ms.FetchResult:
+    """Route each account to its most complete source and read everything new."""
+    runner = ms.OsaRunner()
+    all_accounts = ms.enumerate_accounts(runner)
+    # Mail from any of your own addresses is outgoing, wherever it was filed or copied.
+    own = {a.user.lower() for a in all_accounts if a.user}
+    accounts = [a for a in all_accounts if not args.account or a.name in args.account]
+    imap_accs = [a for a in accounts if a.imap_capable and args.source in ("all", "imap") and ms.keychain_password(a.user)]
+    mail_accs = [a for a in accounts if a not in imap_accs and args.source in ("all", "mail")]
+    returned: set[str] = set()
+
+    def keep(m: dict) -> bool:
+        """Read for classification? Not bulk mail, not a message already handled, and not
+        one its subject and sender already rule out: bodies are the slow part of a read,
+        and is_job_related would reject these whatever the body says."""
+        if is_noise(m["subject"], m["sender"]):
+            return False
+        if email.utils.parseaddr(m["sender"])[1].lower() in own:
+            return False
+        if not (m.get("dedicated") or is_ats_sender(m["sender"])
+                or (trackers and match_tracker(m, trackers)[1] == "domain")):
+            head = f"{m['subject']} {m['sender']}".lower()
+            if any(ex in head for ex in EXCLUDE_PATTERNS):
+                return False
+        mid = m["message_id"]
+        if mid and (mid in returned or seen.has(mid) or event_id(m) in known):
+            return False
+        if mid:
+            returned.add(mid)
+        return True
+
+    backfill = args.backfill_days
+    result = ms.FetchResult()
+    if imap_accs:
+        r = ms.ImapSource(imap_accs, backfill_days=backfill).fetch(cps, keep)
+        result.messages += r.messages
+        result.health += r.health
+    if mail_accs:
+        r = ms.AppleMailSource(mail_accs, backfill_days=backfill, budget_s=args.budget_minutes * 60,
+                               runner=runner).fetch(cps, keep)
+        result.messages += r.messages
+        result.health += r.health
+    return result
+
+
+def doctor(args) -> int:
+    """Accounts, how each is read, whether its app password is stored, and its coverage."""
+    runner = ms.OsaRunner()
+    accounts = ms.enumerate_accounts(runner)
+    cps = ms.Checkpoints(CHECKPOINTS)
+    health = json.loads(HEALTH.read_text()) if HEALTH.exists() else {}
+    print(f"accounts[{len(accounts)}]{{account,method,mailboxes,covered_from,last_run_errors}}:")
+    missing = []
+    for a in accounts:
+        has_pw = a.imap_capable and ms.keychain_password(a.user) is not None
+        method = "imap" if has_pw else ("mail (gmail fallback)" if a.gmail else "mail")
+        if a.imap_capable and not has_pw:
+            missing.append(a)
+        prefix = f"imap:{a.user}:" if has_pw else f"mail:{a.name}:"
+        covered = sorted((v.get("since") or v.get("lo") or "")[:10] for k, v in cps.data.items() if k.startswith(prefix))
+        errs = sum(1 for b in health.get("mailboxes", []) if b["account"] == a.name and b["status"] == "error")
+        boxes = len(ms.AppleMailSource([a], backfill_days=0, budget_s=0, runner=runner).selected(a)) if not has_pw else "all mail+spam+trash"
+        print(f"  {a.name},{method},{boxes},{covered[-1] if covered else 'not yet'},{errs}")
+    if missing:
+        print("\nnext: store an app password to read these exactly and fast over IMAP (Gmail: myaccount.google.com/apppasswords;")
+        print("iCloud: account.apple.com > App-Specific Passwords). Each command prompts for the password:")
+        for a in missing:
+            print(f"  security add-generic-password -s {ms.KEYCHAIN_SERVICE} -a {a.user} -T /usr/bin/security -w")
+    return 0
+
+
+def notify(text: str) -> None:
+    """A macOS notification, so a failing unattended run is noticed."""
+    safe = text.replace("\\", "").replace('"', "'")[:200]
+    subprocess.run(["osascript", "-e", f'display notification "{safe}" with title "Job email sync"'],
+                   capture_output=True, timeout=30)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--mode", choices=["daily", "full"], default="daily")
-    ap.add_argument("--from-json", type=Path, help="read messages from a JSON list instead of Apple Mail")
+    ap.add_argument("--mode", choices=["daily", "full"], default="daily",
+                    help="kept for compatibility; full sets --backfill-days 365")
+    ap.add_argument("--from-json", type=Path, help="read messages from a JSON list instead of real mail")
     ap.add_argument("--apply", action="store_true", help="append timeline lines to matched trackers")
     ap.add_argument("--dry-run", action="store_true", help="report what would change; write nothing")
+    ap.add_argument("--doctor", action="store_true", help="show accounts, read method, credentials and coverage")
+    ap.add_argument("--backfill-days", type=int, default=None,
+                    help=f"cover mail this far back (default {DEFAULT_BACKFILL_DAYS}); extending it later resumes")
+    ap.add_argument("--budget-minutes", type=float, default=DEFAULT_BUDGET_MINUTES,
+                    help="time allowed for Mail.app reads; unfinished mailboxes continue next run")
+    ap.add_argument("--account", action="append", help="only this Mail.app account (repeatable)")
+    ap.add_argument("--source", choices=["all", "imap", "mail"], default="all")
+    ap.add_argument("--notify", action="store_true", help="macOS notification when a mailbox fails")
     ap.add_argument("--today", default=datetime.now().date().isoformat(), help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.backfill_days is None:
+        args.backfill_days = 365 if args.mode == "full" else DEFAULT_BACKFILL_DAYS
+    if args.doctor:
+        return doctor(args)
 
-    msgs = json.loads(args.from_json.read_text()) if args.from_json else fetch_all(args.mode)
     trackers = load_trackers()
-    events = [to_event(m, trackers) for m in msgs if is_job_related(m)]
+    known = load_events()
+    started = datetime.now().isoformat(timespec="seconds")
+    if args.from_json:
+        msgs, health_rows, cps, seen = json.loads(args.from_json.read_text()), [], None, None
+    else:
+        cps, seen = ms.Checkpoints(CHECKPOINTS), ms.SeenCache(SEEN)
+        result = fetch_messages(args, known, cps, seen, trackers)
+        msgs, health_rows = result.messages, [h.to_dict() for h in result.health]
+    events = [to_event(m, trackers) for m in msgs if is_job_related(m, trackers)]
     fresh = record(events, dry_run=args.dry_run)
+    health = {"started_at": started, "finished_at": datetime.now().isoformat(timespec="seconds"),
+              "mailboxes": health_rows} if cps is not None else (json.loads(HEALTH.read_text()) if HEALTH.exists() else None)
+    if not args.dry_run and cps is not None:
+        # Only now, with every message recorded, may coverage move forward.
+        cps.commit()
+        for m in msgs:
+            seen.add(m.get("message_id", ""), m["date"])
+        seen.save(args.today)
+        ms.atomic_write_json(HEALTH, health)
     all_events = load_events()
     if args.dry_run:
         all_events.update({e.id: e for e in fresh})
-    review = render_review(all_events, trackers, args.today)
+    review = render_review(all_events, trackers, args.today, health=health)
     added = apply_timeline(list(all_events.values()), dry_run=args.dry_run) if args.apply else 0
     if not args.dry_run:
         REVIEW.write_text(review)
 
+    errors = [h for h in health_rows if h["status"] == "error"]
+    partial = [h for h in health_rows if h["status"] == "partial"]
     matched = sum(1 for e in fresh if e.tracker)
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] mode={args.mode} fetched={len(msgs)} job_related={len(events)} "
-          f"new={len(fresh)} matched={matched} timeline_added={added}{' (dry run)' if args.dry_run else ''}")
-    return 0
+    print(f"[{datetime.now():%Y-%m-%d %H:%M}] mailboxes={len(health_rows)} read={sum(h['read'] for h in health_rows)} "
+          f"checked={len(msgs)} job_related={len(events)} new={len(fresh)} matched={matched} timeline_added={added} "
+          f"errors={len(errors)} partial={len(partial)}{' (dry run)' if args.dry_run else ''}")
+    for h in errors:
+        print(f"ERROR {h['account']}/{h['mailbox']}: {h['error']}", file=sys.stderr)
+    if errors and args.notify:
+        notify(f"{len(errors)} mailbox(es) failed; see _Inbox-Review.md")
+    return 2 if errors else 0
 
 
 if __name__ == "__main__":

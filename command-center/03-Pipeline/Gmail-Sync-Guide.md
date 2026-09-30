@@ -141,7 +141,7 @@ Step 4: Vault Automatically Updated
 
 The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note, then refreshes the job board:
 
-1. `sync_job_emails.py --mode daily --apply` reads recent mail from the Apple Mail accounts listed in the script, keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received), matches it to a tracker by company name (or one of the tracker's `aliases`) or recruiter domain, and appends new events to `.sync/events.jsonl`.
+1. `sync_job_emails.py --apply --notify` reads **every new message in every account** (see "Complete coverage" below), keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received, or reply for a Re:/Fwd: thread with a person; body text only counts when it is job phrasing, so news articles about interviews do not), matches it to a tracker by company name (or one of the tracker's `aliases`) or recruiter domain, and appends new events to `.sync/events.jsonl`, keyed by Message-ID.
    It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
    An email matched only by sender domain (for example an agency recruiter, who also writes about other companies) is listed in the review note as "domain match, check" and never appended.
    It never edits frontmatter; update `stage` yourself when the review suggests it.
@@ -151,11 +151,50 @@ The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs 
 3. `node jobboard/jobboard.mjs refresh` (in the career-ops repo) re-fetches every job posting and rewrites [[_Job-Board]] from the trackers step 1 just updated.
    A failed board is logged in `sync.log` and never stops the sync.
 
+## Complete coverage (how no email is missed)
+
+`mail_sources.py` discovers every enabled account in Apple Mail and reads each one the most complete way available:
+
+| Account | Read through | What is read |
+| :--- | :--- | :--- |
+| Gmail-hosted (the Google accounts, `sverma16@stevens.edu`) and iCloud, **with an app password in the Keychain** | IMAP, by UID | Gmail: All Mail, Spam and Trash, which hold every message in every label, with each message's labels. Others: every folder. |
+| Exchange / Office 365 (`sverma16@stevens.edu` Exchange, `sverma357@gatech.edu`) | Mail.app | Every folder, including nested and duplicate-named ones, Junk and Deleted Items. |
+| Gmail-hosted **without** an app password | Mail.app (fallback) | Your job labels first, then All Mail, Spam and Trash. Slow for large mailboxes, and a message Mail downloads more than two days late can be missed; the inbox review says so until the app password is stored. |
+
+Only outgoing and system folders are skipped (Sent, Drafts, Outbox, Notes, Tasks, Journal).
+
+Guarantees:
+
+- Each mailbox has a checkpoint of what was actually read (`.sync/checkpoints.json`): the last IMAP UID, or for Mail.app the time range read.
+  It moves forward only after the messages it covers were recorded, so a failed, interrupted or budget-limited run re-reads instead of skipping.
+- IMAP is exact: a message that arrives late still gets a higher UID than the checkpoint.
+  Mail.app re-reads two days before the last run to catch mail it downloaded late.
+- The first run, and any later `--backfill-days N`, reads back N days (default 180) in resumable steps: new mail everywhere first, then older mail with the time left (`--budget-minutes`, default 45).
+- Mail from applicant-tracking and assessment platforms, or from a tracker's recruiter domain, counts as job mail even without job wording; bulk mail (CI notifications, newsletters, marketing, job-alert digests) does not.
+- A message seen twice (two labels, both sources, overlapping runs) is recorded once.
+- Every run records per-mailbox health (`.sync/health.json`).
+  The top of [[_Inbox-Review]] lists any mailbox that failed or fell behind, and warns when the last run is more than two days old.
+  A failed mailbox also sets exit status 2 and posts a macOS notification.
+
+### Store app passwords (once per address)
+
+Gmail: create one at myaccount.google.com/apppasswords (needs 2-Step Verification).
+iCloud: account.apple.com > Sign-In and Security > App-Specific Passwords.
+Then store it; the command prompts for the password and never echoes it:
+
+```sh
+security add-generic-password -s career-ops-mail -a shreejitverma@gmail.com -T /usr/bin/security -w
+```
+
+`python3 sync_job_emails.py --doctor` lists each account's read method, coverage and the exact command for any address still missing a password.
+
 Useful commands:
 
 ```sh
-python3 sync_job_emails.py --dry-run            # what would change, writes nothing
-python3 sync_job_emails.py --mode full --apply  # deeper historical scan
+python3 sync_job_emails.py --doctor             # accounts, read method, passwords, coverage
+python3 sync_job_emails.py --dry-run            # read and report, write nothing
+python3 sync_job_emails.py --backfill-days 365 --apply  # extend coverage a year back (resumable)
+python3 sync_job_emails.py --account Google     # one account only (repeatable)
 python3 sync_job_emails.py --from-json FILE     # replay a saved export, no Mail needed
 python3 normalize_trackers.py                   # check trackers against _Application-Schema
 python3 -m unittest discover -s tests           # behavior tests

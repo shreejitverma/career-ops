@@ -94,6 +94,109 @@ class SyncTest(unittest.TestCase):
         self.assertIn("Senior Quantitative Developer", untracked)
         self.assertNotIn("Senior Quantitative Developer", review.split("## Last")[1])
 
+    def test_ats_senders_and_tracker_names_are_job_mail_without_keywords(self):
+        self.assertTrue(sj.is_job_related(msg("Quick question", "no-reply@myworkdayjobs.com")))
+        self.assertTrue(sj.is_job_related(msg("Catching up", "Jane <jane@codesignal.com>")))
+        # The tracker's recruiter domain is enough; the company's name alone is not (bank statements).
+        self.assertTrue(sj.is_job_related(msg("Catching up", "Talent <talent@acmecap.com>"), self.trackers))
+        self.assertFalse(sj.is_job_related(msg("Your Acme Capital statement is ready", "alerts@acme-bank.com"), self.trackers))
+        self.assertTrue(sj.is_job_related(msg("Your application was sent to Acme", "LinkedIn <jobs-noreply@linkedin.com>")))
+        self.assertFalse(sj.is_job_related(msg("Someone viewed your profile", "LinkedIn <notifications-noreply@linkedin.com>")))
+        # Bulk mail still loses, even from a platform domain.
+        self.assertFalse(sj.is_job_related(msg("Weekly digest", "digest@myworkdayjobs.com")))
+
+    def test_message_id_makes_one_event_across_sources(self):
+        a = msg("Interview invitation", "talent@acmecap.com") | {"message_id": "<ABC@acmecap.com>", "account": "Google"}
+        b = a | {"message_id": "abc@acmecap.com", "mailbox": "All Mail", "date": "Monday, September 21, 2026 at 9:00:00 AM"}
+        self.assertEqual(sj.event_id(a), sj.event_id(b))
+        events_file = self.root / ".sync" / "events.jsonl"
+        fresh = sj.record([sj.to_event(a, self.trackers, self.root), sj.to_event(b, self.trackers, self.root)], events_file)
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(fresh[0].message_id, "abc@acmecap.com")
+
+    def test_legacy_event_absorbs_exactly_one_reread(self):
+        events_file = self.root / ".sync" / "events.jsonl"
+        legacy = sj.to_event(msg("Application update", "no-reply@acmecap.com", date="2026-09-21"), self.trackers, self.root)
+        sj.record([legacy], events_file)
+        first = msg("Application update", "Acme <no-reply@acmecap.com>", date="2026-09-21") | {"message_id": "one@acme"}
+        second = first | {"message_id": "two@acme"}
+        fresh = sj.record([sj.to_event(m, self.trackers, self.root) for m in (first, second)], events_file)
+        # One of the two re-read messages is the one recorded before; the other is new.
+        self.assertEqual(len(fresh), 1)
+
+    def test_review_reports_sync_health(self):
+        health = {"finished_at": "2026-09-30T09:10:00", "mailboxes": [
+            {"account": "Exchange", "mailbox": "Inbox", "method": "mail", "status": "ok", "read": 10, "kept": 2, "error": ""},
+            {"account": "Google", "mailbox": "[Gmail]/All Mail", "method": "mail (gmail fallback)", "status": "partial",
+             "read": 50, "kept": 5, "error": "time budget reached; continues next run"},
+            {"account": "iCloud", "mailbox": "INBOX", "method": "imap", "status": "error", "read": 0, "kept": 0,
+             "error": "login failed: AUTHENTICATIONFAILED"},
+        ]}
+        review = sj.render_review({}, self.trackers, "2026-09-30", root=self.root, health=health)
+        section = review.split("## Sync health")[1].split("## Needs attention")[0]
+        self.assertIn("3 mailboxes in 3 accounts", section)
+        self.assertIn("| iCloud | INBOX | login failed: AUTHENTICATIONFAILED |", section)
+        self.assertIn("Google/[Gmail]/All Mail", section)
+        self.assertIn("app password", section)
+        stale = sj.render_review({}, self.trackers, "2026-10-09", root=self.root, health=health)
+        self.assertIn("more than two days old", stale)
+
+    def test_fetch_routes_accounts_and_keep_rules(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import mail_sources as ms
+        accounts = [ms.Account("Google", "imap account", "me@gmail.com", "imap.gmail.com"),
+                    ms.Account("Personal", "imap account", "p@gmail.com", "imap.gmail.com"),
+                    ms.Account("Exchange", "account", "me@school.edu", "")]
+        captured = {}
+
+        class FakeSource:
+            def __init__(self, accs, **kw):
+                self.accs = accs
+
+            def fetch(self, cps, keep):
+                captured.setdefault(type(self).__name__, []).extend(a.name for a in self.accs)
+                captured["keep"] = keep
+                return ms.FetchResult()
+
+        Imap = type("ImapSource", (FakeSource,), {})
+        Mail = type("AppleMailSource", (FakeSource,), {})
+        args = SimpleNamespace(account=None, source="all", backfill_days=30, budget_minutes=1)
+        known = {}
+        with mock.patch.object(ms, "enumerate_accounts", return_value=accounts), \
+             mock.patch.object(ms, "keychain_password", side_effect=lambda a: "pw" if a == "me@gmail.com" else None), \
+             mock.patch.object(ms, "ImapSource", Imap), mock.patch.object(ms, "AppleMailSource", Mail), \
+             mock.patch.object(ms, "OsaRunner", lambda: None):
+            with tempfile.TemporaryDirectory() as d:
+                sj.fetch_messages(args, known, ms.Checkpoints(Path(d) / "c.json"), ms.SeenCache(Path(d) / "s.json"), self.trackers)
+        self.assertEqual(captured["ImapSource"], ["Google"])
+        self.assertEqual(captured["AppleMailSource"], ["Personal", "Exchange"])
+        keep = captured["keep"]
+        base = {"account": "Google", "mailbox": "INBOX", "date": "2026-09-20", "snippet": "", "dedicated": False}
+        self.assertFalse(keep(base | {"subject": "[me/x] Run failed", "sender": "notifications@github.com", "message_id": "a"}))
+        self.assertFalse(keep(base | {"subject": "Your Uber receipt", "sender": "uber@uber.com", "message_id": "b"}))
+        self.assertTrue(keep(base | {"subject": "Your order interview slot", "sender": "x@y.com", "message_id": "c", "dedicated": True}))
+        self.assertTrue(keep(base | {"subject": "Hello", "sender": "friend@example.com", "message_id": "d"}))
+        self.assertFalse(keep(base | {"subject": "Hello", "sender": "friend@example.com", "message_id": "d"}))  # once per run
+        self.assertFalse(keep(base | {"subject": "Re: Interview", "sender": "Me <p@gmail.com>", "message_id": "e"}))  # own address
+
+    def test_body_signals_need_job_phrasing(self):
+        news = msg("Amazon drones are overwhelming a Texas suburb", "The Paper <news@paper.test>",
+                   snippet="In an interview, residents described the noise. A risk assessment followed.")
+        self.assertEqual(sj.classify(news), "other")
+        self.assertEqual(sj.classify(msg("Next steps", "t@acme.test", snippet="We would like to schedule an interview with you")), "interview")
+        self.assertEqual(sj.classify(msg("Next steps", "t@acme.test", snippet="Please complete the online assessment by Friday")), "assessment")
+        self.assertEqual(sj.classify(msg("Interview availability", "t@acme.test")), "interview")
+        self.assertEqual(sj.classify(msg("Hello", "t@acme.test", snippet="There is a great opportunity in our town square")), "other")
+        thread = msg("Re: SIG / Susquehanna International Group - Bala Cynwyd", "Recruiter <j@agency.test>",
+                     snippet="Thanks for the call, I will share your profile with the team.")
+        self.assertEqual(sj.classify(thread), "reply")
+        review = sj.render_review({sj.to_event(thread, self.trackers, self.root).id: sj.to_event(thread, self.trackers, self.root)},
+                                  self.trackers, "2026-09-21", root=self.root)
+        self.assertIn("Re: SIG / Susquehanna", review.split("## Possible untracked applications")[1].split("## Last")[0])
+        self.assertTrue(sj.is_noise("Arrested Mid-Interview", "WSJ <access@interactive.wsj.com>"))
+        self.assertTrue(sj.is_noise("COPA Weekly Event Schedule", "COPA <copa@school.edu>"))
+
     def test_record_is_idempotent(self):
         events_file = self.root / ".sync" / "events.jsonl"
         e = [sj.to_event(msg("Interview invitation from Acme Capital", "talent@acmecap.com"), self.trackers, self.root)]
