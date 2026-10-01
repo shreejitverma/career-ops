@@ -27,10 +27,11 @@ class FakeMail:
     Every call and every message read costs clock time, and the scripts' time
     limits are checked against that clock, so budgets bite as they do for real."""
 
-    def __init__(self, boxes, clock, cost_per_call=1.0, cost_per_msg=0.5):
+    def __init__(self, boxes, clock, cost_per_call=1.0, cost_per_msg=0.5, account_cost=None):
         self.boxes = boxes  # {(account, index): {"name": str, "msgs": [(datetime, subject, sender, mid, body)]}}
         self.clock = clock
         self.cost_per_call, self.cost_per_msg = cost_per_call, cost_per_msg
+        self.account_cost = account_cost or {}  # account -> cost per message read, overriding cost_per_msg
         self.now = NOW
         self.calls = []
         self.scan_orders = []        # mailbox indexes of each scan call, in the order requested
@@ -48,6 +49,9 @@ class FakeMail:
 
     def _age(self, m):
         return (self.now - m[0]).total_seconds()
+
+    def _cost(self, acc):
+        return self.account_cost.get(acc, self.cost_per_msg)
 
     def __call__(self, op, args, timeout):
         self.calls.append(op)
@@ -81,7 +85,7 @@ class FakeMail:
                         return ms.RS.join(out)
                     end = min(n, pos + size - 1)
                     rows = msgs[pos - 1:end]
-                    self.clock.t += self.cost_per_msg * len(rows)
+                    self.clock.t += self._cost(acc) * len(rows)
                     out += [self._row(ix, pos + k, m) for k, m in enumerate(rows)]
                     if self.after_chunk:
                         self.after_chunk(op, msgs)
@@ -101,7 +105,7 @@ class FakeMail:
             lo, hi = 1, n + 1
             while lo < hi:
                 mid = (lo + hi) // 2
-                self.clock.t += self.cost_per_msg
+                self.clock.t += self._cost(args[0])
                 if self._age(msgs[mid - 1]) > from_age:
                     hi = mid
                 else:
@@ -118,7 +122,7 @@ class FakeMail:
                     return ms.RS.join(out)
                 end = min(n, pos + int(args[6]) - 1)
                 rows = msgs[pos - 1:end]
-                self.clock.t += self.cost_per_msg * len(rows)
+                self.clock.t += self._cost(args[0]) * len(rows)
                 out += [self._row(args[1], pos + k, m) for k, m in enumerate(rows)]
                 if self.after_chunk:
                     self.after_chunk(op, msgs)
@@ -173,6 +177,7 @@ class AppleMailTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_once(self, fake, acc, now, budget, returned, backfill=30):
+        """One run over one account, or a list of accounts."""
         cps = ms.Checkpoints(self.cps_path)
         delivered = set()
 
@@ -182,7 +187,8 @@ class AppleMailTest(unittest.TestCase):
             return m["message_id"] not in returned and m["message_id"] not in delivered
 
         fake.now = now
-        src = ms.AppleMailSource([acc], backfill_days=backfill, budget_s=budget, runner=fake, now=now, clock=fake.clock)
+        src = ms.AppleMailSource(acc if isinstance(acc, list) else [acc], backfill_days=backfill, budget_s=budget,
+                                 runner=fake, now=now, clock=fake.clock)
         res = src.fetch(cps, keep, lambda m: delivered.add(m["message_id"]))
         cps.commit()
         got = [m["message_id"] for m in res.messages]
@@ -212,7 +218,7 @@ class AppleMailTest(unittest.TestCase):
         want = {ms.clean_mid(m[3]) for m in msgs if m[0] >= NOW - timedelta(days=30)}
         self.assertTrue(want <= returned, f"missed {sorted(want - returned)[:5]}")
         cp = ms.Checkpoints(self.cps_path).data
-        self.assertEqual(list(cp.values())[0]["hi"], NOW.isoformat())
+        self.assertEqual(cp["mail:Exchange:Inbox"]["hi"], NOW.isoformat())
 
     def test_budget_cuts_resume_without_gaps_property(self):
         """Random mailboxes, arrival patterns and tiny budgets: after enough runs every
@@ -264,7 +270,7 @@ class AppleMailTest(unittest.TestCase):
         fake = FakeMail({("Exchange", 1): {"name": "Inbox", "msgs": list(msgs)}}, clock, cost_per_msg=1.0)
         returned: set[str] = set()
         res, cps = self.run_once(fake, exchange({1: "Inbox"}), NOW, budget=150, returned=returned)
-        cp = list(ms.Checkpoints(self.cps_path).data.values())[0]
+        cp = ms.Checkpoints(self.cps_path).data["mail:Exchange:Inbox"]
         lo = datetime.fromisoformat(cp["lo"])
         covered = {ms.clean_mid(m[3]) for m in msgs if m[0] >= lo and m[0] <= NOW}
         self.assertTrue(covered <= returned, "checkpoint claims coverage of messages that were not returned")
@@ -352,6 +358,84 @@ class AppleMailTest(unittest.TestCase):
         self.assertEqual(res.health[0].status, "ok")
         self.assertEqual(ms.Checkpoints(self.cps_path).data["mail:Exchange:Inbox"]["partial_runs"], 0)
 
+    def test_slow_gmail_new_mail_cannot_starve_backfill_and_backfill_in_progress_is_ok(self):
+        """Live failure: the Gmail-fallback accounts' new mail took every run's whole budget,
+        so no other mailbox ever backfilled, and every backfilling mailbox was escalated to
+        an error after three runs."""
+        clock = Clock()
+        inbox = {"name": "Inbox", "msgs": [mk(f"x{i}", NOW - timedelta(minutes=15 * i)) for i in range(2800)]}
+        all_mail = {"name": "All Mail", "msgs": []}
+        fake = FakeMail({("Exchange", 1): inbox, ("Google", 3): all_mail}, clock,
+                        account_cost={"Exchange": 0.05, "Google": 2.0})
+        accs = [exchange({1: "Inbox"}),
+                ms.Account("Google", "imap account", "me@gmail.com", "imap.gmail.com", [(3, "[Gmail]/All Mail")])]
+        returned, now, los = set(), NOW, []
+        for run in range(5):
+            # Far more new Gmail than a run can read through Mail.app.
+            all_mail["msgs"] += [mk(f"g{run}-{i}", now - timedelta(minutes=5 * i)) for i in range(300)]
+            res, _ = self.run_once(fake, accs, now, budget=300, returned=returned)
+            ex = next(h for h in res.health if h.account == "Exchange")
+            los.append(ms.Checkpoints(self.cps_path).data["mail:Exchange:Inbox"]["lo"])
+            self.assertEqual((ex.status, ex.error), ("ok", ""), f"run {run}")
+            self.assertEqual(ex.target, (NOW - timedelta(days=30)).date().isoformat())
+            now += timedelta(hours=1)
+        self.assertEqual(los, sorted(los, reverse=True))
+        self.assertEqual(len(set(los)), 5, "the fast account's backfill moved back on every run")
+        self.assertGreater(los[-1][:10], ex.target, "still in progress, so the test covers runs 3-5")
+        google = next(h for h in res.health if h.account == "Google")
+        self.assertEqual(google.status, "error")  # its new mail never finished: a real problem, still loud
+        self.assertIn("app password", google.error)
+
+    def test_fast_backlog_and_slow_daily_mail_both_converge_property(self):
+        """A fast account with a large backlog and a slow Gmail-fallback account with steady
+        daily mail, randomized small budgets: the slow account's new mail is read on every
+        run, the fast account's backfill moves back on every run until it reaches the target,
+        no mailbox is reported failed meanwhile, and every message in the window of both
+        accounts is returned exactly once."""
+        rng = random.Random(20261003)
+        for trial in range(10):
+            clock = Clock()
+            boxes = {"mail:Exchange:Inbox": {"name": "Inbox", "msgs": []}, "mail:Exchange:JOB": {"name": "JOB", "msgs": []},
+                     "mail:Google:[Gmail]/All Mail": {"name": "All Mail", "msgs": []}}
+            fake = FakeMail({("Exchange", 1): boxes["mail:Exchange:Inbox"], ("Exchange", 2): boxes["mail:Exchange:JOB"],
+                             ("Google", 3): boxes["mail:Google:[Gmail]/All Mail"]}, clock,
+                            account_cost={"Exchange": rng.choice([0.02, 0.05]), "Google": rng.choice([0.5, 1.0])})
+            accs = [exchange({1: "Inbox", 2: "JOB"}),
+                    ms.Account("Google", "imap account", "me@gmail.com", "imap.gmail.com", [(3, "[Gmail]/All Mail")])]
+            fast_keys = ["mail:Exchange:Inbox", "mail:Exchange:JOB"]
+            slow = boxes["mail:Google:[Gmail]/All Mail"]
+            self.cps_path = Path(self.tmp.name) / f"mixed-{trial}.json"
+            seq = iter(range(10**6))
+            target = (NOW - timedelta(days=30)).isoformat()
+
+            def arrive(box, days, per_day, now, seq=seq, trial=trial):
+                new = [mk(f"{trial}-{next(seq)}", now - timedelta(minutes=rng.randint(0, int(days * 1440))))
+                       for _ in range(int(days * per_day))]
+                box["msgs"] += new
+                return new
+
+            for key in fast_keys:  # a backlog many runs deep
+                arrive(boxes[key], 40, rng.choice([60, 100]), NOW)
+            arrive(slow, 40, 8, NOW)
+            returned: set[str] = set()
+            now = NOW
+            for run in range(40):
+                fresh = arrive(slow, 1, 8, now) if run else []
+                before = ms.Checkpoints(self.cps_path).data
+                behind = [k for k in fast_keys if before.get(k, {}).get("lo", "9") > before.get(k, {}).get("target", "")]
+                res, _ = self.run_once(fake, accs, now, budget=rng.choice([150, 250, 400]), returned=returned)
+                after = ms.Checkpoints(self.cps_path).data
+                self.assert_honest({k: b["msgs"] for k, b in boxes.items()}, returned)
+                self.assertEqual([h for h in res.health if h.status == "error"], [], f"trial {trial} run {run}")
+                self.assertTrue({ms.clean_mid(m[3]) for m in fresh} <= returned, f"trial {trial} run {run}: slow new mail starved")
+                if run and behind:
+                    self.assertTrue(any(after[k]["lo"] < before[k]["lo"] for k in behind),
+                                    f"trial {trial} run {run}: fast backfill made no progress")
+                now += timedelta(days=1)
+            want = {ms.clean_mid(m[3]) for b in boxes.values() for m in b["msgs"] if m[0].isoformat() >= target}
+            self.assertEqual(want - returned, set(), f"trial {trial}: not converged after 40 runs")
+            self.assertTrue(all(after[k]["lo"] == after[k]["target"] for k in boxes))
+
     def test_scan_cut_short_starts_at_the_mailbox_it_stopped_in(self):
         clock = Clock()
         fake = FakeMail({("Exchange", 1): {"name": "Inbox", "msgs": [mk(f"a{i}", NOW - timedelta(minutes=i)) for i in range(10)]},
@@ -432,7 +516,7 @@ class AppleMailTest(unittest.TestCase):
         self.assertEqual(res.messages, [])
         self.assertNotIn("content", fake.calls)
         self.assertEqual(res.health[0].read, 0)
-        cp = list(ms.Checkpoints(self.cps_path).data.values())[0]
+        cp = ms.Checkpoints(self.cps_path).data["mail:Exchange:Trading Challenge"]
         self.assertEqual(cp["lo"], cp["target"])  # the whole mailbox was read: nothing left to backfill
 
     def test_duplicate_folder_names_get_their_own_checkpoints(self):

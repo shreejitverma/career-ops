@@ -68,6 +68,7 @@ HEALTH = STATE_DIR / "health.json"            # last run's per-mailbox result (l
 DEFAULT_BACKFILL_DAYS = 180
 DEFAULT_BUDGET_MINUTES = 45
 REVIEW = PIPELINE / "_Inbox-Review.md"
+OTHER_DAYS = 14  # the review lists unmatched job email without a clear signal this far back
 TRACKER_DIRS = ("Active", "Archive")
 
 # Shared ATS and platform domains: they send mail for many companies, so they never identify a tracker.
@@ -150,7 +151,10 @@ SIGNALS: list[tuple[str, re.Pattern, re.Pattern]] = [
     ("recruiter",
      re.compile(r"right to represent|\brtr\b|exclusivity|recruiter|opportunity", re.I),
      re.compile(r"right to represent|\brtr\b|exclusivity|i'?m a recruiter|i am a recruiter|recruiter (at|with|for)|"
-                r"reaching out (about|regarding|with) (a|an|the) (\w+ )?(role|position|opportunity)", re.I)),
+                r"reaching out (about|regarding|with) (a|an|the) (\w+ )?(role|position|opportunity)|"
+                r"submit you (to|for) (our|my|the|a) client|on behalf of (our|my|a) client|"
+                r"(a|an) (\w+ )?(role|position|opportunity) (with|at|for) (our|my|a) client|"
+                r"(about|regarding|came across|saw|reviewed) your (cv|resume)", re.I)),
     ("received", re.compile(_RECEIVED, re.I), re.compile(_RECEIVED, re.I)),
     # A reply or forward on job mail is a conversation with a person (a recruiter
     # thread about a role), even when no other signal word appears.
@@ -427,6 +431,8 @@ def health_lines(health: dict | None, today: str) -> list[str]:
     boxes = health.get("mailboxes", [])
     errors = [b for b in boxes if b["status"] == "error"]
     partial = [b for b in boxes if b["status"] == "partial"]
+    # Backfill still on its way back to the target: progress, never a failure.
+    behind = [b for b in boxes if b["status"] == "ok" and b.get("target") and b.get("covered_from", "") > b["target"]]
     bodiless = [b for b in boxes if b.get("unavailable") or (b["status"] == "ok" and b.get("error"))]
     ran = health.get("finished_at", "")[:16].replace("T", " ")
     stale = health.get("finished_at", "")[:10] < (datetime.fromisoformat(today) - timedelta(days=2)).date().isoformat()
@@ -434,7 +440,7 @@ def health_lines(health: dict | None, today: str) -> list[str]:
                  f"{sum(b['read'] for b in boxes)} messages read, {sum(b['kept'] for b in boxes)} new to check.")
     if stale:
         lines.append("**The last run is more than two days old: check the launchd job and sync.log.**")
-    if not errors and not partial and not bodiless:
+    if not errors and not partial and not bodiless and not behind:
         lines.append("Every mailbox read completely.")
     if errors:
         lines += ["", f"**{len(errors)} mailbox(es) failed; they are read again next run:**", "",
@@ -451,6 +457,13 @@ def health_lines(health: dict | None, today: str) -> list[str]:
                        "classified from subject and sender only, and any not recorded is read again while it is inside "
                        "the two-day re-read window:"), ""]
         lines += [f"- {b['account']}/{b['mailbox']}: {b.get('unavailable', 0)} message(s)" for b in bodiless]
+    if behind:
+        lines += ["", "Older mail is still being read back to the backfill target, a little more each run "
+                  "(new mail is read first):", ""]
+        for acc in sorted({b["account"] for b in behind}):
+            mine = [b for b in behind if b["account"] == acc]
+            lines.append(f"- backfill in progress: {acc} covered back to {max(b['covered_from'] for b in mine)}, "
+                         f"target {min(b['target'] for b in mine)}")
     fallback = sorted({b["account"] for b in boxes if "gmail fallback" in b["method"]})
     if fallback:
         lines += ["", "Read through Mail.app, which is slow for Gmail and can miss a message that Mail downloads more "
@@ -506,15 +519,21 @@ def render_review(events: dict[str, Event], trackers: list[Tracker], today: str,
     else:
         lines.append("None.")
     lines += ["", f"## Last {days} days", ""]
-    # Everything matched to a tracker or carrying a clear signal; the rest is counted, not listed.
+    # Everything matched to a tracker or carrying a clear signal; the rest has its own list below.
     shown = [e for e in recent if e.tracker or e.signal != "other"]
     if shown:
         lines += ["| Date | Tracker | Signal | Subject |", "| :--- | :--- | :--- | :--- |"]
         lines += [f"| {e.date} | {link(e)} | {e.signal} | {e.subject.replace('|', '/')} |" for e in shown]
     else:
         lines.append("No job-related email with a clear signal in this window.")
-    if len(recent) > len(shown):
-        lines += ["", f"{len(recent) - len(shown)} more job-related emails without a clear signal are recorded in `.sync/events.jsonl`."]
+    other = [e for e in window(OTHER_DAYS) if not e.tracker and e.signal == "other"]
+    lines += ["", f"## Other job email (last {OTHER_DAYS} days)", ""]
+    if other:
+        lines += ["Job-related emails that match no tracker and carry no clear signal; skim them so none is missed.", "",
+                  "| Date | From | Subject |", "| :--- | :--- | :--- |"]
+        lines += [f"| {e.date} | {e.sender.replace('|', '/')} | {e.subject.replace('|', '/')} |" for e in other]
+    else:
+        lines.append("None.")
     return "\n".join(lines) + "\n"
 
 

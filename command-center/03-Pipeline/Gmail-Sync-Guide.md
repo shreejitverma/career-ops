@@ -142,7 +142,7 @@ Step 4: Vault Automatically Updated
 The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note, then refreshes the job board:
 
 1. `sync_job_emails.py --apply --notify` reads **every new message in every account** (see "Complete coverage" below), keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received, or reply for a Re:/Fwd: thread with a person; body text only counts when it is job phrasing, so news articles about interviews do not), matches it to a tracker by company name (or one of the tracker's `aliases`) or recruiter domain, and appends new events to `.sync/events.jsonl`, keyed by Message-ID.
-   It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
+   It rewrites [[_Inbox-Review]] (stage disagreements, possible untracked applications, and every other unmatched job email from the last 14 days, listed by date, sender and subject) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
    An email matched only by sender domain (for example an agency recruiter, who also writes about other companies) is listed in the review note as "domain match, check" and never appended.
    It never edits frontmatter; update `stage` yourself when the review suggests it.
    Bulk mail (GitHub CI notifications, newsletters, marketing, career-center events, job-alert digests) is dropped by `NOISE_RE` even from dedicated job labels, and hidden from the review even if it was recorded earlier.
@@ -169,7 +169,11 @@ Guarantees:
   It moves forward only after the messages it covers were recorded, so a failed, interrupted or budget-limited run re-reads instead of skipping.
 - IMAP is exact: a message that arrives late still gets a higher UID than the checkpoint.
   Mail.app re-reads two days before the last run to catch mail it downloaded late.
-- Mail.app reads in budgeted steps that resume where they stopped (`--budget-minutes`, default 45): new mail in every mailbox first, then any stretch an earlier run left unread, then older mail back to the backfill window (`--backfill-days N`, default 180).
+- Mail.app reads in budgeted steps that resume where they stopped (`--budget-minutes`, default 45).
+  Per mailbox, new mail comes first, then any stretch an earlier run left unread, then older mail back to the backfill window (`--backfill-days N`, default 180).
+  The fast accounts (Exchange, iCloud, everything but Gmail through Mail.app) do all three before the slow Gmail-fallback accounts read their new mail.
+  New-mail reads never spend the last 30% of the budget, which is kept for unread stretches and backfill; while the Gmail-fallback accounts are still to be read, the fast accounts may use half of it, so the slow accounts' unread stretches get the rest.
+  Unread stretches and backfill each start at the mailbox the previous run stopped in.
   After a long absence, a run that cannot read all the new mail keeps what it read and records the stretch between it and the previous run as unread; later runs read that stretch, newest first, without reading the covered mail again.
   A scan cut short starts at the mailbox it stopped in next time, after the job folders, so no mailbox is starved by the ones before it.
 - Consecutive Mail.app chunk reads overlap by a few positions, so a message deleted or moved between two reads cannot push another past the reader.
@@ -178,7 +182,8 @@ Guarantees:
 - A message is counted as handled only once it is delivered: when a job label fails after reading a header, All Mail still delivers the same message.
 - Every run records per-mailbox health (`.sync/health.json`).
   The top of [[_Inbox-Review]] lists any mailbox that failed or fell behind, any mailbox whose message bodies Mail could not return (with how many; those messages are classified from subject and sender, and retried while still inside the two-day re-read window unless recorded), and warns when the last run is more than two days old.
-  A mailbox still partial after three runs in a row is listed as failed.
+  A mailbox is partial when its new mail was not all read, when a stretch of recent mail is still unread, or when its backfill was given time and did not move; one still partial after three runs in a row is listed as failed and posts the notification.
+  A backfill that moved further back is progress, not a failure: the review shows one line per account, "backfill in progress: <account> covered back to <date>, target <date>", and never notifies about it.
 - A failed mailbox, a run that cannot read mail at all (for example Mail automation denied, or Mail not answering), and an unreadable state file all set exit status 2, appear in the review, and post a macOS notification.
   An unreadable `checkpoints.json` or `seen.json` is moved aside as `*.corrupt`; the mail it covered is read again, never skipped.
 

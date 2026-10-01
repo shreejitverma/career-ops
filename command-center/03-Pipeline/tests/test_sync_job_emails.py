@@ -187,6 +187,49 @@ class SyncTest(unittest.TestCase):
         self.assertNotIn("Exchange/JOB", section)
         self.assertNotIn("Every mailbox read completely", section)
 
+    def test_review_reports_backfill_in_progress_once_per_account_and_not_as_a_failure(self):
+        health = {"finished_at": "2026-09-30T09:10:00", "mailboxes": [
+            {"account": "Exchange", "mailbox": "Inbox", "method": "mail", "status": "ok", "read": 10, "kept": 2, "error": "",
+             "covered_from": "2026-08-20", "covered_to": "2026-09-30", "target": "2026-04-03"},
+            {"account": "Exchange", "mailbox": "JOB", "method": "mail", "status": "ok", "read": 5, "kept": 1, "error": "",
+             "covered_from": "2026-07-01", "covered_to": "2026-09-30", "target": "2026-04-03"},
+            {"account": "Exchange", "mailbox": "Junk", "method": "mail", "status": "ok", "read": 1, "kept": 0, "error": "",
+             "covered_from": "2026-04-03", "covered_to": "2026-09-30", "target": "2026-04-03"},
+            {"account": "Google", "mailbox": "INBOX", "method": "imap", "status": "ok", "read": 3, "kept": 0, "error": "",
+             "covered_from": "2026-04-03", "covered_to": "2026-09-30"},
+        ]}
+        section = sj.render_review({}, self.trackers, "2026-09-30", root=self.root, health=health).split("## Sync health")[1]
+        section = section.split("## Needs attention")[0]
+        self.assertEqual([ln for ln in section.splitlines() if "backfill in progress" in ln],
+                         ["- backfill in progress: Exchange covered back to 2026-08-20, target 2026-04-03"])
+        self.assertNotIn("failed", section)
+        self.assertNotIn("Every mailbox read completely", section)
+
+    def test_recruiter_body_phrasing_is_a_recruiter_signal(self):
+        cv = msg("Quick question about your CV", "Dana <dana@talentbridge.test>",
+                 snippet="Hi, in order to submit you to our client for the C++ position I need a few details.")
+        self.assertEqual(sj.classify(cv), "recruiter")
+        for body in ("I am writing on behalf of my client, a trading firm.",
+                     "We have a role with our client in Chicago.",
+                     "I came across your resume and wanted to connect."):
+            self.assertEqual(sj.classify(msg("Hello", "dana@talentbridge.test", snippet=body)), "recruiter", body)
+        e = sj.to_event(cv, self.trackers, self.root)
+        review = sj.render_review({e.id: e}, self.trackers, "2026-09-21", root=self.root)
+        self.assertIn("Quick question about your CV", review.split("## Possible untracked applications")[1].split("## Last")[0])
+
+    def test_review_lists_every_unmatched_other_job_email_from_the_last_14_days(self):
+        recent = sj.to_event(msg("Following up", "Sam <sam@unknown-firm.test>", date="2026-09-20", mailbox="JOB"),
+                             self.trackers, self.root)
+        older = sj.to_event(msg("Earlier note", "Kim <kim@unknown-firm.test>", date="2026-09-01", mailbox="JOB"),
+                            self.trackers, self.root)
+        self.assertEqual((recent.signal, recent.tracker, older.signal), ("other", None, "other"))
+        review = sj.render_review({recent.id: recent, older.id: older}, self.trackers, "2026-09-28", root=self.root)
+        other = review.split("## Other job email (last 14 days)")[1]
+        self.assertIn("| 2026-09-20 | Sam <sam@unknown-firm.test> | Following up |", other)
+        self.assertNotIn("Earlier note", other)
+        empty = sj.render_review({older.id: older}, self.trackers, "2026-09-28", root=self.root)
+        self.assertEqual(empty.split("## Other job email (last 14 days)")[1].strip(), "None.")
+
     def test_fetch_routes_accounts_and_keep_rules(self):
         from types import SimpleNamespace
         from unittest import mock

@@ -15,7 +15,10 @@ Nothing may be missed, so every source keeps three rules:
    source replaces them.
 3. Failures are loud: each mailbox reports ok / partial / error in a Health
    record that the inbox review, the exit code and --doctor surface. A mailbox
-   left partial for STARVED_RUNS runs in a row becomes an error.
+   is partial when its new mail was not all read, when a stretch of recent mail
+   is still unread, or when its backfill was given time and made no progress;
+   left partial for STARVED_RUNS runs in a row it becomes an error. A backfill
+   that moved further back is progress, not a failure, and stays ok.
 
 Sources
 -------
@@ -31,7 +34,9 @@ AppleMailSource
     mailbox ordered newest-first, so a run reads from the top down to the last
     covered time minus an overlap (new mail), then reads any stretch an earlier
     run left unread, then extends coverage backwards toward the backfill target,
-    all in budgeted steps that resume where they stopped.
+    all in budgeted steps that resume where they stopped. Fast accounts are read
+    before the slow Gmail-fallback ones, and a share of the budget is kept for
+    unread stretches and backfill, so slow new mail cannot starve them.
 """
 
 from __future__ import annotations
@@ -59,6 +64,9 @@ OVERLAP = timedelta(days=2)
 SNIPPET_CHARS = 1500
 # Share of the remaining time budget a header read may use; bodies get the rest.
 READ_SHARE = 0.6
+# Share of the Mail.app budget kept for unread stretches and backfill: new-mail
+# passes may not spend it, so a slow account's new mail cannot take every run.
+RESERVE_SHARE = 0.3
 # Consecutive Mail.app chunk reads overlap by this many positions, so a message
 # deleted or moved above the cursor between two chunks cannot shift one past it.
 CHUNK_OVERLAP = 5
@@ -208,6 +216,7 @@ class Health:
     unavailable: int = 0  # messages classified without their body (Mail could not return it)
     covered_from: str = ""
     covered_to: str = ""
+    target: str = ""  # backfill target date; covered_from later than it means backfill is in progress
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -751,14 +760,22 @@ class AppleMailSource:
     Checkpoint per mailbox: {"hi": time up to which mail is read, "lo": time back
     to which it is read, "gaps": [[from, to], ...] stretches inside lo..hi still
     unread, "target": backfill target, "partial_runs": runs in a row left partial}.
-    A run first reads new mail in every mailbox (one `scan` call per account, from
-    the top down to hi - OVERLAP). A pass that completes moves hi to the run's
-    start; a pass the time budget cuts moves hi too, and the unread stretch between
-    hi - OVERLAP and the oldest message it handled becomes a gap. With the budget
-    that is left it reads each mailbox's gaps (`scanfrom` from a gap's top +
-    OVERLAP down to its bottom), then extends lo back toward target, keeping
-    progress after every read. A scan call that runs out of time starts at the
-    mailbox it stopped in next run, so the mailboxes after it are not starved.
+    New mail in a mailbox is read by one `scan` call per account, from the top
+    down to hi - OVERLAP. A pass that completes moves hi to the run's start; a
+    pass the time budget cuts moves hi too, and the unread stretch between
+    hi - OVERLAP and the oldest message it handled becomes a gap. Catching up
+    reads gaps (`scanfrom` from a gap's top + OVERLAP down to its bottom) before
+    extending lo back toward target, keeping progress after every read.
+
+    Scheduling, so that every mailbox converges: the fast accounts (everything but
+    Gmail through Mail.app, which takes seconds per message) read their new mail,
+    then catch up, before the slow accounts read theirs. New-mail passes never
+    spend the last RESERVE_SHARE of the budget, which is kept for catching up,
+    and while slow accounts are still to be read the fast ones may use only half
+    of it, so the slow accounts' gaps get the other half. Whatever is left at the
+    end goes to the fast accounts' catch-up again. A scan call, and each catch-up
+    phase, that runs out of time starts at the mailbox it stopped in next run, so
+    the mailboxes after it are not starved.
     The reading loops run inside AppleScript: a process per call costs far more
     than Mail does, so calls are per account and per mailbox, never per message.
     """
@@ -772,10 +789,21 @@ class AppleMailSource:
         self.runner = runner or OsaRunner()
         self.now = (now or datetime.now()).replace(microsecond=0, tzinfo=None)
         self.clock = clock
+        self.budget_s = budget_s
         self.deadline = clock() + budget_s
+        # Time the current step must leave unspent for the steps after it.
+        self.floor = 0.0
+        # Per run: why a mailbox's new-mail pass did not finish, and its lo when its
+        # backfill was first given time (to tell progress from a stall).
+        self.new_cut: dict[tuple[str, int], str] = {}
+        self.backfill_from: dict[tuple[str, int], str] = {}
 
     def remaining(self) -> float:
         return self.deadline - self.clock()
+
+    def available(self) -> float:
+        """Time the current step may spend."""
+        return self.remaining() - self.floor
 
     def selected(self, acc: Account) -> list[tuple[int, str]]:
         out = []
@@ -856,23 +884,54 @@ class AppleMailSource:
             self.runner("check", [], 120)  # ask Mail to sync before reading
         except MailError:
             pass
-        accounts = sorted(self.accounts, key=lambda a: a.gmail)  # Gmail through Mail.app is the slow part
+        # Gmail through Mail.app takes seconds per message; everything else is fast.
+        fast = [a for a in self.accounts if not a.gmail]
+        slow = [a for a in self.accounts if a.gmail]
         plans: dict[tuple[str, int], tuple[Account, str, Health]] = {}
-        for acc in accounts:
+        for acc in fast + slow:
             for idx, path in self.selected(acc):
                 plans[(acc.name, idx)] = (acc, path, Health(acc.name, path, self.method + (" (gmail fallback)" if acc.gmail else "")))
-        for acc in accounts:
+
+        def group(accs: list[Account]) -> list[tuple[int, Account, str, Health]]:
+            names = {a.name for a in accs}
+            return [(idx, acc, path, h) for (name, idx), (acc, path, h) in plans.items() if name in names]
+
+        reserve = RESERVE_SHARE * self.budget_s
+        self.floor = reserve  # new-mail passes leave the reserve for catching up
+        for acc in fast:
             self.new_mail(acc, plans, cps, keep, sink)
+        before = self.remaining()
+        # With slow accounts still to read, the fast ones may catch up with half the reserve.
+        self.floor = max(0.0, before - reserve / 2) if slow else 0.0
+        self.catch_up("fast", group(fast), cps, keep, sink)
+        self.floor = max(0.0, reserve - (before - self.remaining()))
+        for acc in slow:
+            self.new_mail(acc, plans, cps, keep, sink)
+        self.floor = 0.0
+        if slow:
+            self.catch_up("slow", group(slow), cps, keep, sink)
+            self.catch_up("fast", group(fast), cps, keep, sink)  # whatever time is left
         for (_, idx), (acc, path, h) in plans.items():
-            if h.status == "ok":
-                self.fill_gaps(acc, idx, path, h, cps, keep, sink)
-        for (_, idx), (acc, path, h) in plans.items():
-            if h.status == "ok":
-                self.backfill(acc, idx, path, h, cps, keep, sink)
-        for (_, idx), (acc, path, h) in plans.items():
-            self.track_partial(acc, idx, path, h, cps)
+            self.settle(acc, idx, path, h, cps)
         res.health = [h for _, _, h in plans.values()]
         return res
+
+    def catch_up(self, name: str, mailboxes: list[tuple[int, Account, str, Health]], cps, keep, sink) -> None:
+        """Gaps (unread stretches of recent mail) in every mailbox of the group, then
+        backfill. Each phase starts at the mailbox it stopped in last time and goes
+        round, so a mailbox the budget did not reach is first next run."""
+        live = [mb for mb in mailboxes if mb[3].status != "error"]
+        for phase, step in (("gaps", self.fill_gaps), ("backfill", self.backfill)):
+            rotation = f"catch-up:{phase}:{name}"
+            keys = [self.key(acc, idx, path) for idx, acc, path, _ in live]
+            start = (cps.get(rotation) or {}).get("start")
+            k = keys.index(start) if start in keys else 0
+            stopped = None
+            for idx, acc, path, h in live[k:] + live[:k]:
+                if not step(acc, idx, path, h, cps, keep, sink) and stopped is None:
+                    stopped = self.key(acc, idx, path)
+            if (cps.get(rotation) or {}).get("start") != stopped:
+                cps.stage(rotation, {"start": stopped})
 
     def _messages(self, acc, path, rows, h: Health, keep, since: datetime) -> list[dict]:
         """Messages for rows received at or after `since`. Reads overshoot by up to a
@@ -924,12 +983,12 @@ class AppleMailSource:
             starts[idx] = hi - OVERLAP
         order = self.scan_order(acc, mine, cps)
         rows_by, counts, state = {}, {}, {}
-        if self.remaining() > 0:
+        if self.available() > 0:
             specs = [US.join([str(idx), path.split("/")[-1], str(int((self.now - starts[idx]).total_seconds()))])
                      for idx, path in order]
             try:
                 # Reading headers may use 60% of what is left; the rest is for bodies.
-                raw = self.runner("scan", [acc.name, RS.join(specs), int(self.remaining() * READ_SHARE),
+                raw = self.runner("scan", [acc.name, RS.join(specs), int(self.available() * READ_SHARE),
                                            self.max_chunk(acc), CHUNK_OVERLAP], self.remaining() + 120)
             except MailError as e:
                 for _, _, h in mine:
@@ -991,13 +1050,12 @@ class AppleMailSource:
                     cp["gaps"] = self.clip(gaps, upto)
                 else:
                     cp["lo"], cp["gaps"] = upto.isoformat(), []
-                h.status = "partial"
-                h.error = ("time budget reached while reading bodies; the rest is read next run" if done < len(msgs)
-                           else "time budget reached; the rest is read next run" if rows
-                           else "not reached before the time budget ran out; read first next run")
+                self.new_cut[(acc.name, idx)] = (
+                    "time budget reached while reading bodies; the rest is read next run" if done < len(msgs)
+                    else "time budget reached; the rest is read next run" if rows
+                    else "not reached before the time budget ran out; read first next run")
             cp["hi"] = self.now.isoformat()
             cps.stage(key, cp)
-            h.covered_from, h.covered_to = cp["lo"][:10], cp["hi"][:10]
 
     def _read_back(self, acc, idx, path, h: Health, keep, sink, top: datetime, bottom: datetime) -> tuple[bool, datetime | None]:
         """Read one mailbox from top + OVERLAP down to bottom and deliver what was handled.
@@ -1005,7 +1063,7 @@ class AppleMailSource:
         (False, the oldest time down to which it was, or None when nothing was)."""
         raw = self.runner("scanfrom", [acc.name, idx, path.split("/")[-1],
                                        max(0, int((self.now - (top + OVERLAP)).total_seconds())),
-                                       int((self.now - bottom).total_seconds()), int(self.remaining() * READ_SHARE),
+                                       int((self.now - bottom).total_seconds()), int(self.available() * READ_SHARE),
                                        self.max_chunk(acc), CHUNK_OVERLAP],
                           self.remaining() + 120)
         recs = self.parse(raw)
@@ -1018,20 +1076,21 @@ class AppleMailSource:
             return True, None
         return False, self.handled_to(rows, msgs, done)
 
-    def fill_gaps(self, acc, idx, path, h, cps, keep, sink) -> None:
+    def fill_gaps(self, acc, idx, path, h, cps, keep, sink) -> bool:
         """Read the stretches an earlier, cut-short pass left unread, newest first,
-        shrinking each gap to what is still unread after every read."""
+        shrinking each gap to what is still unread after every read. True when no
+        gap is left (or the mailbox failed and is reported)."""
         key = self.key(acc, idx, path)
         cp = dict(cps.get(key) or {})
         gaps = sorted(cp.get("gaps") or [], key=lambda g: g[1], reverse=True)
-        while gaps and self.remaining() > 0:
+        while gaps and self.available() > 0:
             lo, hi = gaps[0]
             try:
                 complete, upto = self._read_back(acc, idx, path, h, keep, sink,
                                                  datetime.fromisoformat(hi), datetime.fromisoformat(lo))
             except MailError as e:
                 h.status, h.error = "error", str(e)
-                return
+                return True
             if complete or (upto is not None and upto.isoformat() <= lo):
                 gaps.pop(0)
             elif upto is not None:
@@ -1040,43 +1099,56 @@ class AppleMailSource:
             cps.stage(key, cp)
             if not complete:
                 break
-        if gaps:
-            h.status = "partial"
-            h.error = f"{len(gaps)} unread stretch(es) of mail, the newest ending {gaps[0][1][:10]}; continues next run"
+        return not gaps
 
-    def backfill(self, acc, idx, path, h, cps, keep, sink) -> None:
+    def backfill(self, acc, idx, path, h, cps, keep, sink) -> bool:
+        """Extend coverage back toward the target. True when there is nothing left to
+        backfill (or the mailbox failed and is reported)."""
         key = self.key(acc, idx, path)
         cp = dict(cps.get(key) or {})
         if not cp.get("lo"):
-            return
+            return True
         lo, target = datetime.fromisoformat(cp["lo"]), datetime.fromisoformat(cp["target"])
         if lo <= target:
-            return
-        if self.remaining() <= 0:
-            h.status, h.error = "partial", "backfill continues next run"
-            return
+            return True
+        if self.available() <= 0:
+            return False
+        self.backfill_from.setdefault((acc.name, idx), cp["lo"])
         try:
             complete, upto = self._read_back(acc, idx, path, h, keep, sink, lo, target)
         except MailError as e:
             h.status, h.error = "error", str(e)
-            return
+            return True
         if complete:
             cp["lo"] = target.isoformat()
-        else:
+        elif upto is not None:
             # Coverage may only move down to the oldest message fully handled.
-            if upto is not None:
-                cp["lo"] = min(lo, upto).isoformat()
-            h.status, h.error = "partial", "backfill continues next run"
+            cp["lo"] = min(lo, upto).isoformat()
         cps.stage(key, cp)
-        h.covered_from = cp["lo"][:10]
+        return complete
 
-    def track_partial(self, acc, idx, path, h, cps) -> None:
-        """Count runs in a row that left the mailbox partial; past STARVED_RUNS it is an error."""
+    def settle(self, acc, idx, path, h, cps) -> None:
+        """The mailbox's status for this run. Partial (counted in partial_runs; past
+        STARVED_RUNS in a row an error) only for what stops convergence: new mail not
+        all read, a gap still open, or a backfill that was given time and did not move.
+        A backfill still on its way back to the target, or not reached this run, is ok."""
         if h.status == "error":
             return
         key = self.key(acc, idx, path)
         cp = dict(cps.get(key) or {})
-        runs = cp.get("partial_runs", 0) + 1 if h.status == "partial" else 0
+        reasons = []
+        if (acc.name, idx) in self.new_cut:
+            reasons.append(self.new_cut[(acc.name, idx)])
+        gaps = cp.get("gaps") or []
+        if gaps:
+            reasons.append(f"{len(gaps)} unread stretch(es) of mail, the newest ending "
+                           f"{max(g[1] for g in gaps)[:10]}; continues next run")
+        started = self.backfill_from.get((acc.name, idx))
+        if started and cp.get("lo") and cp["lo"] > cp["target"] and cp["lo"] >= started:
+            reasons.append("backfill made no progress this run")
+        if reasons:
+            h.status, h.error = "partial", "; ".join(reasons)
+        runs = cp.get("partial_runs", 0) + 1 if reasons else 0
         if runs != cp.get("partial_runs", 0):
             cp["partial_runs"] = runs
             cps.stage(key, cp)
@@ -1084,6 +1156,8 @@ class AppleMailSource:
             h.status = "error"
             h.error = (f"still partial after {runs} runs in a row ({h.error}); raise --budget-minutes"
                        + (" or store an app password" if acc.gmail else ""))
+        if cp.get("hi"):
+            h.covered_from, h.covered_to, h.target = cp["lo"][:10], cp["hi"][:10], cp["target"][:10]
 
     def _fill_snippets(self, acc, idx, path, msgs: list[dict], h: Health) -> int:
         """Fetch bodies in order until the budget ends; returns how many messages are done.
@@ -1092,7 +1166,7 @@ class AppleMailSource:
         left for the next run with the messages after it."""
         name = path.split("/")[-1]
         for i in range(0, len(msgs), 40):
-            if self.remaining() <= 0:
+            if self.available() <= 0:
                 return i
             chunk = [m for m in msgs[i:i + 40] if m["_mid_raw"]]
             if chunk:
