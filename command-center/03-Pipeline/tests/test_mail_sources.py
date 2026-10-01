@@ -9,11 +9,13 @@ import random
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mail_sources as ms  # noqa: E402
+import sync_job_emails as sj  # noqa: E402
 
 NOW = datetime(2026, 9, 30, 9, 0, 0)
 
@@ -31,6 +33,10 @@ class FakeMail:
         self.cost_per_call, self.cost_per_msg = cost_per_call, cost_per_msg
         self.now = NOW
         self.calls = []
+        self.scan_orders = []        # mailbox indexes of each scan call, in the order requested
+        self.bodies = Counter()      # message id -> times its body was fetched
+        self.fail_content = set()    # (account, index) whose content calls fail
+        self.after_chunk = None      # callable(op, msgs) run after every chunk read; may change msgs
 
     def _msgs(self, acc, ix):
         box = self.boxes[(acc, int(ix))]
@@ -51,8 +57,10 @@ class FakeMail:
         if op == "check":
             return "ok"
         if op == "scan":
-            acc, limit = args[0], int(args[2])
-            for spec in [r.split(ms.US) for r in args[1].split(ms.RS) if r]:
+            acc, limit, ovl = args[0], int(args[2]), int(args[4])
+            specs = [r.split(ms.US) for r in args[1].split(ms.RS) if r]
+            self.scan_orders.append([int(spec[0]) for spec in specs])
+            for spec in specs:
                 ix, name, stop_age = int(spec[0]), spec[1], int(spec[2])
                 box = self._msgs(acc, ix)
                 if box["name"] != name:
@@ -62,7 +70,12 @@ class FakeMail:
                 n = len(msgs)
                 out.append(ms.US.join(["B", str(ix), str(n)]))
                 pos, size = 1, min(25, int(args[3]))
-                while pos <= n:
+                while True:
+                    if len(msgs) != n:
+                        n = len(msgs)
+                        out.append(ms.US.join(["B", str(ix), str(n)]))
+                    if pos > n:
+                        break
                     if self.clock.t - start > limit:
                         out.append(ms.US.join(["T", str(ix), str(pos)]))
                         return ms.RS.join(out)
@@ -70,9 +83,11 @@ class FakeMail:
                     rows = msgs[pos - 1:end]
                     self.clock.t += self.cost_per_msg * len(rows)
                     out += [self._row(ix, pos + k, m) for k, m in enumerate(rows)]
+                    if self.after_chunk:
+                        self.after_chunk(op, msgs)
                     if self._age(rows[-1]) > stop_age:
                         break
-                    pos, size = end + 1, min(size * 2, int(args[3]))
+                    pos, size = self._next(pos, end, n, ovl), min(size * 2, int(args[3]))
                 out.append(ms.US.join(["D", str(ix)]))
             return ms.RS.join(out)
         box = self._msgs(args[0], args[1])
@@ -81,7 +96,7 @@ class FakeMail:
         msgs = box["msgs"]
         n = len(msgs)
         if op == "scanfrom":
-            from_age, to_age, limit = int(args[3]), int(args[4]), int(args[5])
+            from_age, to_age, limit, ovl = int(args[3]), int(args[4]), int(args[5]), int(args[7])
             out.append(ms.US.join(["B", str(args[1]), str(n)]))
             lo, hi = 1, n + 1
             while lo < hi:
@@ -92,7 +107,12 @@ class FakeMail:
                 else:
                     lo = mid + 1
             pos = max(1, lo - 1)
-            while pos <= n:
+            while True:
+                if len(msgs) != n:
+                    n = len(msgs)
+                    out.append(ms.US.join(["B", str(args[1]), str(n)]))
+                if pos > n:
+                    break
                 if self.clock.t - start > limit:
                     out.append(ms.US.join(["T", str(args[1]), str(pos)]))
                     return ms.RS.join(out)
@@ -100,18 +120,30 @@ class FakeMail:
                 rows = msgs[pos - 1:end]
                 self.clock.t += self.cost_per_msg * len(rows)
                 out += [self._row(args[1], pos + k, m) for k, m in enumerate(rows)]
+                if self.after_chunk:
+                    self.after_chunk(op, msgs)
                 if self._age(rows[-1]) > to_age:
                     break
-                pos = end + 1
+                pos = self._next(pos, end, n, ovl)
             out.append(ms.US.join(["D", str(args[1])]))
             return ms.RS.join(out)
         if op == "content":
+            if (args[0], int(args[1])) in self.fail_content:
+                raise ms.MailError("content: timed out after 600s")
             by_mid = {m[3].lower(): m for m in msgs}
             for pair in [r.split(ms.US) for r in args[3].split(ms.RS) if r]:
                 m = by_mid.get(pair[1].lower())
+                self.bodies[pair[1].lower()] += 1
                 out.append(ms.US.join([pair[1], m[4] if m else "!notfound"]))
             return ms.RS.join(out)
         raise AssertionError(op)
+
+    @staticmethod
+    def _next(pos, end, n, ovl):
+        """The scripts' next chunk start: `ovl` positions back, always moving forward."""
+        if end >= n:
+            return end + 1
+        return max(end + 1 - ovl, pos + 1)
 
 
 class Clock:
@@ -142,25 +174,34 @@ class AppleMailTest(unittest.TestCase):
 
     def run_once(self, fake, acc, now, budget, returned, backfill=30):
         cps = ms.Checkpoints(self.cps_path)
-        seen = set(returned)
+        delivered = set()
 
+        # As in sync_job_emails.RunFilter: skip anything already handled, including
+        # earlier in this run (backfill overlaps the new-mail pass).
         def keep(m):
-            # As in sync_job_emails.fetch_messages: skip anything already handled,
-            # including earlier in this run (backfill overlaps the new-mail pass).
-            if m["message_id"] in seen:
-                return False
-            seen.add(m["message_id"])
-            return True
+            return m["message_id"] not in returned and m["message_id"] not in delivered
 
         fake.now = now
         src = ms.AppleMailSource([acc], backfill_days=backfill, budget_s=budget, runner=fake, now=now, clock=fake.clock)
-        res = src.fetch(cps, keep)
+        res = src.fetch(cps, keep, lambda m: delivered.add(m["message_id"]))
         cps.commit()
         got = [m["message_id"] for m in res.messages]
         for mid in got:
             self.assertNotIn(mid, returned, "a message was returned twice")
             returned.add(mid)
         return res, cps
+
+    def assert_honest(self, boxes_by_key, returned):
+        """A checkpoint claims (lo, hi] minus its gaps; every message there must have been returned."""
+        data = ms.Checkpoints(self.cps_path).data
+        for key, msgs in boxes_by_key.items():
+            cp = data.get(key) or {}
+            if not cp.get("hi"):
+                continue
+            for m in msgs:
+                t = m[0].isoformat()
+                if cp["lo"] < t <= cp["hi"] and not any(lo <= t <= hi for lo, hi in cp.get("gaps") or []):
+                    self.assertIn(ms.clean_mid(m[3]), returned, f"{key} claims {t}, which was never returned")
 
     def test_reads_everything_in_window_and_nothing_twice(self):
         clock = Clock()
@@ -196,6 +237,7 @@ class AppleMailTest(unittest.TestCase):
                     box["msgs"].append(m)
                     all_msgs.append(m)
                 self.run_once(fake, acc, now, budget=rng.choice([15, 40, 120, 10_000]), returned=returned)
+                self.assert_honest({"mail:Exchange:JOB": box["msgs"]}, returned)
                 now += timedelta(hours=rng.choice([6, 24]))
             # Final generous run with no new mail.
             self.run_once(fake, acc, now, budget=100_000, returned=returned)
@@ -228,15 +270,141 @@ class AppleMailTest(unittest.TestCase):
         self.assertTrue(covered <= returned, "checkpoint claims coverage of messages that were not returned")
         self.assertEqual(res.health[0].status, "partial")
 
-    def test_budget_cut_in_new_pass_does_not_advance(self):
+    def test_budget_cut_in_new_pass_records_the_unread_stretch_and_fills_it(self):
         clock = Clock()
-        msgs = [mk(i, NOW - timedelta(minutes=10 * i)) for i in range(100)]
-        fake = FakeMail({("Exchange", 1): {"name": "Inbox", "msgs": list(msgs)}}, clock, cost_per_msg=1.0)
-        res, _ = self.run_once(fake, exchange({1: "Inbox"}), NOW, budget=5, returned=set())
+        box = {"name": "Inbox", "msgs": [mk(i, NOW - timedelta(hours=6 * i)) for i in range(40)]}
+        fake = FakeMail({("Exchange", 1): box}, clock, cost_per_msg=1.0)
+        acc, key, returned = exchange({1: "Inbox"}), "mail:Exchange:Inbox", set()
+        self.run_once(fake, acc, NOW, budget=10_000, returned=returned)
+        # Three weeks away: far more new mail than one run's budget can read.
+        later = NOW + timedelta(days=21)
+        box["msgs"] += [mk(1000 + i, later - timedelta(minutes=30 * i)) for i in range(1000)]
+        res, _ = self.run_once(fake, acc, later, budget=120, returned=returned)
+        cp = ms.Checkpoints(self.cps_path).data[key]
         self.assertEqual(res.health[0].status, "partial")
-        # No coverage is claimed; only the backfill target is pinned to this first attempt.
-        self.assertEqual(ms.Checkpoints(self.cps_path).data,
-                         {"mail:Exchange:Inbox": {"target": (NOW - timedelta(days=30)).isoformat()}})
+        self.assertEqual(cp["hi"], later.isoformat())
+        [(gap_lo, gap_hi)] = cp["gaps"]
+        self.assertEqual(gap_lo, (NOW - ms.OVERLAP).isoformat())
+        self.assert_honest({key: box["msgs"]}, returned)
+        unread = [m for m in box["msgs"] if ms.clean_mid(m[3]) not in returned]
+        self.assertTrue(unread)
+        self.assertTrue(all(gap_lo <= m[0].isoformat() <= gap_hi for m in unread))
+        # The next run reads the stretch; no body is fetched twice.
+        res, _ = self.run_once(fake, acc, later + timedelta(hours=12), budget=100_000, returned=returned)
+        self.assertEqual(res.health[0].status, "ok")
+        self.assertEqual(ms.Checkpoints(self.cps_path).data[key]["gaps"], [])
+        self.assertTrue({ms.clean_mid(m[3]) for m in box["msgs"]} <= returned)
+        self.assertEqual(max(fake.bodies.values()), 1)
+
+    def test_long_absence_converges_without_rereading_property(self):
+        """Weeks of mail arrive while the machine is off, then every run has a tiny budget:
+        the unread stretches still close, every message in the window is returned exactly
+        once, no body is fetched twice, and no checkpoint ever claims unread mail."""
+        rng = random.Random(20261001)
+        for trial in range(12):
+            clock = Clock()
+            boxes = {"mail:Exchange:JOB": {"name": "JOB", "msgs": []}, "mail:Exchange:Inbox": {"name": "Inbox", "msgs": []}}
+            fake = FakeMail({("Exchange", 2): boxes["mail:Exchange:JOB"], ("Exchange", 1): boxes["mail:Exchange:Inbox"]},
+                            clock, cost_per_msg=rng.choice([0.05, 0.1, 0.2]))
+            acc = exchange({1: "Inbox", 2: "JOB"})
+            self.cps_path = Path(self.tmp.name) / f"absence-{trial}.json"
+            returned: set[str] = set()
+            seq = iter(range(10**6))
+            now = NOW
+
+            def arrive(days, per_day, now, boxes=boxes, seq=seq, trial=trial):
+                for b in boxes.values():
+                    for _ in range(int(days * per_day)):
+                        b["msgs"].append(mk(f"{trial}-{next(seq)}", now - timedelta(minutes=rng.randint(0, int(days * 1440)))))
+
+            arrive(10, 20, now)
+            for _ in range(3):
+                self.run_once(fake, acc, now, budget=10_000, returned=returned)
+                now += timedelta(days=1)
+                arrive(1, 20, now)
+            away = rng.choice([14, 21, 28])
+            now += timedelta(days=away)
+            arrive(away, rng.choice([40, 80]), now)
+            for run in range(200):
+                self.run_once(fake, acc, now, budget=rng.choice([60, 120, 250]), returned=returned)
+                self.assert_honest({k: b["msgs"] for k, b in boxes.items()}, returned)
+                if all(ms.clean_mid(m[3]) in returned for b in boxes.values() for m in b["msgs"]):
+                    break
+                now += timedelta(hours=rng.choice([12, 24]))
+                arrive(0.5, 10, now)
+            missed = [m for b in boxes.values() for m in b["msgs"] if ms.clean_mid(m[3]) not in returned]
+            self.assertEqual(missed, [], f"trial {trial}: {len(missed)} never returned after {run + 1} runs")
+            self.assertLessEqual(max(fake.bodies.values()), 1, f"trial {trial}: a body was fetched twice")
+
+    def test_mailbox_partial_for_three_runs_becomes_an_error(self):
+        clock = Clock()
+        box = {"name": "Inbox", "msgs": []}
+        fake = FakeMail({("Exchange", 1): box}, clock, cost_per_msg=1.0)
+        acc, returned, statuses, now = exchange({1: "Inbox"}), set(), [], NOW
+        for run in range(3):
+            box["msgs"] += [mk(f"{run}-{i}", now - timedelta(minutes=i)) for i in range(200)]
+            res, _ = self.run_once(fake, acc, now, budget=5, returned=returned)
+            statuses.append(res.health[0].status)
+            now += timedelta(hours=1)
+        self.assertEqual(statuses, ["partial", "partial", "error"])
+        self.assertIn("still partial after 3 runs", res.health[0].error)
+        res, _ = self.run_once(fake, acc, now, budget=100_000, returned=returned)
+        self.assertEqual(res.health[0].status, "ok")
+        self.assertEqual(ms.Checkpoints(self.cps_path).data["mail:Exchange:Inbox"]["partial_runs"], 0)
+
+    def test_scan_cut_short_starts_at_the_mailbox_it_stopped_in(self):
+        clock = Clock()
+        fake = FakeMail({("Exchange", 1): {"name": "Inbox", "msgs": [mk(f"a{i}", NOW - timedelta(minutes=i)) for i in range(10)]},
+                         ("Exchange", 2): {"name": "Archive", "msgs": [mk(f"b{i}", NOW - timedelta(minutes=i)) for i in range(500)]},
+                         ("Exchange", 3): {"name": "Other", "msgs": [mk(f"c{i}", NOW - timedelta(minutes=i)) for i in range(5)]}}, clock)
+        acc, returned = exchange({1: "Inbox", 2: "Archive", 3: "Other"}), set()
+        res, _ = self.run_once(fake, acc, NOW, budget=100, returned=returned)
+        other = next(h for h in res.health if h.mailbox == "Other")
+        self.assertEqual((other.status, other.error), ("partial", "not reached before the time budget ran out; read first next run"))
+        self.run_once(fake, acc, NOW + timedelta(hours=1), budget=100_000, returned=returned)
+        self.assertEqual(fake.scan_orders, [[1, 2, 3], [2, 3, 1]])
+        self.assertEqual(len(returned), 515)
+
+    def test_job_label_scanned_first_even_when_rotated(self):
+        acc = exchange({1: "Inbox", 2: "Archive", 9: "JOB"})
+        cps = ms.Checkpoints(self.cps_path)
+        cps.stage("rotation:Exchange", {"start": 2})
+        src = ms.AppleMailSource([acc], backfill_days=1, budget_s=1, runner=lambda *a: "")
+        mine = [(i, p, None) for i, p in src.selected(acc)]
+        self.assertEqual(src.scan_order(acc, mine, cps), [(9, "JOB"), (2, "Archive"), (1, "Inbox")])
+
+    def test_failing_job_label_does_not_hide_its_message_from_all_mail(self):
+        clock = Clock()
+        shared = mk(1, NOW - timedelta(hours=1))
+        fake = FakeMail({("Google", 25): {"name": "Job", "msgs": [shared]},
+                         ("Google", 3): {"name": "All Mail", "msgs": [shared, mk(2, NOW - timedelta(hours=2))]}}, clock)
+        fake.fail_content.add(("Google", 25))
+        acc = ms.Account("Google", "imap account", "me@gmail.com", "imap.gmail.com", [(25, "Job"), (3, "[Gmail]/All Mail")])
+        flt = sj.RunFilter({"me@gmail.com"}, {}, ms.SeenCache(Path(self.tmp.name) / "seen.json"))
+        src = ms.AppleMailSource([acc], backfill_days=30, budget_s=1000, runner=fake, now=NOW, clock=clock)
+        res = src.fetch(ms.Checkpoints(self.cps_path), flt.keep, flt.sunk)
+        self.assertEqual(sorted(m["message_id"] for m in res.messages), ["m1@acme.test", "m2@acme.test"])
+        self.assertEqual(next(h for h in res.health if h.mailbox == "Job").status, "error")
+
+    def test_messages_deleted_between_chunks_do_not_push_one_past_the_cursor(self):
+        for op, n, spacing in (("scan", 100, timedelta(minutes=20)), ("scanfrom", 600, timedelta(hours=1))):
+            with self.subTest(op=op):
+                clock = Clock()
+                msgs = [mk(f"{op}{i}", NOW - spacing * i) for i in range(n)]
+                fake = FakeMail({("Exchange", 1): {"name": "Inbox", "msgs": list(msgs)}}, clock)
+                deleted = []
+
+                def delete_newest_two(call, box, op=op, deleted=deleted):
+                    if call == op and not deleted:
+                        deleted += box[:2]
+                        del box[:2]
+
+                fake.after_chunk = delete_newest_two
+                self.cps_path = Path(self.tmp.name) / f"del-{op}.json"
+                returned: set[str] = set()
+                self.run_once(fake, exchange({1: "Inbox"}), NOW, budget=100_000, returned=returned)
+                self.assertEqual(len(deleted), 2)
+                self.assertEqual({ms.clean_mid(m[3]) for m in msgs} - returned, set())
 
     def test_moved_mailbox_is_an_error_and_not_checkpointed(self):
         clock = Clock()
@@ -316,10 +484,13 @@ class AppleMailTest(unittest.TestCase):
             ms.US.join(["M", "1", "Inbox"]), ms.US.join(["M", "40", "JOB/Handshake"]),
             ms.US.join(["A", "Google", "imap account", "me@gmail.com", "imap.gmail.com"]),
             ms.US.join(["M", "3", "[Gmail]/All Mail"]),
+            ms.US.join(["A", "iCloud", "iCloud account", "me@icloud.com", "p42-imap.mail.me.com"]),
+            ms.US.join(["M", "1", "INBOX"]),
         ])
         accs = ms.enumerate_accounts(lambda op, args, t: raw)
         self.assertEqual([(a.name, a.server, a.gmail, a.imap_capable) for a in accs],
-                         [("Exchange", "", False, False), ("Google", "imap.gmail.com", True, True)])
+                         [("Exchange", "", False, False), ("Google", "imap.gmail.com", True, True),
+                          ("iCloud", "p42-imap.mail.me.com", False, True)])
         self.assertEqual(accs[0].mailboxes, [(1, "Inbox"), (40, "JOB/Handshake")])
 
 
@@ -472,6 +643,13 @@ class ImapTest(unittest.TestCase):
         res = src.fetch(self.cps, lambda m: True)
         self.assertEqual([m["message_id"] for m in res.messages], ["m1@acme.test"])
 
+    def test_localized_all_mail_is_found_by_its_flag(self):
+        boxes = gmail_boxes([self.msg(1, 1)])
+        boxes["[Gmail]/Todos"] = boxes.pop("[Gmail]/All Mail")
+        res = self.source(FakeImap(boxes)).fetch(self.cps, lambda m: True)
+        self.assertEqual([h.status for h in res.health], ["ok", "ok"])
+        self.assertEqual([m["message_id"] for m in res.messages], ["m1@acme.test"])
+
     def test_gmail_without_all_mail_over_imap_is_an_error(self):
         boxes = gmail_boxes([])
         del boxes["[Gmail]/All Mail"]
@@ -515,6 +693,18 @@ class HelpersTest(unittest.TestCase):
             self.assertFalse(p.exists())
             c.commit()
             self.assertEqual(ms.Checkpoints(p).data, {"k": {"hi": "x"}})
+
+    def test_corrupt_state_is_moved_aside_and_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            for cls, name, text in ((ms.Checkpoints, "checkpoints.json", '{"mail:x": {"hi"'), (ms.SeenCache, "seen.json", "[]")):
+                p = Path(d) / name
+                p.write_text(text)
+                state = cls(p)
+                self.assertEqual(state.data, {})
+                self.assertIn(f"moved to {name}.corrupt", state.problem)
+                self.assertFalse(p.exists())
+                self.assertEqual((Path(d) / f"{name}.corrupt").read_text(), text)
+            self.assertEqual(ms.Checkpoints(Path(d) / "missing.json").problem, "")
 
     def test_seen_cache_prunes_old_entries(self):
         with tempfile.TemporaryDirectory() as d:

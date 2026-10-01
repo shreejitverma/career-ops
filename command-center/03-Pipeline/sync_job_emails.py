@@ -35,7 +35,6 @@ Usage:
   sync_job_emails.py --doctor                    # accounts, method, credentials, coverage
   sync_job_emails.py --backfill-days 365 --apply # extend coverage further back (resumable)
   sync_job_emails.py --dry-run                   # read and report; write nothing
-  sync_job_emails.py --account Google            # one account (repeatable)
   sync_job_emails.py --from-json FILE            # use a fixture instead of real mail
 
 Gmail over IMAP needs an app password stored once per address:
@@ -46,12 +45,13 @@ from __future__ import annotations
 
 import argparse
 import email.utils
-from collections import Counter
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -225,10 +225,10 @@ def is_job_related(msg: dict, trackers: list[Tracker] = ()) -> bool:
     # America or Fidelity also send statements), so name matches still need job wording.
     if trackers and match_tracker(msg, trackers)[1] == "domain":
         return True
-    combined = f"{msg['subject']} {msg['sender']} {msg.get('snippet', '')}".lower()
-    if any(ex in combined for ex in EXCLUDE_PATTERNS):
+    head = f"{msg['subject']} {msg['sender']}".lower()
+    if any(ex in head for ex in EXCLUDE_PATTERNS):
         return False
-    return any(k in combined for k in JOB_KEYWORDS)
+    return any(k in f"{head} {msg.get('snippet', '')}".lower() for k in JOB_KEYWORDS)
 
 
 def classify(msg: dict) -> str:
@@ -357,25 +357,57 @@ def load_events(path: Path = EVENTS) -> dict[str, Event]:
 def record(new: list[Event], path: Path = EVENTS, dry_run: bool = False) -> list[Event]:
     known = load_events(path)
     fresh, seen = [], set(known)
+    mids = {e.message_id for e in known.values() if e.message_id}
     # Each legacy event (no Message-ID) stands for exactly one message: it absorbs one
     # re-read with its fingerprint and no more, so two different messages with the same
-    # day, subject and sender are both kept even when only one was recorded before.
-    legacy = Counter(fingerprint(e.date, e.subject, e.sender) for e in known.values() if not e.message_id)
+    # day, subject and sender are both kept even when only one was recorded before. The
+    # absorbed Message-ID is written onto the legacy event, so this holds across runs.
+    legacy: dict[tuple[str, str, str], list[str]] = {}
+    for e in known.values():
+        if not e.message_id:
+            legacy.setdefault(fingerprint(e.date, e.subject, e.sender), []).append(e.id)
+    absorbed: dict[str, str] = {}
     for e in new:
-        if e.id in seen:
+        if e.id in seen or (e.message_id and e.message_id in mids):
             continue
         fp = fingerprint(e.date, e.subject, e.sender)
-        if e.message_id and legacy[fp] > 0:
-            legacy[fp] -= 1
+        if e.message_id and legacy.get(fp):
+            absorbed[legacy[fp].pop(0)] = e.message_id
+            mids.add(e.message_id)
             continue
         fresh.append(e)
         seen.add(e.id)
-    if fresh and not dry_run:
+        if e.message_id:
+            mids.add(e.message_id)
+    if dry_run:
+        return fresh
+    if absorbed:
+        rewrite_events(path, absorbed, fresh)
+    elif fresh:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as f:
             for e in fresh:
                 f.write(e.to_json() + "\n")
     return fresh
+
+
+def rewrite_events(path: Path, absorbed: dict[str, str], fresh: list[Event]) -> None:
+    """Set message_id on the absorbed legacy events and append `fresh`, atomically. Every
+    other line is kept byte for byte and in order."""
+    lines = path.read_text().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        d = json.loads(line)
+        if d.get("id") in absorbed:
+            d["message_id"] = absorbed[d["id"]]
+            lines[i] = json.dumps(d, sort_keys=True) + ("\n" if line.endswith("\n") else "")
+    if fresh and lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines += [e.to_json() + "\n" for e in fresh]
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text("".join(lines))
+    tmp.replace(path)
 
 
 def stage_rank(stage: str) -> int:
@@ -395,21 +427,30 @@ def health_lines(health: dict | None, today: str) -> list[str]:
     boxes = health.get("mailboxes", [])
     errors = [b for b in boxes if b["status"] == "error"]
     partial = [b for b in boxes if b["status"] == "partial"]
+    bodiless = [b for b in boxes if b.get("unavailable") or (b["status"] == "ok" and b.get("error"))]
     ran = health.get("finished_at", "")[:16].replace("T", " ")
     stale = health.get("finished_at", "")[:10] < (datetime.fromisoformat(today) - timedelta(days=2)).date().isoformat()
     lines.append(f"Last run {ran}: {len(boxes)} mailboxes in {len({b['account'] for b in boxes})} accounts, "
                  f"{sum(b['read'] for b in boxes)} messages read, {sum(b['kept'] for b in boxes)} new to check.")
     if stale:
-        lines.append(f"**The last run is more than two days old: check the launchd job and sync.log.**")
-    if not errors and not partial:
+        lines.append("**The last run is more than two days old: check the launchd job and sync.log.**")
+    if not errors and not partial and not bodiless:
         lines.append("Every mailbox read completely.")
     if errors:
         lines += ["", f"**{len(errors)} mailbox(es) failed; they are read again next run:**", "",
                   "| Account | Mailbox | Error |", "| :--- | :--- | :--- |"]
         lines += [f"| {b['account']} | {b['mailbox']} | {b['error'].replace('|', '/')} |" for b in errors]
     if partial:
-        lines += ["", f"{len(partial)} mailbox(es) hit the time budget and continue next run: "
-                  + ", ".join(f"{b['account']}/{b['mailbox']}" for b in partial[:8]) + ("..." if len(partial) > 8 else "")]
+        lines += ["", (f"{len(partial)} mailbox(es) hit the time budget and continue next run "
+                       f"(one still partial after {ms.STARVED_RUNS} runs in a row is listed as failed):"), ""]
+        lines += [f"- {b['account']}/{b['mailbox']}: {b['error']}" for b in partial[:8]]
+        if len(partial) > 8:
+            lines.append(f"- and {len(partial) - 8} more")
+    if bodiless:
+        lines += ["", (f"{len(bodiless)} mailbox(es) had message bodies Mail could not return; those messages were "
+                       "classified from subject and sender only, and any not recorded is read again while it is inside "
+                       "the two-day re-read window:"), ""]
+        lines += [f"- {b['account']}/{b['mailbox']}: {b.get('unavailable', 0)} message(s)" for b in bodiless]
     fallback = sorted({b["account"] for b in boxes if "gmail fallback" in b["method"]})
     if fallback:
         lines += ["", "Read through Mail.app, which is slow for Gmail and can miss a message that Mail downloads more "
@@ -508,47 +549,58 @@ def apply_timeline(events: list[Event], root: Path = PIPELINE, dry_run: bool = F
     return added
 
 
-def fetch_messages(args, known: dict[str, Event], cps: ms.Checkpoints, seen: ms.SeenCache,
-                   trackers: list[Tracker] = ()) -> ms.FetchResult:
-    """Route each account to its most complete source and read everything new."""
-    runner = ms.OsaRunner()
-    all_accounts = ms.enumerate_accounts(runner)
-    # Mail from any of your own addresses is outgoing, wherever it was filed or copied.
-    own = {a.user.lower() for a in all_accounts if a.user}
-    accounts = [a for a in all_accounts if not args.account or a.name in args.account]
-    imap_accs = [a for a in accounts if a.imap_capable and args.source in ("all", "imap") and ms.keychain_password(a.user)]
-    mail_accs = [a for a in accounts if a not in imap_accs and args.source in ("all", "mail")]
-    returned: set[str] = set()
+class RunFilter:
+    """Which messages a run reads for classification, and which it already delivered.
 
-    def keep(m: dict) -> bool:
+    A message counts as delivered only once a source actually returns it (`sunk`), so a
+    mailbox that fails after reading a message's header never hides that message from
+    another mailbox holding it (a job label and All Mail)."""
+
+    def __init__(self, own: set[str], known: dict[str, Event], seen: ms.SeenCache, trackers: list[Tracker] = ()):
+        self.own, self.known, self.seen, self.trackers = own, known, seen, trackers
+        self.known_mids = {e.message_id for e in known.values() if e.message_id}
+        self.delivered: set[str] = set()
+
+    def keep(self, m: dict) -> bool:
         """Read for classification? Not bulk mail, not a message already handled, and not
         one its subject and sender already rule out: bodies are the slow part of a read,
         and is_job_related would reject these whatever the body says."""
         if is_noise(m["subject"], m["sender"]):
             return False
-        if email.utils.parseaddr(m["sender"])[1].lower() in own:
+        if email.utils.parseaddr(m["sender"])[1].lower() in self.own:
             return False
         if not (m.get("dedicated") or is_ats_sender(m["sender"])
-                or (trackers and match_tracker(m, trackers)[1] == "domain")):
+                or (self.trackers and match_tracker(m, self.trackers)[1] == "domain")):
             head = f"{m['subject']} {m['sender']}".lower()
             if any(ex in head for ex in EXCLUDE_PATTERNS):
                 return False
         mid = m["message_id"]
-        if mid and (mid in returned or seen.has(mid) or event_id(m) in known):
-            return False
-        if mid:
-            returned.add(mid)
-        return True
+        return not (mid and (mid in self.delivered or mid in self.known_mids or self.seen.has(mid)
+                             or event_id(m) in self.known))
 
+    def sunk(self, m: dict) -> None:
+        if m["message_id"]:
+            self.delivered.add(m["message_id"])
+
+
+def fetch_messages(args, known: dict[str, Event], cps: ms.Checkpoints, seen: ms.SeenCache,
+                   trackers: list[Tracker] = ()) -> ms.FetchResult:
+    """Route every account to its most complete source and read everything new."""
+    runner = ms.OsaRunner()
+    accounts = ms.enumerate_accounts(runner)
+    # Mail from any of your own addresses is outgoing, wherever it was filed or copied.
+    flt = RunFilter({a.user.lower() for a in accounts if a.user}, known, seen, trackers)
+    imap_accs = [a for a in accounts if a.imap_capable and ms.keychain_password(a.user)]
+    mail_accs = [a for a in accounts if a not in imap_accs]
     backfill = args.backfill_days
     result = ms.FetchResult()
     if imap_accs:
-        r = ms.ImapSource(imap_accs, backfill_days=backfill).fetch(cps, keep)
+        r = ms.ImapSource(imap_accs, backfill_days=backfill).fetch(cps, flt.keep, flt.sunk)
         result.messages += r.messages
         result.health += r.health
     if mail_accs:
         r = ms.AppleMailSource(mail_accs, backfill_days=backfill, budget_s=args.budget_minutes * 60,
-                               runner=runner).fetch(cps, keep)
+                               runner=runner).fetch(cps, flt.keep, flt.sunk)
         result.messages += r.messages
         result.health += r.health
     return result
@@ -587,49 +639,65 @@ def notify(text: str) -> None:
                    capture_output=True, timeout=30)
 
 
+def fail_run(args, known: dict[str, Event], trackers: list[Tracker], started: str, error: str) -> int:
+    """A run that could not read mail at all: as loud as a failed mailbox, never quieter."""
+    row = ms.Health("all accounts", "*", "sync", "error", error=error[:300]).to_dict()
+    health = {"started_at": started, "finished_at": datetime.now().isoformat(timespec="seconds"), "mailboxes": [row]}
+    if not args.dry_run:
+        ms.atomic_write_json(HEALTH, health)
+        REVIEW.write_text(render_review(known, trackers, args.today, health=health))
+    print(f"ERROR {error}", file=sys.stderr)
+    if args.notify:
+        notify("Job email sync could not run; see _Inbox-Review.md")
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--mode", choices=["daily", "full"], default="daily",
-                    help="kept for compatibility; full sets --backfill-days 365")
     ap.add_argument("--from-json", type=Path, help="read messages from a JSON list instead of real mail")
     ap.add_argument("--apply", action="store_true", help="append timeline lines to matched trackers")
     ap.add_argument("--dry-run", action="store_true", help="report what would change; write nothing")
     ap.add_argument("--doctor", action="store_true", help="show accounts, read method, credentials and coverage")
-    ap.add_argument("--backfill-days", type=int, default=None,
+    ap.add_argument("--backfill-days", type=int, default=DEFAULT_BACKFILL_DAYS,
                     help=f"cover mail this far back (default {DEFAULT_BACKFILL_DAYS}); extending it later resumes")
     ap.add_argument("--budget-minutes", type=float, default=DEFAULT_BUDGET_MINUTES,
                     help="time allowed for Mail.app reads; unfinished mailboxes continue next run")
-    ap.add_argument("--account", action="append", help="only this Mail.app account (repeatable)")
-    ap.add_argument("--source", choices=["all", "imap", "mail"], default="all")
     ap.add_argument("--notify", action="store_true", help="macOS notification when a mailbox fails")
     ap.add_argument("--today", default=datetime.now().date().isoformat(), help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
-    if args.backfill_days is None:
-        args.backfill_days = 365 if args.mode == "full" else DEFAULT_BACKFILL_DAYS
     if args.doctor:
         return doctor(args)
 
     trackers = load_trackers()
-    known = load_events()
+    known = load_events(EVENTS)
     started = datetime.now().isoformat(timespec="seconds")
     if args.from_json:
         msgs, health_rows, cps, seen = json.loads(args.from_json.read_text()), [], None, None
     else:
-        cps, seen = ms.Checkpoints(CHECKPOINTS), ms.SeenCache(SEEN)
-        result = fetch_messages(args, known, cps, seen, trackers)
+        try:
+            cps, seen = ms.Checkpoints(CHECKPOINTS), ms.SeenCache(SEEN)
+            result = fetch_messages(args, known, cps, seen, trackers)
+        except Exception as e:  # noqa: BLE001 - reported in health, the review, the exit code and a notification
+            traceback.print_exc()
+            return fail_run(args, known, trackers, started, f"sync could not run: {type(e).__name__}: {e}")
         msgs, health_rows = result.messages, [h.to_dict() for h in result.health]
-    events = [to_event(m, trackers) for m in msgs if is_job_related(m, trackers)]
-    fresh = record(events, dry_run=args.dry_run)
+        health_rows += [ms.Health("all accounts", state.path.name, "state", "error", error=state.problem).to_dict()
+                        for state in (cps, seen) if state.problem]
+    related = [m for m in msgs if is_job_related(m, trackers)]
+    events = [to_event(m, trackers) for m in related]
+    fresh = record(events, EVENTS, dry_run=args.dry_run)
     health = {"started_at": started, "finished_at": datetime.now().isoformat(timespec="seconds"),
               "mailboxes": health_rows} if cps is not None else (json.loads(HEALTH.read_text()) if HEALTH.exists() else None)
     if not args.dry_run and cps is not None:
         # Only now, with every message recorded, may coverage move forward.
         cps.commit()
+        recorded = {id(m) for m in related}
         for m in msgs:
-            seen.add(m.get("message_id", ""), m["date"])
+            if not m.get("body_unavailable") or id(m) in recorded:
+                seen.add(m.get("message_id", ""), m["date"])
         seen.save(args.today)
         ms.atomic_write_json(HEALTH, health)
-    all_events = load_events()
+    all_events = load_events(EVENTS)
     if args.dry_run:
         all_events.update({e.id: e for e in fresh})
     review = render_review(all_events, trackers, args.today, health=health)

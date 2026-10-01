@@ -14,7 +14,8 @@ Nothing may be missed, so every source keeps three rules:
    Journal, ...) are skipped, plus Gmail's aggregate views where a complete
    source replaces them.
 3. Failures are loud: each mailbox reports ok / partial / error in a Health
-   record that the inbox review, the exit code and --doctor surface.
+   record that the inbox review, the exit code and --doctor surface. A mailbox
+   left partial for STARVED_RUNS runs in a row becomes an error.
 
 Sources
 -------
@@ -28,8 +29,9 @@ ImapSource
 AppleMailSource
     Every other account, through Mail.app's AppleScript API. Mail keeps every
     mailbox ordered newest-first, so a run reads from the top down to the last
-    covered time minus an overlap (new mail), then extends coverage backwards
-    toward the backfill target in budgeted steps that resume where they stopped.
+    covered time minus an overlap (new mail), then reads any stretch an earlier
+    run left unread, then extends coverage backwards toward the backfill target,
+    all in budgeted steps that resume where they stopped.
 """
 
 from __future__ import annotations
@@ -43,10 +45,9 @@ import json
 import os
 import re
 import subprocess
-import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from html import unescape
 from pathlib import Path
 from typing import Callable, Iterable
@@ -58,6 +59,11 @@ OVERLAP = timedelta(days=2)
 SNIPPET_CHARS = 1500
 # Share of the remaining time budget a header read may use; bodies get the rest.
 READ_SHARE = 0.6
+# Consecutive Mail.app chunk reads overlap by this many positions, so a message
+# deleted or moved above the cursor between two chunks cannot shift one past it.
+CHUNK_OVERLAP = 5
+# A mailbox still partial after this many runs in a row is reported as an error.
+STARVED_RUNS = 3
 BODY_BYTES = 65536
 
 # Outgoing and system folders; never incoming mail about an application.
@@ -125,6 +131,23 @@ def atomic_write_json(path: Path, value) -> None:
     tmp.replace(path)
 
 
+def load_state(path: Path) -> tuple[dict, str]:
+    """A state file's contents and a problem report. A file that is not a JSON object is
+    moved aside to <name>.corrupt and reported; the empty state that replaces it costs a
+    re-read, never a miss."""
+    if not path.exists():
+        return {}, ""
+    try:
+        data = json.loads(path.read_text())
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        return data, ""
+    aside = path.with_name(path.name + ".corrupt")
+    path.replace(aside)
+    return {}, f"{path.name} was unreadable; moved to {aside.name} and rebuilt by re-reading mail"
+
+
 # ── Persistent state ─────────────────────────────────────────────────────────
 
 class Checkpoints:
@@ -133,7 +156,7 @@ class Checkpoints:
 
     def __init__(self, path: Path):
         self.path = path
-        self.data: dict[str, dict] = json.loads(path.read_text()) if path.exists() else {}
+        self.data, self.problem = load_state(path)
         self.staged: dict[str, dict] = {}
 
     def get(self, key: str) -> dict | None:
@@ -154,7 +177,7 @@ class SeenCache:
 
     def __init__(self, path: Path, days: int = 30):
         self.path, self.days = path, days
-        self.data: dict[str, str] = json.loads(path.read_text()) if path.exists() else {}
+        self.data, self.problem = load_state(path)
 
     @staticmethod
     def key(mid: str) -> str:
@@ -182,6 +205,7 @@ class Health:
     read: int = 0
     kept: int = 0
     error: str = ""
+    unavailable: int = 0  # messages classified without their body (Mail could not return it)
     covered_from: str = ""
     covered_to: str = ""
 
@@ -209,7 +233,7 @@ def message(account, mailbox, subject, sender, received: datetime, mid, *, dedic
 @dataclass
 class Account:
     name: str          # Mail.app account name; the event's `account`
-    kind: str          # Mail.app class: "imap account", "account" (Exchange/EWS), ...
+    kind: str          # Mail.app class: "imap account", "iCloud account", "account" (Exchange/EWS), ...
     user: str          # login address
     server: str        # IMAP host, '' for Exchange
     mailboxes: list[tuple[int, str]] = field(default_factory=list)  # (Mail.app index, full path)
@@ -220,7 +244,7 @@ class Account:
 
     @property
     def imap_capable(self) -> bool:
-        return "imap" in self.kind.lower() and bool(self.server) and bool(self.user)
+        return self.kind.lower() in ("imap account", "icloud account") and bool(self.server) and bool(self.user)
 
 
 # ── IMAP ────────────────────────────────────────────────────────────────────
@@ -313,7 +337,7 @@ class ImapSource:
         typ, data = conn.list()
         if typ != "OK":
             raise RuntimeError(f"LIST failed: {data}")
-        out = []
+        out, has_all = [], False
         for flags, raw in parse_list(data):
             display = imap_utf7_decode(raw)
             if "\\noselect" in flags or "\\nonexistent" in flags:
@@ -322,13 +346,17 @@ class ImapSource:
                 # All Mail holds every message in every label except Spam and Trash.
                 if flags & {"\\all", "\\junk", "\\trash"}:
                     out.append((raw, display))
+                    has_all = has_all or "\\all" in flags
             elif not (flags & {"\\sent", "\\drafts", "\\all"}) and not SKIP_MAILBOX_RE.match(display.split("/")[-1]):
                 out.append((raw, display))
-        if acc.gmail and not any("all" in d.lower() for _, d in out):
+        if acc.gmail and not has_all:
             raise RuntimeError("Gmail All Mail is not visible over IMAP; enable 'Show in IMAP' for All Mail in Gmail settings")
         return out
 
-    def fetch(self, cps: Checkpoints, keep: Callable[[dict], bool]) -> FetchResult:
+    def fetch(self, cps: Checkpoints, keep: Callable[[dict], bool],
+              sunk: Callable[[dict], None] = lambda m: None) -> FetchResult:
+        """`keep` decides whether a message is read for classification; `sunk` is told about
+        every message actually delivered in the result, and only those."""
         res = FetchResult()
         for acc in self.accounts:
             password = self.password_for(acc.user)
@@ -345,7 +373,10 @@ class ImapSource:
                 for raw, display in self.mailboxes(conn, acc):
                     h = Health(acc.name, display, self.method)
                     try:
-                        res.messages += self.scan(conn, acc, raw, display, cps, keep, h)
+                        got = self.scan(conn, acc, raw, display, cps, keep, h)
+                        res.messages += got
+                        for m in got:
+                            sunk(m)
                     except Exception as e:  # noqa: BLE001
                         h.status, h.error = "error", str(e)[:300]
                     res.health.append(h)
@@ -468,16 +499,19 @@ on run argv
   return out
 end run''',
     # New mail in many mailboxes in one call. argv: account, specs (records of
-    # index US name US stop-age-seconds, joined by RS), time limit in seconds.
-    # Per mailbox: B(index, count), R rows newest-first until a chunk ends older
-    # than the stop age, then D (done); E on a per-mailbox error; T (index,
+    # index US name US stop-age-seconds, joined by RS), time limit in seconds,
+    # chunk cap, chunk overlap. Per mailbox: B(index, count, again whenever the
+    # count changes), R rows newest-first until a chunk ends older than the stop
+    # age or the mailbox ends, then D (done); E on a per-mailbox error; T (index,
     # position) when the time limit is reached, after which nothing else runs.
+    # Consecutive chunks overlap, so R rows can repeat.
     "scan": r"""
 on run argv
   set US to ASCII character 31
   set RS to ASCII character 30
   set limitSecs to (item 3 of argv) as integer
   set maxChunk to (item 4 of argv) as integer
+  set ovl to (item 5 of argv) as integer
   set t0 to current date
   set AppleScript's text item delimiters to RS
   set specs to text items of (item 2 of argv)
@@ -501,7 +535,13 @@ on run argv
           set sz to 25
           if sz > maxChunk then set sz to maxChunk
           set perMsg to 0
-          repeat while pos ≤ n
+          repeat
+            set n2 to count of messages of mb
+            if n2 is not n then
+              set n to n2
+              set out to out & "B" & US & ix & US & n & RS
+            end if
+            if pos > n then exit repeat
             -- Stop before a chunk that would overrun the limit, not after it.
             if ((current date) - t0) + (perMsg * sz) > limitSecs then
               return out & "T" & US & ix & US & pos & RS
@@ -522,7 +562,13 @@ on run argv
               set out to out & "R" & US & ix & US & (pos + k - 1) & US & ((item k of ds) as «class isot» as string) & US & s & US & fr & US & m & RS
             end repeat
             if (nowD - (item (count of ds) of ds)) > stopAge then exit repeat
-            set pos to e + 1
+            if e ≥ n then
+              set pos to e + 1
+            else
+              set np to e + 1 - ovl
+              if np ≤ pos then set np to pos + 1
+              set pos to np
+            end if
             set sz to sz * 2
             if sz > maxChunk then set sz to maxChunk
           end repeat
@@ -535,16 +581,18 @@ on run argv
   end timeout
   return out
 end run""",
-    # Backfill one mailbox. argv: account, index, name, from-age, to-age (seconds
-    # before now), time limit. Binary-searches the first position older than
-    # from-age (dates fall with position), then reads down until a chunk ends
-    # older than to-age (D), the end of the mailbox (D), or the limit (T).
+    # Read one mailbox backwards. argv: account, index, name, from-age, to-age
+    # (seconds before now), time limit, chunk size, chunk overlap. Binary-searches
+    # the first position older than from-age (dates fall with position), then
+    # reads down in overlapping chunks until a chunk ends older than to-age (D),
+    # the end of the mailbox (D), or the limit (T).
     "scanfrom": r"""
 on run argv
   set US to ASCII character 31
   set RS to ASCII character 30
   set limitSecs to (item 6 of argv) as integer
   set maxChunk to (item 7 of argv) as integer
+  set ovl to (item 8 of argv) as integer
   set perMsg to 0
   set fromAge to (item 4 of argv) as integer
   set toAge to (item 5 of argv) as integer
@@ -569,7 +617,13 @@ on run argv
       end repeat
       set pos to lo - 1
       if pos < 1 then set pos to 1
-      repeat while pos ≤ n
+      repeat
+        set n2 to count of messages of mb
+        if n2 is not n then
+          set n to n2
+          set out to out & "B" & US & ix & US & n & RS
+        end if
+        if pos > n then exit repeat
         if ((current date) - t0) + (perMsg * maxChunk) > limitSecs then return out & "T" & US & ix & US & pos & RS
         set c0 to current date
         set e to pos + maxChunk - 1
@@ -587,7 +641,13 @@ on run argv
           set out to out & "R" & US & ix & US & (pos + k - 1) & US & ((item k of ds) as «class isot» as string) & US & s & US & fr & US & m & RS
         end repeat
         if (nowD - (item (count of ds) of ds)) > toAge then return out & "D" & US & ix & RS
-        set pos to e + 1
+        if e ≥ n then
+          set pos to e + 1
+        else
+          set np to e + 1 - ovl
+          if np ≤ pos then set np to pos + 1
+          set pos to np
+        end if
       end repeat
     end tell
   end timeout
@@ -663,14 +723,6 @@ class OsaRunner:
     into the script text."""
 
     def __call__(self, op: str, args: list[str], timeout: float) -> str:
-        t0 = time.monotonic()
-        try:
-            return self._run(op, args, timeout)
-        finally:
-            if os.environ.get("MAIL_SYNC_TRACE"):
-                print(f"trace: {op} {args[:3] if op != 'scan' else args[:1]} {time.monotonic() - t0:.1f}s", file=sys.stderr, flush=True)
-
-    def _run(self, op: str, args: list[str], timeout: float) -> str:
         try:
             p = subprocess.run(["osascript", "-", *map(str, args)], input=APPLESCRIPT[op], capture_output=True,
                                text=True, timeout=max(30, timeout))
@@ -696,12 +748,17 @@ def enumerate_accounts(runner, timeout: float = 900) -> list[Account]:
 class AppleMailSource:
     """Newest-first, checkpointed reads through Mail.app.
 
-    Checkpoint per mailbox: {"hi": time up to which everything is read, "lo":
-    time back to which everything is read, "target": backfill target}. A run
-    first reads new mail in every mailbox (one `scan` call per account, from the
-    top down to hi - OVERLAP); only a mailbox whose pass completed moves hi to
-    the run's start. With the budget that is left it extends each mailbox's lo
-    back toward target (`scanfrom`), keeping progress after every chunk read.
+    Checkpoint per mailbox: {"hi": time up to which mail is read, "lo": time back
+    to which it is read, "gaps": [[from, to], ...] stretches inside lo..hi still
+    unread, "target": backfill target, "partial_runs": runs in a row left partial}.
+    A run first reads new mail in every mailbox (one `scan` call per account, from
+    the top down to hi - OVERLAP). A pass that completes moves hi to the run's
+    start; a pass the time budget cuts moves hi too, and the unread stretch between
+    hi - OVERLAP and the oldest message it handled becomes a gap. With the budget
+    that is left it reads each mailbox's gaps (`scanfrom` from a gap's top +
+    OVERLAP down to its bottom), then extends lo back toward target, keeping
+    progress after every read. A scan call that runs out of time starts at the
+    mailbox it stopped in next run, so the mailboxes after it are not starved.
     The reading loops run inside AppleScript: a process per call costs far more
     than Mail does, so calls are per account and per mailbox, never per message.
     """
@@ -751,8 +808,50 @@ class AppleMailSource:
     def parse(raw: str) -> list[list[str]]:
         return [rec.split(US) for rec in raw.split(RS) if rec]
 
-    def fetch(self, cps: Checkpoints, keep: Callable[[dict], bool]) -> FetchResult:
+    @staticmethod
+    def unique(rows: list[list[str]]) -> list[list[str]]:
+        """R rows in reading order without the repeats that overlapping chunks produce."""
+        seen, out = set(), []
+        for r in rows:
+            k = r[6] or (r[3], r[4], r[5])
+            if k not in seen:
+                seen.add(k)
+                out.append(r)
+        return out
+
+    @staticmethod
+    def handled_to(rows: list[list[str]], msgs: list[dict], done: int) -> datetime | None:
+        """Oldest receive time down to which every row read was handled (delivered, or
+        not kept), or None when no row was. Rows come newest-first, so when bodies ran
+        out at msgs[done], only rows strictly newer than it count."""
+        dates = [datetime.fromisoformat(r[3]) for r in rows]
+        if done < len(msgs):
+            cut = datetime.fromisoformat(msgs[done]["received"])
+            dates = [d for d in dates if d > cut]
+        return min(dates, default=None)
+
+    @staticmethod
+    def clip(gaps: list[list[str]], top: datetime) -> list[list[str]]:
+        """Gaps cut off at `top` (everything above it is read), merged and sorted."""
+        out: list[list[str]] = []
+        for lo, hi in sorted([g[0], min(g[1], top.isoformat())] for g in gaps if g[0] <= top.isoformat()):
+            if out and lo <= out[-1][1]:
+                out[-1][1] = max(out[-1][1], hi)
+            else:
+                out.append([lo, hi])
+        return out
+
+    def fetch(self, cps: Checkpoints, keep: Callable[[dict], bool],
+              sunk: Callable[[dict], None] = lambda m: None) -> FetchResult:
+        """`keep` decides whether a message is read for classification; `sunk` is told about
+        every message actually delivered in the result, and only those."""
         res = FetchResult()
+
+        def sink(msgs: list[dict]) -> None:
+            res.messages.extend(msgs)
+            for m in msgs:
+                sunk(m)
+
         try:
             self.runner("check", [], 120)  # ask Mail to sync before reading
         except MailError:
@@ -763,10 +862,15 @@ class AppleMailSource:
             for idx, path in self.selected(acc):
                 plans[(acc.name, idx)] = (acc, path, Health(acc.name, path, self.method + (" (gmail fallback)" if acc.gmail else "")))
         for acc in accounts:
-            self.new_mail(acc, plans, cps, keep, res.messages)
-        for (name, idx), (acc, path, h) in plans.items():
+            self.new_mail(acc, plans, cps, keep, sink)
+        for (_, idx), (acc, path, h) in plans.items():
             if h.status == "ok":
-                self.backfill(acc, idx, path, h, cps, keep, res.messages)
+                self.fill_gaps(acc, idx, path, h, cps, keep, sink)
+        for (_, idx), (acc, path, h) in plans.items():
+            if h.status == "ok":
+                self.backfill(acc, idx, path, h, cps, keep, sink)
+        for (_, idx), (acc, path, h) in plans.items():
+            self.track_partial(acc, idx, path, h, cps)
         res.health = [h for _, _, h in plans.values()]
         return res
 
@@ -789,93 +893,156 @@ class AppleMailSource:
                 out.append(m)
         return out
 
+    def _pin_target(self, cp: dict) -> None:
+        """Pin the backfill target at the first attempt, so a window that starts on a
+        failed day does not slide forward past unread mail."""
+        target = self.now - timedelta(days=self.backfill_days)
+        if not cp.get("target") or datetime.fromisoformat(cp["target"]) > target:
+            cp["target"] = target.isoformat()
+
+    def scan_order(self, acc: Account, mine: list[tuple[int, str, Health]], cps: Checkpoints) -> list[tuple[int, str]]:
+        """Order of the account's scan call: job folders before the rest (their messages
+        must keep the job mark when they come up again in All Mail), each group starting
+        at the mailbox where the previous call ran out of time."""
+        start = (cps.get(f"rotation:{acc.name}") or {}).get("start")
+        out: list[tuple[int, str]] = []
+        for dedicated in (True, False):
+            group = [(idx, path) for idx, path, _ in mine if is_dedicated(path) == dedicated]
+            k = next((n for n, (idx, _) in enumerate(group) if idx == start), 0)
+            out += group[k:] + group[:k]
+        return out
+
     def new_mail(self, acc, plans, cps, keep, sink) -> None:
         mine = [(idx, path, h) for (name, idx), (a, path, h) in plans.items() if name == acc.name]
         if not mine:
             return
-        specs, starts = [], {}
+        starts = {}
         for idx, path, h in mine:
             cp = cps.get(self.key(acc, idx, path)) or {}
             # A checkpoint later than now (the clock moved backwards) must not hide mail.
             hi = min(datetime.fromisoformat(cp["hi"]), self.now) if cp.get("hi") else self.now
-            stop_at = hi - OVERLAP
-            starts[idx] = stop_at
-            specs.append(US.join([str(idx), path.split("/")[-1], str(int((self.now - stop_at).total_seconds()))]))
-        if self.remaining() <= 0:
-            for idx, path, h in mine:
-                h.status, h.error = "partial", "time budget reached; continues next run"
-                cp = dict(cps.get(self.key(acc, idx, path)) or {})
-                if not cp.get("target"):
-                    cp["target"] = (self.now - timedelta(days=self.backfill_days)).isoformat()
-                    cps.stage(self.key(acc, idx, path), cp)
-            return
-        try:
-            # Reading headers may use 60% of what is left; the rest is for bodies.
-            raw = self.runner("scan", [acc.name, RS.join(specs), int(self.remaining() * READ_SHARE), self.max_chunk(acc)],
-                              self.remaining() + 120)
-        except MailError as e:
-            for _, _, h in mine:
-                h.status, h.error = "error", str(e)
-            return
+            starts[idx] = hi - OVERLAP
+        order = self.scan_order(acc, mine, cps)
         rows_by, counts, state = {}, {}, {}
-        for f in self.parse(raw):
-            ix = int(f[1])
-            if f[0] == "B":
-                counts[ix] = int(f[2])
-            elif f[0] == "R":
-                rows_by.setdefault(ix, []).append(f)
-            elif f[0] in ("D", "T"):
-                state[ix] = f[0]
-            elif f[0] == "E":
-                state[ix] = "E"
-                plans[(acc.name, ix)][2].error = f[2] if len(f) > 2 else "error"
+        if self.remaining() > 0:
+            specs = [US.join([str(idx), path.split("/")[-1], str(int((self.now - starts[idx]).total_seconds()))])
+                     for idx, path in order]
+            try:
+                # Reading headers may use 60% of what is left; the rest is for bodies.
+                raw = self.runner("scan", [acc.name, RS.join(specs), int(self.remaining() * READ_SHARE),
+                                           self.max_chunk(acc), CHUNK_OVERLAP], self.remaining() + 120)
+            except MailError as e:
+                for _, _, h in mine:
+                    h.status, h.error = "error", str(e)
+                return
+            for f in self.parse(raw):
+                ix = int(f[1])
+                if f[0] == "B":
+                    counts[ix] = int(f[2])
+                elif f[0] == "R":
+                    rows_by.setdefault(ix, []).append(f)
+                elif f[0] in ("D", "T"):
+                    state[ix] = f[0]
+                elif f[0] == "E":
+                    state[ix] = "E"
+                    plans[(acc.name, ix)][2].error = f[2] if len(f) > 2 else "error"
+        # Never reached: the time limit ended the call first.
+        cut = next((idx for idx, _ in order if state.get(idx, "T") == "T"), None)
+        rotation = f"rotation:{acc.name}"
+        if (cps.get(rotation) or {}).get("start") != cut:
+            cps.stage(rotation, {"start": cut})
         target = self.now - timedelta(days=self.backfill_days)
 
-        def anchor_target(idx, path):
-            """Pin the backfill target at the first attempt even when nothing finished, so a
-            window that starts on a failed day does not slide forward past unread mail."""
-            key = self.key(acc, idx, path)
-            cp = dict(cps.get(key) or {})
-            if not cp.get("target") or datetime.fromisoformat(cp["target"]) > target:
-                cp["target"] = target.isoformat()
-                cps.stage(key, cp)
-
         for idx, path, h in mine:
-            st = state.get(idx, "T")  # never reached: the time limit ended the call first
-            rows = rows_by.get(idx, [])
-            # Read to the bottom: everything down to the target counts now; otherwise
-            # only mail since the stop point (older mail is covered, or backfilled).
-            read_all = st == "D" and len(rows) >= counts.get(idx, 0)
-            msgs = self._messages(acc, path, rows, h, keep, target if read_all else starts[idx])
+            key = self.key(acc, idx, path)
+            st = state.get(idx, "T")
             if st == "E":
                 h.status = "error"
-                anchor_target(idx, path)
+                cp = dict(cps.get(key) or {})
+                self._pin_target(cp)
+                cps.stage(key, cp)
                 continue
+            rows = self.unique(rows_by.get(idx, []))
+            # Read to the bottom: everything down to the target counts now; otherwise
+            # only mail since the stop point (older mail is covered, or backfilled).
+            read_all = st == "D" and max((int(r[2]) for r in rows), default=0) >= counts.get(idx, 0)
+            msgs = self._messages(acc, path, rows, h, keep, target if read_all else starts[idx])
             try:
                 done = self._fill_snippets(acc, idx, path, msgs, h)
             except MailError as e:
                 h.status, h.error = "error", str(e)
                 continue
-            sink.extend(msgs[:done])  # the rest is re-read next run; nothing is dropped
+            sink(msgs[:done])  # the rest is re-read next run; nothing is dropped
             h.kept += done
-            if done < len(msgs):
-                h.status, h.error = "partial", "time budget reached while reading bodies; continues next run"
-                anchor_target(idx, path)
-                continue
-            if st != "D":
-                h.status, h.error = "partial", "time budget reached; continues next run"
-                anchor_target(idx, path)
-                continue
-            key = self.key(acc, idx, path)
             cp = dict(cps.get(key) or {})
-            cp["target"] = min(datetime.fromisoformat(cp["target"]), target).isoformat() if cp.get("target") else target.isoformat()
-            if read_all:
-                cp["lo"] = cp["target"]
-            elif not cp.get("lo"):
-                cp["lo"] = starts[idx].isoformat()
+            self._pin_target(cp)
+            if st == "D" and done == len(msgs):
+                if read_all:
+                    cp["lo"], cp["gaps"] = cp["target"], []
+                else:
+                    cp["lo"] = cp.get("lo") or starts[idx].isoformat()
+                    cp["gaps"] = self.clip(cp.get("gaps") or [], starts[idx])
+            else:
+                handled = self.handled_to(rows, msgs, done)
+                upto = handled or self.now
+                if cp.get("hi"):
+                    gaps = (cp.get("gaps") or []) + ([[starts[idx].isoformat(), upto.isoformat()]] if upto >= starts[idx] else [])
+                    cp["lo"] = min(datetime.fromisoformat(cp["lo"]), upto).isoformat()
+                    cp["gaps"] = self.clip(gaps, upto)
+                else:
+                    cp["lo"], cp["gaps"] = upto.isoformat(), []
+                h.status = "partial"
+                h.error = ("time budget reached while reading bodies; the rest is read next run" if done < len(msgs)
+                           else "time budget reached; the rest is read next run" if rows
+                           else "not reached before the time budget ran out; read first next run")
             cp["hi"] = self.now.isoformat()
             cps.stage(key, cp)
             h.covered_from, h.covered_to = cp["lo"][:10], cp["hi"][:10]
+
+    def _read_back(self, acc, idx, path, h: Health, keep, sink, top: datetime, bottom: datetime) -> tuple[bool, datetime | None]:
+        """Read one mailbox from top + OVERLAP down to bottom and deliver what was handled.
+        Returns (True, None) when everything down to bottom was handled; otherwise
+        (False, the oldest time down to which it was, or None when nothing was)."""
+        raw = self.runner("scanfrom", [acc.name, idx, path.split("/")[-1],
+                                       max(0, int((self.now - (top + OVERLAP)).total_seconds())),
+                                       int((self.now - bottom).total_seconds()), int(self.remaining() * READ_SHARE),
+                                       self.max_chunk(acc), CHUNK_OVERLAP],
+                          self.remaining() + 120)
+        recs = self.parse(raw)
+        rows = self.unique([f for f in recs if f[0] == "R"])
+        msgs = self._messages(acc, path, rows, h, keep, bottom)
+        done = self._fill_snippets(acc, idx, path, msgs, h)
+        sink(msgs[:done])
+        h.kept += done
+        if done == len(msgs) and any(f[0] == "D" for f in recs):
+            return True, None
+        return False, self.handled_to(rows, msgs, done)
+
+    def fill_gaps(self, acc, idx, path, h, cps, keep, sink) -> None:
+        """Read the stretches an earlier, cut-short pass left unread, newest first,
+        shrinking each gap to what is still unread after every read."""
+        key = self.key(acc, idx, path)
+        cp = dict(cps.get(key) or {})
+        gaps = sorted(cp.get("gaps") or [], key=lambda g: g[1], reverse=True)
+        while gaps and self.remaining() > 0:
+            lo, hi = gaps[0]
+            try:
+                complete, upto = self._read_back(acc, idx, path, h, keep, sink,
+                                                 datetime.fromisoformat(hi), datetime.fromisoformat(lo))
+            except MailError as e:
+                h.status, h.error = "error", str(e)
+                return
+            if complete or (upto is not None and upto.isoformat() <= lo):
+                gaps.pop(0)
+            elif upto is not None:
+                gaps[0] = [lo, min(hi, upto.isoformat())]
+            cp["gaps"] = sorted(gaps)
+            cps.stage(key, cp)
+            if not complete:
+                break
+        if gaps:
+            h.status = "partial"
+            h.error = f"{len(gaps)} unread stretch(es) of mail, the newest ending {gaps[0][1][:10]}; continues next run"
 
     def backfill(self, acc, idx, path, h, cps, keep, sink) -> None:
         key = self.key(acc, idx, path)
@@ -889,45 +1056,40 @@ class AppleMailSource:
             h.status, h.error = "partial", "backfill continues next run"
             return
         try:
-            raw = self.runner("scanfrom", [acc.name, idx, path.split("/")[-1],
-                                           int((self.now - (lo + OVERLAP)).total_seconds()),
-                                           int((self.now - target).total_seconds()), int(self.remaining() * READ_SHARE),
-                                           self.max_chunk(acc)],
-                              self.remaining() + 120)
+            complete, upto = self._read_back(acc, idx, path, h, keep, sink, lo, target)
         except MailError as e:
             h.status, h.error = "error", str(e)
             return
-        recs = self.parse(raw)
-        rows = [f for f in recs if f[0] == "R"]
-        done = any(f[0] == "D" for f in recs)
-        msgs = self._messages(acc, path, rows, h, keep, target)
-        try:
-            filled = self._fill_snippets(acc, idx, path, msgs, h)
-        except MailError as e:
-            h.status, h.error = "error", str(e)
-            return
-        sink.extend(msgs[:filled])
-        h.kept += filled
-        if filled < len(msgs):
-            # Coverage may only move down to the oldest message fully handled.
-            if filled:
-                cp["lo"] = min(lo, min(datetime.fromisoformat(m["received"]) for m in msgs[:filled])).isoformat()
-                cps.stage(key, cp)
-            h.status, h.error = "partial", "time budget reached while reading bodies; continues next run"
-            return
-        if done:
+        if complete:
             cp["lo"] = target.isoformat()
         else:
-            if rows:
-                cp["lo"] = min(lo, min(datetime.fromisoformat(f[3]) for f in rows)).isoformat()
+            # Coverage may only move down to the oldest message fully handled.
+            if upto is not None:
+                cp["lo"] = min(lo, upto).isoformat()
             h.status, h.error = "partial", "backfill continues next run"
         cps.stage(key, cp)
         h.covered_from = cp["lo"][:10]
 
+    def track_partial(self, acc, idx, path, h, cps) -> None:
+        """Count runs in a row that left the mailbox partial; past STARVED_RUNS it is an error."""
+        if h.status == "error":
+            return
+        key = self.key(acc, idx, path)
+        cp = dict(cps.get(key) or {})
+        runs = cp.get("partial_runs", 0) + 1 if h.status == "partial" else 0
+        if runs != cp.get("partial_runs", 0):
+            cp["partial_runs"] = runs
+            cps.stage(key, cp)
+        if runs >= STARVED_RUNS:
+            h.status = "error"
+            h.error = (f"still partial after {runs} runs in a row ({h.error}); raise --budget-minutes"
+                       + (" or store an app password" if acc.gmail else ""))
+
     def _fill_snippets(self, acc, idx, path, msgs: list[dict], h: Health) -> int:
         """Fetch bodies in order until the budget ends; returns how many messages are done.
         A message's body is never skipped silently: it is either fetched, reported
-        unavailable by Mail, or left for the next run with the messages after it."""
+        unavailable by Mail (counted in h.unavailable and marked body_unavailable), or
+        left for the next run with the messages after it."""
         name = path.split("/")[-1]
         for i in range(0, len(msgs), 40):
             if self.remaining() <= 0:
@@ -943,7 +1105,8 @@ class AppleMailSource:
                 for m in chunk:
                     t = texts.get(m["_mid_raw"].strip().lower(), "!notfound")
                     if t in ("!notfound", "!unavailable"):
-                        m["snippet"] = ""
+                        m["snippet"], m["body_unavailable"] = "", True
+                        h.unavailable += 1
                         h.error = h.error or "some message bodies were unavailable; classified from subject and sender"
                     else:
                         m["snippet"] = " ".join(t.split())

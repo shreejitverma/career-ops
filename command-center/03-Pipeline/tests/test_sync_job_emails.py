@@ -105,6 +105,12 @@ class SyncTest(unittest.TestCase):
         # Bulk mail still loses, even from a platform domain.
         self.assertFalse(sj.is_job_related(msg("Weekly digest", "digest@myworkdayjobs.com")))
 
+    def test_body_words_never_exclude_a_message(self):
+        recruiter = msg("Quant Developer role", "Dana <dana@talentbridge.test>",
+                        snippet="Hi, in order to submit you to the client I need your right to represent by Friday.")
+        self.assertTrue(sj.is_job_related(recruiter))
+        self.assertFalse(sj.is_job_related(msg("Your order has shipped", "shop@store.test", snippet="interview")))
+
     def test_message_id_makes_one_event_across_sources(self):
         a = msg("Interview invitation", "talent@acmecap.com") | {"message_id": "<ABC@acmecap.com>", "account": "Google"}
         b = a | {"message_id": "abc@acmecap.com", "mailbox": "All Mail", "date": "Monday, September 21, 2026 at 9:00:00 AM"}
@@ -124,6 +130,33 @@ class SyncTest(unittest.TestCase):
         # One of the two re-read messages is the one recorded before; the other is new.
         self.assertEqual(len(fresh), 1)
 
+    def test_legacy_absorption_is_written_down_and_holds_across_runs(self):
+        events_file = self.root / ".sync" / "events.jsonl"
+        other = sj.to_event(msg("Phone screen with Acme Capital", "talent@acmecap.com", date="2026-09-20"), self.trackers, self.root)
+        legacy = sj.to_event(msg("Application update", "no-reply@acmecap.com", date="2026-09-21"), self.trackers, self.root)
+        sj.record([other, legacy], events_file)
+        raw_dated = {**json.loads(other.to_json()), "id": "legacy000000", "date": "Sunday, September 20, 2026 at 9:00:00\u202fAM"}
+        with events_file.open("a") as f:
+            f.write(json.dumps(raw_dated) + "\n")
+        before = events_file.read_text().splitlines(keepends=True)
+        a = msg("Application update", "Acme <no-reply@acmecap.com>", date="2026-09-21") | {"message_id": "a@acme"}
+        b = a | {"message_id": "b@acme"}
+        # Run 1: A is the message recorded before; its Message-ID is written onto that event.
+        self.assertEqual(sj.record([sj.to_event(a, self.trackers, self.root)], events_file), [])
+        after = events_file.read_text().splitlines(keepends=True)
+        self.assertEqual([after[0], after[2]], [before[0], before[2]])
+        self.assertEqual(json.loads(after[1]), json.loads(before[1]) | {"message_id": "a@acme"})
+        self.assertEqual(sj.load_events(events_file)[legacy.id].message_id, "a@acme")
+        # Run 2: B shares A's day, subject and sender but is a different message.
+        fresh = sj.record([sj.to_event(b, self.trackers, self.root)], events_file)
+        self.assertEqual([e.message_id for e in fresh], ["b@acme"])
+        # A read again later is already handled, by record() and by the run's filter.
+        self.assertEqual(sj.record([sj.to_event(a, self.trackers, self.root)], events_file), [])
+        with tempfile.TemporaryDirectory() as d:
+            import mail_sources as ms
+            flt = sj.RunFilter(set(), sj.load_events(events_file), ms.SeenCache(Path(d) / "s.json"), self.trackers)
+        self.assertFalse(flt.keep(a | {"dedicated": False}))
+
     def test_review_reports_sync_health(self):
         health = {"finished_at": "2026-09-30T09:10:00", "mailboxes": [
             {"account": "Exchange", "mailbox": "Inbox", "method": "mail", "status": "ok", "read": 10, "kept": 2, "error": ""},
@@ -138,8 +171,21 @@ class SyncTest(unittest.TestCase):
         self.assertIn("| iCloud | INBOX | login failed: AUTHENTICATIONFAILED |", section)
         self.assertIn("Google/[Gmail]/All Mail", section)
         self.assertIn("app password", section)
+        self.assertNotIn("Every mailbox read completely", section)
         stale = sj.render_review({}, self.trackers, "2026-10-09", root=self.root, health=health)
         self.assertIn("more than two days old", stale)
+
+    def test_review_lists_mailboxes_with_unavailable_bodies(self):
+        health = {"finished_at": "2026-09-30T09:10:00", "mailboxes": [
+            {"account": "Exchange", "mailbox": "Inbox", "method": "mail", "status": "ok", "read": 10, "kept": 4, "unavailable": 3,
+             "error": "some message bodies were unavailable; classified from subject and sender"},
+            {"account": "Exchange", "mailbox": "JOB", "method": "mail", "status": "ok", "read": 5, "kept": 1, "error": ""},
+        ]}
+        section = sj.render_review({}, self.trackers, "2026-09-30", root=self.root, health=health).split("## Sync health")[1]
+        section = section.split("## Needs attention")[0]
+        self.assertIn("- Exchange/Inbox: 3 message(s)", section)
+        self.assertNotIn("Exchange/JOB", section)
+        self.assertNotIn("Every mailbox read completely", section)
 
     def test_fetch_routes_accounts_and_keep_rules(self):
         from types import SimpleNamespace
@@ -154,30 +200,34 @@ class SyncTest(unittest.TestCase):
             def __init__(self, accs, **kw):
                 self.accs = accs
 
-            def fetch(self, cps, keep):
+            def fetch(self, cps, keep, sunk):
                 captured.setdefault(type(self).__name__, []).extend(a.name for a in self.accs)
-                captured["keep"] = keep
+                captured["keep"], captured["sunk"] = keep, sunk
                 return ms.FetchResult()
 
         Imap = type("ImapSource", (FakeSource,), {})
         Mail = type("AppleMailSource", (FakeSource,), {})
-        args = SimpleNamespace(account=None, source="all", backfill_days=30, budget_minutes=1)
+        accounts.append(ms.Account("iCloud", "iCloud account", "me@icloud.com", "p42-imap.mail.me.com"))
+        args = SimpleNamespace(backfill_days=30, budget_minutes=1)
         known = {}
         with mock.patch.object(ms, "enumerate_accounts", return_value=accounts), \
-             mock.patch.object(ms, "keychain_password", side_effect=lambda a: "pw" if a == "me@gmail.com" else None), \
+             mock.patch.object(ms, "keychain_password", side_effect=lambda a: "pw" if a in ("me@gmail.com", "me@icloud.com") else None), \
              mock.patch.object(ms, "ImapSource", Imap), mock.patch.object(ms, "AppleMailSource", Mail), \
              mock.patch.object(ms, "OsaRunner", lambda: None):
             with tempfile.TemporaryDirectory() as d:
                 sj.fetch_messages(args, known, ms.Checkpoints(Path(d) / "c.json"), ms.SeenCache(Path(d) / "s.json"), self.trackers)
-        self.assertEqual(captured["ImapSource"], ["Google"])
+        self.assertEqual(captured["ImapSource"], ["Google", "iCloud"])
         self.assertEqual(captured["AppleMailSource"], ["Personal", "Exchange"])
-        keep = captured["keep"]
+        keep, sunk = captured["keep"], captured["sunk"]
         base = {"account": "Google", "mailbox": "INBOX", "date": "2026-09-20", "snippet": "", "dedicated": False}
         self.assertFalse(keep(base | {"subject": "[me/x] Run failed", "sender": "notifications@github.com", "message_id": "a"}))
         self.assertFalse(keep(base | {"subject": "Your Uber receipt", "sender": "uber@uber.com", "message_id": "b"}))
         self.assertTrue(keep(base | {"subject": "Your order interview slot", "sender": "x@y.com", "message_id": "c", "dedicated": True}))
-        self.assertTrue(keep(base | {"subject": "Hello", "sender": "friend@example.com", "message_id": "d"}))
-        self.assertFalse(keep(base | {"subject": "Hello", "sender": "friend@example.com", "message_id": "d"}))  # once per run
+        hello = base | {"subject": "Hello", "sender": "friend@example.com", "message_id": "d"}
+        self.assertTrue(keep(hello))
+        self.assertTrue(keep(hello))  # read but not delivered (its mailbox failed): another mailbox may deliver it
+        sunk(hello)
+        self.assertFalse(keep(hello))  # delivered once per run
         self.assertFalse(keep(base | {"subject": "Re: Interview", "sender": "Me <p@gmail.com>", "message_id": "e"}))  # own address
 
     def test_body_signals_need_job_phrasing(self):
@@ -196,6 +246,58 @@ class SyncTest(unittest.TestCase):
         self.assertIn("Re: SIG / Susquehanna", review.split("## Possible untracked applications")[1].split("## Last")[0])
         self.assertTrue(sj.is_noise("Arrested Mid-Interview", "WSJ <access@interactive.wsj.com>"))
         self.assertTrue(sj.is_noise("COPA Weekly Event Schedule", "COPA <copa@school.edu>"))
+
+    def run_main(self, fetch, argv=("--notify",)):
+        """main() against a temporary state directory, no trackers, and fetch_messages replaced."""
+        import contextlib
+        import io
+        from unittest import mock
+        state = self.root / ".sync"
+        state.mkdir(exist_ok=True)
+        notes = []
+        with mock.patch.multiple(sj, EVENTS=state / "events.jsonl", CHECKPOINTS=state / "checkpoints.json",
+                                 SEEN=state / "seen.json", HEALTH=state / "health.json",
+                                 REVIEW=self.root / "_Inbox-Review.md", load_trackers=list,
+                                 fetch_messages=fetch, notify=notes.append), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = sj.main([*argv, "--today", "2026-09-30"])
+        return code, notes, state
+
+    def test_a_run_that_cannot_read_mail_is_loud(self):
+        def broken(*a, **k):
+            raise RuntimeError("Mail automation is not allowed")
+
+        code, notes, state = self.run_main(broken)
+        self.assertEqual(code, 2)
+        self.assertEqual(len(notes), 1)
+        [row] = json.loads((state / "health.json").read_text())["mailboxes"]
+        self.assertEqual((row["account"], row["status"]), ("all accounts", "error"))
+        self.assertIn("Mail automation is not allowed", row["error"])
+        review = (self.root / "_Inbox-Review.md").read_text()
+        self.assertIn("Mail automation is not allowed", review.split("## Sync health")[1].split("## Needs attention")[0])
+
+    def test_corrupt_state_file_is_reported_as_an_error(self):
+        import mail_sources as ms
+        (self.root / ".sync").mkdir()
+        (self.root / ".sync" / "checkpoints.json").write_text("{truncated")
+        code, notes, state = self.run_main(lambda *a, **k: ms.FetchResult())
+        self.assertEqual(code, 2)
+        self.assertTrue((state / "checkpoints.json.corrupt").exists())
+        rows = json.loads((state / "health.json").read_text())["mailboxes"]
+        self.assertEqual([(r["mailbox"], r["status"]) for r in rows], [("checkpoints.json", "error")])
+        self.assertEqual(len(notes), 1)
+
+    def test_bodiless_message_is_not_marked_seen_unless_recorded(self):
+        import mail_sources as ms
+        base = {"account": "Exchange", "mailbox": "Inbox", "date": "2026-09-29", "snippet": "", "dedicated": False,
+                "body_unavailable": True}
+        unrecorded = base | {"subject": "Hello", "sender": "friend@example.com", "message_id": "x@friend"}
+        recorded = base | {"subject": "Interview invitation", "sender": "talent@acmecap.com", "message_id": "y@acme"}
+        whole = base | {"subject": "Lunch", "sender": "friend@example.com", "message_id": "z@friend", "body_unavailable": False}
+        code, _, state = self.run_main(lambda *a, **k: ms.FetchResult(messages=[unrecorded, recorded, whole]), argv=())
+        self.assertEqual(code, 0)
+        seen = ms.SeenCache(state / "seen.json")
+        self.assertEqual([seen.has(m) for m in ("x@friend", "y@acme", "z@friend")], [False, True, True])
 
     def test_record_is_idempotent(self):
         events_file = self.root / ".sync" / "events.jsonl"

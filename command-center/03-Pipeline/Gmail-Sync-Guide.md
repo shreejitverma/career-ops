@@ -165,16 +165,22 @@ Only outgoing and system folders are skipped (Sent, Drafts, Outbox, Notes, Tasks
 
 Guarantees:
 
-- Each mailbox has a checkpoint of what was actually read (`.sync/checkpoints.json`): the last IMAP UID, or for Mail.app the time range read.
+- Each mailbox has a checkpoint of what was actually read (`.sync/checkpoints.json`): the last IMAP UID, or for Mail.app the time range read and any stretch inside it still unread.
   It moves forward only after the messages it covers were recorded, so a failed, interrupted or budget-limited run re-reads instead of skipping.
 - IMAP is exact: a message that arrives late still gets a higher UID than the checkpoint.
   Mail.app re-reads two days before the last run to catch mail it downloaded late.
-- The first run, and any later `--backfill-days N`, reads back N days (default 180) in resumable steps: new mail everywhere first, then older mail with the time left (`--budget-minutes`, default 45).
+- Mail.app reads in budgeted steps that resume where they stopped (`--budget-minutes`, default 45): new mail in every mailbox first, then any stretch an earlier run left unread, then older mail back to the backfill window (`--backfill-days N`, default 180).
+  After a long absence, a run that cannot read all the new mail keeps what it read and records the stretch between it and the previous run as unread; later runs read that stretch, newest first, without reading the covered mail again.
+  A scan cut short starts at the mailbox it stopped in next time, after the job folders, so no mailbox is starved by the ones before it.
+- Consecutive Mail.app chunk reads overlap by a few positions, so a message deleted or moved between two reads cannot push another past the reader.
 - Mail from applicant-tracking and assessment platforms, or from a tracker's recruiter domain, counts as job mail even without job wording; bulk mail (CI notifications, newsletters, marketing, job-alert digests) does not.
 - A message seen twice (two labels, both sources, overlapping runs) is recorded once.
+- A message is counted as handled only once it is delivered: when a job label fails after reading a header, All Mail still delivers the same message.
 - Every run records per-mailbox health (`.sync/health.json`).
-  The top of [[_Inbox-Review]] lists any mailbox that failed or fell behind, and warns when the last run is more than two days old.
-  A failed mailbox also sets exit status 2 and posts a macOS notification.
+  The top of [[_Inbox-Review]] lists any mailbox that failed or fell behind, any mailbox whose message bodies Mail could not return (with how many; those messages are classified from subject and sender, and retried while still inside the two-day re-read window unless recorded), and warns when the last run is more than two days old.
+  A mailbox still partial after three runs in a row is listed as failed.
+- A failed mailbox, a run that cannot read mail at all (for example Mail automation denied, or Mail not answering), and an unreadable state file all set exit status 2, appear in the review, and post a macOS notification.
+  An unreadable `checkpoints.json` or `seen.json` is moved aside as `*.corrupt`; the mail it covered is read again, never skipped.
 
 ### Store app passwords (once per address)
 
@@ -194,7 +200,6 @@ Useful commands:
 python3 sync_job_emails.py --doctor             # accounts, read method, passwords, coverage
 python3 sync_job_emails.py --dry-run            # read and report, write nothing
 python3 sync_job_emails.py --backfill-days 365 --apply  # extend coverage a year back (resumable)
-python3 sync_job_emails.py --account Google     # one account only (repeatable)
 python3 sync_job_emails.py --from-json FILE     # replay a saved export, no Mail needed
 python3 normalize_trackers.py                   # check trackers against _Application-Schema
 python3 -m unittest discover -s tests           # behavior tests
