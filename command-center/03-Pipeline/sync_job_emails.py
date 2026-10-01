@@ -635,7 +635,7 @@ def doctor(args) -> int:
     """Accounts, how each is read, whether its app password is stored, and its coverage."""
     runner = ms.OsaRunner()
     accounts = ms.enumerate_accounts(runner)
-    cps = ms.Checkpoints(CHECKPOINTS)
+    cps = ms.Checkpoints(CHECKPOINTS, dry_run=True)  # --doctor only reads
     health = json.loads(HEALTH.read_text()) if HEALTH.exists() else {}
     print(f"accounts[{len(accounts)}]{{account,method,mailboxes,covered_from,last_run_errors}}:")
     missing = []
@@ -700,7 +700,7 @@ def main(argv: list[str] | None = None) -> int:
         msgs, health_rows, cps, seen = json.loads(args.from_json.read_text()), [], None, None
     else:
         try:
-            cps, seen = ms.Checkpoints(CHECKPOINTS), ms.SeenCache(SEEN)
+            cps, seen = ms.Checkpoints(CHECKPOINTS, dry_run=args.dry_run), ms.SeenCache(SEEN, dry_run=args.dry_run)
             result = fetch_messages(args, known, cps, seen, trackers)
         except Exception as e:  # noqa: BLE001 - reported in health, the review, the exit code and a notification
             traceback.print_exc()

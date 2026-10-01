@@ -490,6 +490,37 @@ class AppleMailTest(unittest.TestCase):
                 self.assertEqual(len(deleted), 2)
                 self.assertEqual({ms.clean_mid(m[3]) for m in msgs} - returned, set())
 
+    def test_slow_accounts_take_turns_when_the_budget_fits_only_one(self):
+        """Live failure: with several Gmail-fallback accounts and a small budget, the first
+        one read its new mail every run and the others were never reached."""
+        clock = Clock()
+        boxes, accs = {}, []
+        for k, name in enumerate(["G1", "G2", "G3"]):
+            boxes[(name, 3)] = {"name": "All Mail", "msgs": [mk(1000 * k + i, NOW - timedelta(hours=i)) for i in range(40)]}
+            accs.append(ms.Account(name, "imap account", f"{name.lower()}@gmail.com", "imap.gmail.com", [(3, "[Gmail]/All Mail")]))
+        fake = FakeMail(boxes, clock, cost_per_msg=1.0)
+        reached = {a.name: 0 for a in accs}
+        returned: set[str] = set()
+        now = NOW
+        for run in range(6):
+            cps = ms.Checkpoints(self.cps_path)
+            seen = set(returned)
+
+            def keep(m):
+                if m["message_id"] in seen:
+                    return False
+                seen.add(m["message_id"])
+                return True
+
+            fake.now = now
+            res = ms.AppleMailSource(accs, backfill_days=1, budget_s=70, runner=fake, now=now, clock=fake.clock).fetch(cps, keep)
+            cps.commit()
+            for m in res.messages:
+                returned.add(m["message_id"])
+                reached[m["account"]] += 1
+            now += timedelta(hours=1)
+        self.assertTrue(all(n > 0 for n in reached.values()), reached)
+
     def test_moved_mailbox_is_an_error_and_not_checkpointed(self):
         clock = Clock()
         fake = FakeMail({("Exchange", 1): {"name": "Renamed", "msgs": [mk(1, NOW)]}}, clock)
@@ -747,6 +778,33 @@ class ImapTest(unittest.TestCase):
         self.assertEqual(self.cps.get("imap:me@gmail.com:[Gmail]/All Mail")["last_uid"], 1)
 
 
+class OsaRunnerTest(unittest.TestCase):
+    def test_mail_crash_is_recovered_with_one_relaunch_and_retry(self):
+        from types import SimpleNamespace as NS
+        calls = []
+        replies = iter([NS(returncode=1, stdout="", stderr="execution error: Application isn\u2019t running. (-600)"),
+                        NS(returncode=0, stdout="", stderr=""),            # open -g -a Mail
+                        NS(returncode=1, stdout="", stderr="not yet"),     # Mail still starting
+                        NS(returncode=0, stdout="9", stderr=""),           # Mail answers
+                        NS(returncode=0, stdout="rows\n", stderr="")])    # retried call
+        def run(cmd, **kw):
+            calls.append(cmd[:3])
+            return next(replies)
+        r = ms.OsaRunner(run=run, sleep=lambda s: None)
+        self.assertEqual(r("scan", ["Google", "x", 10, 25, 5], 60), "rows")
+        self.assertEqual([c[0] for c in calls], ["osascript", "open", "osascript", "osascript", "osascript"])
+
+    def test_other_errors_are_not_retried(self):
+        from types import SimpleNamespace as NS
+        calls = []
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return NS(returncode=1, stdout="", stderr="mailbox moved: expected Inbox, found X")
+        with self.assertRaises(ms.MailError):
+            ms.OsaRunner(run=run, sleep=lambda s: None)("scanfrom", ["Exchange", 1, "Inbox", 1, 2, 3, 25, 5], 60)
+        self.assertEqual(len(calls), 1)
+
+
 class HelpersTest(unittest.TestCase):
     def test_parse_list_handles_quotes_and_literals(self):
         rows = ms.parse_list([b'(\\HasNoChildren \\All) "/" "[Gmail]/All Mail"', b'(\\Noselect) "/" "[Gmail]"',
@@ -785,10 +843,30 @@ class HelpersTest(unittest.TestCase):
                 p.write_text(text)
                 state = cls(p)
                 self.assertEqual(state.data, {})
-                self.assertIn(f"moved to {name}.corrupt", state.problem)
+                self.assertIn(f"moved to {name}.corrupt-", state.problem)
                 self.assertFalse(p.exists())
-                self.assertEqual((Path(d) / f"{name}.corrupt").read_text(), text)
+                [aside] = list(Path(d).glob(f"{name}.corrupt-*"))
+                self.assertEqual(aside.read_text(), text)
             self.assertEqual(ms.Checkpoints(Path(d) / "missing.json").problem, "")
+
+    def test_dry_run_reports_corrupt_state_but_leaves_it_in_place(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "checkpoints.json"
+            p.write_text("{truncated")
+            state = ms.Checkpoints(p, dry_run=True)
+            self.assertEqual(state.data, {})
+            self.assertIn("left in place", state.problem)
+            self.assertEqual(p.read_text(), "{truncated")
+            self.assertEqual(list(Path(d).glob("*.corrupt*")), [])
+
+    def test_a_second_corruption_never_overwrites_the_first_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "seen.json"
+            for text in ("[1]", "[2]"):
+                p.write_text(text)
+                ms.SeenCache(p)
+            copies = sorted(x.read_text() for x in Path(d).glob("seen.json.corrupt-*"))
+            self.assertEqual(copies, ["[1]", "[2]"])
 
     def test_seen_cache_prunes_old_entries(self):
         with tempfile.TemporaryDirectory() as d:

@@ -72,6 +72,8 @@ RESERVE_SHARE = 0.3
 CHUNK_OVERLAP = 5
 # A mailbox still partial after this many runs in a row is reported as an error.
 STARVED_RUNS = 3
+# Checkpoint key holding scheduling state (which slow account goes first next run).
+SCHEDULE_KEY = "_schedule"
 BODY_BYTES = 65536
 
 # Outgoing and system folders; never incoming mail about an application.
@@ -139,10 +141,11 @@ def atomic_write_json(path: Path, value) -> None:
     tmp.replace(path)
 
 
-def load_state(path: Path) -> tuple[dict, str]:
+def load_state(path: Path, *, move_aside: bool = True) -> tuple[dict, str]:
     """A state file's contents and a problem report. A file that is not a JSON object is
-    moved aside to <name>.corrupt and reported; the empty state that replaces it costs a
-    re-read, never a miss."""
+    moved aside to <name>.corrupt-<timestamp> (never overwriting an earlier copy) and
+    reported; the empty state that replaces it costs a re-read, never a miss. With
+    move_aside=False (dry runs, --doctor) the file is only reported and left in place."""
     if not path.exists():
         return {}, ""
     try:
@@ -151,7 +154,14 @@ def load_state(path: Path) -> tuple[dict, str]:
         data = None
     if isinstance(data, dict):
         return data, ""
-    aside = path.with_name(path.name + ".corrupt")
+    if not move_aside:
+        return {}, f"{path.name} is unreadable; left in place (dry run), a real run moves it aside and re-reads mail"
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    aside = path.with_name(f"{path.name}.corrupt-{stamp}")
+    n = 1
+    while aside.exists():
+        n += 1
+        aside = path.with_name(f"{path.name}.corrupt-{stamp}-{n}")
     path.replace(aside)
     return {}, f"{path.name} was unreadable; moved to {aside.name} and rebuilt by re-reading mail"
 
@@ -162,9 +172,9 @@ class Checkpoints:
     """Per-mailbox coverage. Sources stage updates; the caller commits them only
     after the messages they cover were recorded."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, dry_run: bool = False):
         self.path = path
-        self.data, self.problem = load_state(path)
+        self.data, self.problem = load_state(path, move_aside=not dry_run)
         self.staged: dict[str, dict] = {}
 
     def get(self, key: str) -> dict | None:
@@ -183,9 +193,9 @@ class Checkpoints:
 class SeenCache:
     """Message ids read in the last `days`, so overlap re-reads skip the slow body fetch."""
 
-    def __init__(self, path: Path, days: int = 30):
+    def __init__(self, path: Path, days: int = 30, *, dry_run: bool = False):
         self.path, self.days = path, days
-        self.data, self.problem = load_state(path)
+        self.data, self.problem = load_state(path, move_aside=not dry_run)
 
     @staticmethod
     def key(mid: str) -> str:
@@ -700,14 +710,22 @@ on run argv
         if found is missing value then
           set out to out & want & US & "!notfound" & RS
         else
+          -- The raw RFC 822 source, decoded in Python: `content` makes Mail render HTML
+          -- mail through WebKit, which crashed Mail (SIGSEGV in NSHTMLReader) live.
           set t to "!unavailable"
           try
             with timeout of 30 seconds
-              set t to content of found
+              set t to source of found
             end timeout
           end try
           if t is missing value then set t to ""
           if (length of t) > limit then set t to text 1 thru limit of t
+          -- Our field and record separators must not appear inside the payload.
+          set AppleScript's text item delimiters to {US, RS}
+          set parts to text items of t
+          set AppleScript's text item delimiters to " "
+          set t to parts as text
+          set AppleScript's text item delimiters to ""
           set out to out & want & US & t & RS
         end if
       end repeat
@@ -731,12 +749,36 @@ class OsaRunner:
     """Runs the scripts above with osascript; arguments go through argv, never
     into the script text."""
 
-    def __call__(self, op: str, args: list[str], timeout: float) -> str:
+    # "Application isn't running" and "Connection is invalid": Mail quit or crashed mid-run.
+    MAIL_GONE_RE = re.compile(r"\((-600|-609)\)")
+
+    def __init__(self, run=subprocess.run, sleep=time.sleep):
+        self.run, self.sleep = run, sleep
+
+    def _once(self, op: str, args: list[str], timeout: float):
         try:
-            p = subprocess.run(["osascript", "-", *map(str, args)], input=APPLESCRIPT[op], capture_output=True,
-                               text=True, timeout=max(30, timeout))
+            return self.run(["osascript", "-", *map(str, args)], input=APPLESCRIPT[op], capture_output=True,
+                            text=True, timeout=max(30, timeout))
         except subprocess.TimeoutExpired as e:
             raise MailError(f"{op}: timed out after {int(timeout)}s") from e
+
+    def relaunch_mail(self) -> bool:
+        """Start Mail again in the background and wait (up to 2 minutes) until it answers."""
+        self.run(["open", "-g", "-a", "Mail"], capture_output=True, text=True, timeout=60)
+        for _ in range(24):
+            self.sleep(5)
+            p = self.run(["osascript", "-e", 'tell application "Mail" to count of accounts'],
+                         capture_output=True, text=True, timeout=60)
+            if p.returncode == 0:
+                return True
+        return False
+
+    def __call__(self, op: str, args: list[str], timeout: float) -> str:
+        p = self._once(op, args, timeout)
+        if p.returncode != 0 and self.MAIL_GONE_RE.search(p.stderr) and op != "check":
+            # One crash must not fail every mailbox after it: relaunch and retry once.
+            if self.relaunch_mail():
+                p = self._once(op, args, timeout)
         if p.returncode != 0:
             raise MailError(f"{op}: {p.stderr.strip()[:300]}")
         return p.stdout.rstrip("\n")
@@ -887,6 +929,14 @@ class AppleMailSource:
         # Gmail through Mail.app takes seconds per message; everything else is fast.
         fast = [a for a in self.accounts if not a.gmail]
         slow = [a for a in self.accounts if a.gmail]
+        # Slow accounts take turns going first, so a budget that fits only some of them
+        # never starves the same ones run after run (seen live: the first Gmail account
+        # used the whole slow share every run).
+        sched = dict(cps.get(SCHEDULE_KEY) or {})
+        names = [a.name for a in slow]
+        if sched.get("slow_start") in names:
+            k = names.index(sched["slow_start"])
+            slow = slow[k:] + slow[:k]
         plans: dict[tuple[str, int], tuple[Account, str, Health]] = {}
         for acc in fast + slow:
             for idx, path in self.selected(acc):
@@ -907,6 +957,12 @@ class AppleMailSource:
         self.floor = max(0.0, reserve - (before - self.remaining()))
         for acc in slow:
             self.new_mail(acc, plans, cps, keep, sink)
+        if slow:
+            # Next run starts with the first slow account whose new mail was not fully read,
+            # or, when all were, with the one after this run's first.
+            behind = next((a.name for a in slow
+                           if any(h.status != "ok" for (n, _), (_, _, h) in plans.items() if n == a.name)), None)
+            cps.stage(SCHEDULE_KEY, {"slow_start": behind or slow[1 % len(slow)].name})
         self.floor = 0.0
         if slow:
             self.catch_up("slow", group(slow), cps, keep, sink)
@@ -1171,7 +1227,7 @@ class AppleMailSource:
             chunk = [m for m in msgs[i:i + 40] if m["_mid_raw"]]
             if chunk:
                 pairs = RS.join(US.join([str(m["_pos"]), m["_mid_raw"]]) for m in chunk)
-                raw = self.runner("content", [acc.name, idx, name, pairs, SNIPPET_CHARS], max(600, self.remaining() + 120))
+                raw = self.runner("content", [acc.name, idx, name, pairs, BODY_BYTES], max(600, self.remaining() + 120))
                 texts = {}
                 for f in self.parse(raw):
                     if len(f) >= 2:
@@ -1183,7 +1239,7 @@ class AppleMailSource:
                         h.unavailable += 1
                         h.error = h.error or "some message bodies were unavailable; classified from subject and sender"
                     else:
-                        m["snippet"] = " ".join(t.split())
+                        m["snippet"] = text_snippet(t.encode("utf-8", "replace"))
             for m in msgs[i:i + 40]:
                 m.pop("_pos", None)
                 m.pop("_mid_raw", None)

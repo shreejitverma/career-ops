@@ -342,7 +342,7 @@ class SyncTest(unittest.TestCase):
         (self.root / ".sync" / "checkpoints.json").write_text("{truncated")
         code, notes, state = self.run_main(lambda *a, **k: ms.FetchResult())
         self.assertEqual(code, 2)
-        self.assertTrue((state / "checkpoints.json.corrupt").exists())
+        self.assertEqual(len(list(state.glob("checkpoints.json.corrupt-*"))), 1)
         rows = json.loads((state / "health.json").read_text())["mailboxes"]
         self.assertEqual([(r["mailbox"], r["status"]) for r in rows], [("checkpoints.json", "error")])
         self.assertEqual(len(notes), 1)
