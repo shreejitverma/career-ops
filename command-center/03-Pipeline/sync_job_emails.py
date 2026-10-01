@@ -607,6 +607,8 @@ def fetch_messages(args, known: dict[str, Event], cps: ms.Checkpoints, seen: ms.
     """Route every account to its most complete source and read everything new."""
     runner = ms.OsaRunner()
     accounts = ms.enumerate_accounts(runner)
+    if not accounts:
+        raise ms.MailError("Mail.app reported no accounts; nothing was read")
     # Mail from any of your own addresses is outgoing, wherever it was filed or copied.
     flt = RunFilter({a.user.lower() for a in accounts if a.user}, known, seen, trackers)
     imap_accs = [a for a in accounts if a.imap_capable and ms.keychain_password(a.user)]
@@ -622,6 +624,8 @@ def fetch_messages(args, known: dict[str, Event], cps: ms.Checkpoints, seen: ms.
                                runner=runner).fetch(cps, flt.keep, flt.sunk)
         result.messages += r.messages
         result.health += r.health
+    if not result.health:
+        raise ms.MailError(f"no mailboxes selected in {len(accounts)} account(s); nothing was read")
     return result
 
 

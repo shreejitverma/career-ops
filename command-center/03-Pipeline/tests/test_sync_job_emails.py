@@ -246,7 +246,7 @@ class SyncTest(unittest.TestCase):
             def fetch(self, cps, keep, sunk):
                 captured.setdefault(type(self).__name__, []).extend(a.name for a in self.accs)
                 captured["keep"], captured["sunk"] = keep, sunk
-                return ms.FetchResult()
+                return ms.FetchResult(health=[ms.Health(a.name, "INBOX", "fake") for a in self.accs])
 
         Imap = type("ImapSource", (FakeSource,), {})
         Mail = type("AppleMailSource", (FakeSource,), {})
@@ -318,6 +318,23 @@ class SyncTest(unittest.TestCase):
         self.assertIn("Mail automation is not allowed", row["error"])
         review = (self.root / "_Inbox-Review.md").read_text()
         self.assertIn("Mail automation is not allowed", review.split("## Sync health")[1].split("## Needs attention")[0])
+
+    def test_mail_reporting_no_accounts_or_mailboxes_is_loud(self):
+        import mail_sources as ms
+        from unittest import mock
+        fetch = sj.fetch_messages
+        no_accounts = ""
+        no_mailboxes = ms.US.join(["A", "Exchange", "account", "me@school.edu", "missing value"])
+        for answer, expected in ((no_accounts, "no accounts"), (no_mailboxes, "no mailboxes")):
+            with self.subTest(expected), mock.patch.object(ms, "OsaRunner", lambda: lambda op, args, t: answer):
+                code, notes, state = self.run_main(fetch)
+                self.assertEqual(code, 2)
+                self.assertEqual(len(notes), 1)
+                [row] = json.loads((state / "health.json").read_text())["mailboxes"]
+                self.assertEqual((row["account"], row["status"]), ("all accounts", "error"))
+                self.assertIn(expected, row["error"])
+                review = (self.root / "_Inbox-Review.md").read_text()
+                self.assertNotIn("Every mailbox read completely", review)
 
     def test_corrupt_state_file_is_reported_as_an_error(self):
         import mail_sources as ms
