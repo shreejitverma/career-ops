@@ -55,7 +55,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from html import unescape
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, ClassVar, Iterable
 
 KEYCHAIN_SERVICE = "career-ops-mail"
 # Re-read this much before the last covered time: Mail.app can download a
@@ -155,7 +155,7 @@ def load_state(path: Path, *, move_aside: bool = True) -> tuple[dict, str]:
     if isinstance(data, dict):
         return data, ""
     if not move_aside:
-        return {}, f"{path.name} is unreadable; left in place (dry run), a real run moves it aside and re-reads mail"
+        return {}, f"{path.name} is unreadable; left in place (dry run or --doctor), a real run moves it aside and re-reads mail"
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     aside = path.with_name(f"{path.name}.corrupt-{stamp}")
     n = 1
@@ -751,9 +751,12 @@ class OsaRunner:
 
     # "Application isn't running" and "Connection is invalid": Mail quit or crashed mid-run.
     MAIL_GONE_RE = re.compile(r"\((-600|-609)\)")
+    # argv position of the script's own time limit, which a retry must shorten too.
+    LIMIT_ARG: ClassVar[dict[str, int]] = {"scan": 2, "scanfrom": 5}
+    RELAUNCH_WAIT = 120
 
-    def __init__(self, run=subprocess.run, sleep=time.sleep):
-        self.run, self.sleep = run, sleep
+    def __init__(self, run=subprocess.run, sleep=time.sleep, clock=time.monotonic):
+        self.run, self.sleep, self.clock = run, sleep, clock
 
     def _once(self, op: str, args: list[str], timeout: float):
         try:
@@ -762,23 +765,38 @@ class OsaRunner:
         except subprocess.TimeoutExpired as e:
             raise MailError(f"{op}: timed out after {int(timeout)}s") from e
 
+    def _answers(self, cmd: list[str], timeout: float) -> bool:
+        try:
+            return self.run(cmd, capture_output=True, text=True, timeout=max(1, timeout)).returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
     def relaunch_mail(self) -> bool:
         """Start Mail again in the background and wait (up to 2 minutes) until it answers."""
-        self.run(["open", "-g", "-a", "Mail"], capture_output=True, text=True, timeout=60)
-        for _ in range(24):
+        deadline = self.clock() + self.RELAUNCH_WAIT
+        self._answers(["open", "-g", "-a", "Mail"], 60)
+        while self.clock() < deadline:
             self.sleep(5)
-            p = self.run(["osascript", "-e", 'tell application "Mail" to count of accounts'],
-                         capture_output=True, text=True, timeout=60)
-            if p.returncode == 0:
+            if self._answers(["osascript", "-e", 'tell application "Mail" to count of accounts'],
+                             min(60, deadline - self.clock())):
                 return True
         return False
 
     def __call__(self, op: str, args: list[str], timeout: float) -> str:
+        start = self.clock()
         p = self._once(op, args, timeout)
         if p.returncode != 0 and self.MAIL_GONE_RE.search(p.stderr) and op != "check":
-            # One crash must not fail every mailbox after it: relaunch and retry once.
+            # One crash must not fail every mailbox after it: relaunch and retry once,
+            # within what is left of the time this call was given.
             if self.relaunch_mail():
-                p = self._once(op, args, timeout)
+                spent = self.clock() - start
+                args = list(args)
+                if op in self.LIMIT_ARG:
+                    i = self.LIMIT_ARG[op]
+                    args[i] = max(0, int(int(args[i]) - spent))
+                if timeout - spent <= 0 or (op in self.LIMIT_ARG and args[self.LIMIT_ARG[op]] == 0):
+                    raise MailError(f"{op}: Mail relaunched after a crash, but no time is left to retry")
+                p = self._once(op, args, timeout - spent)
         if p.returncode != 0:
             raise MailError(f"{op}: {p.stderr.strip()[:300]}")
         return p.stdout.rstrip("\n")
@@ -958,11 +976,7 @@ class AppleMailSource:
         for acc in slow:
             self.new_mail(acc, plans, cps, keep, sink)
         if slow:
-            # Next run starts with the first slow account whose new mail was not fully read,
-            # or, when all were, with the one after this run's first.
-            behind = next((a.name for a in slow
-                           if any(h.status != "ok" for (n, _), (_, _, h) in plans.items() if n == a.name)), None)
-            cps.stage(SCHEDULE_KEY, {"slow_start": behind or slow[1 % len(slow)].name})
+            cps.stage(SCHEDULE_KEY, {"slow_start": slow[1 % len(slow)].name})
         self.floor = 0.0
         if slow:
             self.catch_up("slow", group(slow), cps, keep, sink)

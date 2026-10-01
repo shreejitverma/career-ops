@@ -632,10 +632,14 @@ def fetch_messages(args, known: dict[str, Event], cps: ms.Checkpoints, seen: ms.
 
 
 def doctor(args) -> int:
-    """Accounts, how each is read, whether its app password is stored, and its coverage."""
+    """Accounts, how each is read, whether its app password is stored, and its coverage.
+    An unreadable state file is reported as an error (exit 2) and left in place."""
+    cps = ms.Checkpoints(CHECKPOINTS, dry_run=True)  # --doctor only reads
+    problems = [state.problem for state in (cps, ms.SeenCache(SEEN, dry_run=True)) if state.problem]
+    for problem in problems:
+        print(f"error: {problem}")
     runner = ms.OsaRunner()
     accounts = ms.enumerate_accounts(runner)
-    cps = ms.Checkpoints(CHECKPOINTS, dry_run=True)  # --doctor only reads
     health = json.loads(HEALTH.read_text()) if HEALTH.exists() else {}
     print(f"accounts[{len(accounts)}]{{account,method,mailboxes,covered_from,last_run_errors}}:")
     missing = []
@@ -654,7 +658,7 @@ def doctor(args) -> int:
         print("iCloud: account.apple.com > App-Specific Passwords). Each command prompts for the password:")
         for a in missing:
             print(f"  security add-generic-password -s {ms.KEYCHAIN_SERVICE} -a {a.user} -T /usr/bin/security -w")
-    return 0
+    return 2 if problems else 0
 
 
 def notify(text: str) -> None:

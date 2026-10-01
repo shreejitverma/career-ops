@@ -521,6 +521,33 @@ class AppleMailTest(unittest.TestCase):
             now += timedelta(hours=1)
         self.assertTrue(all(n > 0 for n in reached.values()), reached)
 
+    def test_a_slow_account_that_errors_every_run_does_not_keep_going_first(self):
+        clock = Clock()
+        boxes, accs = {}, []
+        for k, name in enumerate(["G1", "G2", "G3"]):
+            boxes[(name, 3)] = {"name": "All Mail", "msgs": [mk(1000 * k + i, NOW - timedelta(hours=i)) for i in range(40)]}
+            mailboxes = [(3, "[Gmail]/All Mail")]
+            if name == "G1":
+                boxes[(name, 4)] = {"name": "Renamed", "msgs": []}  # an error row on every run
+                mailboxes.append((4, "Jobs"))
+            accs.append(ms.Account(name, "imap account", f"{name.lower()}@gmail.com", "imap.gmail.com", mailboxes))
+        fake = FakeMail(boxes, clock, cost_per_msg=1.0)
+        reached = {a.name: 0 for a in accs}
+        g1_errors = 0
+        now = NOW
+        for run in range(6):
+            cps = ms.Checkpoints(self.cps_path)
+            fake.now = now
+            res = ms.AppleMailSource(accs, backfill_days=1, budget_s=70, runner=fake, now=now,
+                                     clock=fake.clock).fetch(cps, lambda m: True)
+            cps.commit()
+            g1_errors += any(h.status == "error" for h in res.health if h.account == "G1")
+            for m in res.messages:
+                reached[m["account"]] += 1
+            now += timedelta(hours=1)
+        self.assertGreater(g1_errors, 0)
+        self.assertTrue(all(n > 0 for n in reached.values()), reached)
+
     def test_moved_mailbox_is_an_error_and_not_checkpointed(self):
         clock = Clock()
         fake = FakeMail({("Exchange", 1): {"name": "Renamed", "msgs": [mk(1, NOW)]}}, clock)
@@ -793,6 +820,71 @@ class OsaRunnerTest(unittest.TestCase):
         r = ms.OsaRunner(run=run, sleep=lambda s: None)
         self.assertEqual(r("scan", ["Google", "x", 10, 25, 5], 60), "rows")
         self.assertEqual([c[0] for c in calls], ["osascript", "open", "osascript", "osascript", "osascript"])
+
+    CRASH = "execution error: Application isn’t running. (-600)"
+
+    def scripted(self, replies, clock, costs=None):
+        """A subprocess.run stand-in: each call consumes the next reply (a result, or an
+        exception to raise) and advances the clock by the command's cost."""
+        import subprocess
+        from types import SimpleNamespace as NS
+        calls, replies = [], iter(replies)
+
+        def run(cmd, **kw):
+            calls.append((cmd, kw))
+            clock.t += (costs or {}).get(cmd[0] if cmd[0] != "osascript" or cmd[1] != "-" else "script", 1)
+            r = next(replies)
+            if isinstance(r, BaseException):
+                raise r
+            return NS(returncode=r[0], stdout=r[1], stderr=r[2])
+        return run, calls, subprocess.TimeoutExpired
+
+    def test_relaunch_probe_timeouts_mean_not_answering_yet(self):
+        clock = Clock()
+        import subprocess
+        run, calls, _ = self.scripted([(1, "", self.CRASH), (0, "", ""),
+                                       subprocess.TimeoutExpired("osascript", 60),
+                                       subprocess.TimeoutExpired("osascript", 60),
+                                       (0, "9", ""), (0, "rows\n", "")], clock)
+        r = ms.OsaRunner(run=run, sleep=lambda s: setattr(clock, "t", clock.t + s), clock=clock)
+        self.assertEqual(r("content", ["Google", 3, "All Mail", "x", 1000], 600), "rows")
+        self.assertEqual(len(calls), 6)
+
+    def test_mail_that_never_answers_after_a_crash_is_a_mail_error(self):
+        clock = Clock()
+        import subprocess
+
+        def run(cmd, **kw):
+            clock.t += 1
+            if cmd[:2] == ["osascript", "-"]:
+                from types import SimpleNamespace as NS
+                return NS(returncode=1, stdout="", stderr=self.CRASH)
+            if cmd[0] == "open":
+                raise OSError("open failed")
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        r = ms.OsaRunner(run=run, sleep=lambda s: setattr(clock, "t", clock.t + s), clock=clock)
+        with self.assertRaises(ms.MailError):
+            r("scan", ["Google", "x", 300, 25, 5], 1000)
+        self.assertLessEqual(clock.t, 1 + ms.OsaRunner.RELAUNCH_WAIT + 10)
+
+    def test_retry_after_a_crash_only_gets_the_time_that_is_left(self):
+        clock = Clock()
+        run, calls, _ = self.scripted([(1, "", self.CRASH), (0, "", ""), (0, "9", ""), (0, "rows\n", "")],
+                                      clock, costs={"script": 390, "open": 20})
+        r = ms.OsaRunner(run=run, sleep=lambda s: setattr(clock, "t", clock.t + s), clock=clock)
+        self.assertEqual(r("scanfrom", ["Exchange", 1, "Inbox", 0, 9999, 1000, 200, 5], 1200), "rows")
+        cmd, kw = calls[-1]
+        spent = 390 + 20 + 5 + 1  # first attempt, open, one wait, one probe
+        self.assertEqual(int(cmd[2 + 5]), 1000 - spent)
+        self.assertEqual(kw["timeout"], 1200 - spent)
+
+        clock = Clock()
+        run, calls, _ = self.scripted([(1, "", self.CRASH), (0, "", ""), (0, "9", "")],
+                                      clock, costs={"script": 390, "open": 20})
+        r = ms.OsaRunner(run=run, sleep=lambda s: setattr(clock, "t", clock.t + s), clock=clock)
+        with self.assertRaises(ms.MailError):
+            r("scan", ["Google", "x", 400, 25, 5], 520)
+        self.assertEqual(len(calls), 3)  # no retry: the time limit was used up
 
     def test_other_errors_are_not_retried(self):
         from types import SimpleNamespace as NS

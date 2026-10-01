@@ -185,7 +185,7 @@ Guarantees:
   A mailbox is partial when its new mail was not all read, when a stretch of recent mail is still unread, or when its backfill was given time and did not move; one still partial after three runs in a row is listed as failed and posts the notification.
   A backfill that moved further back is progress, not a failure: the review shows one line per account, "backfill in progress: <account> covered back to <date>, target <date>", and never notifies about it.
 - A failed mailbox, a run that cannot read mail at all (for example Mail automation denied, or Mail not answering), and an unreadable state file all set exit status 2, appear in the review, and post a macOS notification.
-  An unreadable `checkpoints.json` or `seen.json` is moved aside as `*.corrupt-<timestamp>` (an earlier copy is never overwritten; a `--dry-run` or `--doctor` only reports it); the mail it covered is read again, never skipped.
+  An unreadable `checkpoints.json` or `seen.json` is moved aside as `*.corrupt-<timestamp>` (an earlier copy is never overwritten; a `--dry-run` only reports it, and `--doctor` prints an `error:` line and exits 2); the mail it covered is read again, never skipped.
 
 ### Store app passwords (once per address)
 

@@ -233,6 +233,7 @@ class SyncTest(unittest.TestCase):
     def test_fetch_routes_accounts_and_keep_rules(self):
         from types import SimpleNamespace
         from unittest import mock
+
         import mail_sources as ms
         accounts = [ms.Account("Google", "imap account", "me@gmail.com", "imap.gmail.com"),
                     ms.Account("Personal", "imap account", "p@gmail.com", "imap.gmail.com"),
@@ -320,8 +321,9 @@ class SyncTest(unittest.TestCase):
         self.assertIn("Mail automation is not allowed", review.split("## Sync health")[1].split("## Needs attention")[0])
 
     def test_mail_reporting_no_accounts_or_mailboxes_is_loud(self):
-        import mail_sources as ms
         from unittest import mock
+
+        import mail_sources as ms
         fetch = sj.fetch_messages
         no_accounts = ""
         no_mailboxes = ms.US.join(["A", "Exchange", "account", "me@school.edu", "missing value"])
@@ -346,6 +348,32 @@ class SyncTest(unittest.TestCase):
         rows = json.loads((state / "health.json").read_text())["mailboxes"]
         self.assertEqual([(r["mailbox"], r["status"]) for r in rows], [("checkpoints.json", "error")])
         self.assertEqual(len(notes), 1)
+
+    def test_doctor_reports_a_corrupt_state_file_and_leaves_it_in_place(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        import mail_sources as ms
+        state = self.root / ".sync"
+        state.mkdir()
+        for name in ("checkpoints.json", "seen.json"):
+            with self.subTest(name):
+                for f in state.iterdir():
+                    f.unlink()
+                (state / name).write_text("{truncated")
+                out = io.StringIO()
+                with mock.patch.multiple(sj, CHECKPOINTS=state / "checkpoints.json", SEEN=state / "seen.json",
+                                         HEALTH=state / "health.json"), \
+                     mock.patch.object(ms, "enumerate_accounts", return_value=[]), \
+                     mock.patch.object(ms, "OsaRunner", lambda: None), contextlib.redirect_stdout(out):
+                    code = sj.main(["--doctor"])
+                self.assertEqual(code, 2)
+                errors = [line for line in out.getvalue().splitlines() if line.startswith("error:")]
+                self.assertEqual(len(errors), 1)
+                self.assertIn(name, errors[0])
+                self.assertEqual((state / name).read_text(), "{truncated")
+                self.assertEqual([f.name for f in state.iterdir()], [name])
 
     def test_bodiless_message_is_not_marked_seen_unless_recorded(self):
         import mail_sources as ms
