@@ -175,6 +175,19 @@ class SyncTest(unittest.TestCase):
         stale = sj.render_review({}, self.trackers, "2026-10-09", root=self.root, health=health)
         self.assertIn("more than two days old", stale)
 
+    def test_review_counts_only_real_mailboxes_when_state_was_corrupt(self):
+        health = {"finished_at": "2026-09-30T09:10:00", "mailboxes": [
+            {"account": "Exchange", "mailbox": "Inbox", "method": "mail", "status": "ok", "read": 10, "kept": 2, "error": ""},
+            {"account": "iCloud", "mailbox": "INBOX", "method": "imap", "status": "ok", "read": 3, "kept": 1, "error": ""},
+            {"account": "all accounts", "mailbox": "checkpoints.json", "method": "state", "status": "error", "read": 0,
+             "kept": 0, "error": "checkpoints.json was unreadable; moved to checkpoints.json.corrupt-x"},
+            {"account": "all accounts", "mailbox": "seen.json", "method": "state", "status": "error", "read": 0,
+             "kept": 0, "error": "seen.json was unreadable; moved to seen.json.corrupt-x"},
+        ]}
+        section = sj.render_review({}, self.trackers, "2026-09-30", root=self.root, health=health).split("## Sync health")[1]
+        self.assertIn("2 mailboxes in 2 accounts", section)
+        self.assertIn("| all accounts | checkpoints.json | checkpoints.json was unreadable", section)
+
     def test_review_lists_mailboxes_with_unavailable_bodies(self):
         health = {"finished_at": "2026-09-30T09:10:00", "mailboxes": [
             {"account": "Exchange", "mailbox": "Inbox", "method": "mail", "status": "ok", "read": 10, "kept": 4, "unavailable": 3,

@@ -673,15 +673,20 @@ on run argv
   return out & "D" & US & ix & RS
 end run""",
     # Body text of the given messages. argv: account, index, name, records of
-    # position US message-id joined by RS, max chars. Positions shift when new
-    # mail arrives, so a Message-ID mismatch searches the neighbourhood. Each
-    # body has its own 30 s limit: one message Mail must download slowly is
-    # returned as !unavailable instead of failing the mailbox.
+    # position US message-id joined by RS, max chars, time limit in seconds.
+    # Positions shift when new mail arrives, so a Message-ID mismatch searches the
+    # neighbourhood. Each body has its own 30 s limit: one message Mail must
+    # download slowly is returned as !unavailable instead of failing the mailbox.
+    # T when the next message could overrun the time limit, after which nothing
+    # else runs; the messages not returned are left for the next run.
     "content": r"""
 on run argv
   set US to ASCII character 31
   set RS to ASCII character 30
   set limit to (item 5 of argv) as integer
+  set limitSecs to (item 6 of argv) as integer
+  set t0 to current date
+  set perMsg to 0
   set AppleScript's text item delimiters to RS
   set pairs to text items of (item 4 of argv)
   set AppleScript's text item delimiters to ""
@@ -692,6 +697,9 @@ on run argv
       if (name of mb) is not (item 3 of argv) then error "mailbox moved: expected " & (item 3 of argv) & ", found " & (name of mb)
       set n to count of messages of mb
       repeat with pr in pairs
+        -- Stop before a message that would overrun the limit, as slow as the slowest yet.
+        if ((current date) - t0) + perMsg > limitSecs then return out & "T" & RS
+        set c0 to current date
         set AppleScript's text item delimiters to US
         set ix to (text item 1 of pr) as integer
         set want to text item 2 of pr
@@ -728,6 +736,7 @@ on run argv
           set AppleScript's text item delimiters to ""
           set out to out & want & US & t & RS
         end if
+        if ((current date) - c0) > perMsg then set perMsg to ((current date) - c0)
       end repeat
     end tell
   end timeout
@@ -752,7 +761,7 @@ class OsaRunner:
     # "Application isn't running" and "Connection is invalid": Mail quit or crashed mid-run.
     MAIL_GONE_RE = re.compile(r"\((-600|-609)\)")
     # argv position of the script's own time limit, which a retry must shorten too.
-    LIMIT_ARG: ClassVar[dict[str, int]] = {"scan": 2, "scanfrom": 5}
+    LIMIT_ARG: ClassVar[dict[str, int]] = {"scan": 2, "scanfrom": 5, "content": 5}
     RELAUNCH_WAIT = 120
 
     def __init__(self, run=subprocess.run, sleep=time.sleep, clock=time.monotonic):
@@ -1238,14 +1247,27 @@ class AppleMailSource:
         for i in range(0, len(msgs), 40):
             if self.available() <= 0:
                 return i
-            chunk = [m for m in msgs[i:i + 40] if m["_mid_raw"]]
+            batch = msgs[i:i + 40]
+            chunk = [m for m in batch if m["_mid_raw"]]
             if chunk:
                 pairs = RS.join(US.join([str(m["_pos"]), m["_mid_raw"]]) for m in chunk)
-                raw = self.runner("content", [acc.name, idx, name, pairs, BODY_BYTES], max(600, self.remaining() + 120))
-                texts = {}
+                # The script stops itself at the limit; the timeout only covers the
+                # one message in flight when it does.
+                raw = self.runner("content", [acc.name, idx, name, pairs, BODY_BYTES, int(self.available())],
+                                  self.remaining() + 120)
+                texts, cut = {}, False
                 for f in self.parse(raw):
                     if len(f) >= 2:
                         texts[f[0].strip().lower()] = f[1]
+                    elif f == ["T"]:
+                        cut = True
+                if cut:
+                    # Bodies come back in order: everything from the first one not
+                    # returned is left for the next run.
+                    left = next((n for n, m in enumerate(batch)
+                                 if m["_mid_raw"] and m["_mid_raw"].strip().lower() not in texts), len(batch))
+                    batch = batch[:left]
+                    chunk = [m for m in batch if m["_mid_raw"]]
                 for m in chunk:
                     t = texts.get(m["_mid_raw"].strip().lower(), "!notfound")
                     if t in ("!notfound", "!unavailable"):
@@ -1254,7 +1276,9 @@ class AppleMailSource:
                         h.error = h.error or "some message bodies were unavailable; classified from subject and sender"
                     else:
                         m["snippet"] = text_snippet(t.encode("utf-8", "replace"))
-            for m in msgs[i:i + 40]:
+            for m in batch:
                 m.pop("_pos", None)
                 m.pop("_mid_raw", None)
+            if len(batch) < len(msgs[i:i + 40]):
+                return i + len(batch)
         return len(msgs)

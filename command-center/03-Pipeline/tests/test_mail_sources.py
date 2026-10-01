@@ -27,10 +27,11 @@ class FakeMail:
     Every call and every message read costs clock time, and the scripts' time
     limits are checked against that clock, so budgets bite as they do for real."""
 
-    def __init__(self, boxes, clock, cost_per_call=1.0, cost_per_msg=0.5, account_cost=None):
+    def __init__(self, boxes, clock, cost_per_call=1.0, cost_per_msg=0.5, account_cost=None, body_cost=0.0):
         self.boxes = boxes  # {(account, index): {"name": str, "msgs": [(datetime, subject, sender, mid, body)]}}
         self.clock = clock
         self.cost_per_call, self.cost_per_msg = cost_per_call, cost_per_msg
+        self.body_cost = body_cost  # clock time per body read by `content`
         self.account_cost = account_cost or {}  # account -> cost per message read, overriding cost_per_msg
         self.now = NOW
         self.calls = []
@@ -135,7 +136,13 @@ class FakeMail:
             if (args[0], int(args[1])) in self.fail_content:
                 raise ms.MailError("content: timed out after 600s")
             by_mid = {m[3].lower(): m for m in msgs}
+            limit, per_msg = int(args[5]), 0.0
             for pair in [r.split(ms.US) for r in args[3].split(ms.RS) if r]:
+                if self.clock.t - start + per_msg > limit:
+                    out.append("T")
+                    return ms.RS.join(out)
+                self.clock.t += self.body_cost
+                per_msg = max(per_msg, self.body_cost)
                 m = by_mid.get(pair[1].lower())
                 self.bodies[pair[1].lower()] += 1
                 out.append(ms.US.join([pair[1], m[4] if m else "!notfound"]))
@@ -275,6 +282,29 @@ class AppleMailTest(unittest.TestCase):
         covered = {ms.clean_mid(m[3]) for m in msgs if m[0] >= lo and m[0] <= NOW}
         self.assertTrue(covered <= returned, "checkpoint claims coverage of messages that were not returned")
         self.assertEqual(res.health[0].status, "partial")
+
+    def test_body_reads_stop_at_the_budget_and_resume_next_run(self):
+        # Seen live: one `content` call for 34 Gmail bodies started at the deadline and
+        # ran 5.5 minutes past it, because body reads had no time limit of their own.
+        clock = Clock()
+        box = {"name": "Job", "msgs": [mk(i, NOW - timedelta(hours=i)) for i in range(34)]}
+        fake = FakeMail({("Google", 5): box}, clock, cost_per_msg=0.1, body_cost=10.0)
+        acc = ms.Account("Google", "imap account", "me@gmail.com", "imap.gmail.com", [(5, "Job")])
+        key, returned = "mail:Google:Job", set()
+        budget = 120
+        res, _ = self.run_once(fake, acc, NOW, budget=budget, returned=returned)
+        self.assertLessEqual(clock.t, budget + fake.body_cost + 2 * fake.cost_per_call)
+        self.assertEqual(res.health[0].status, "partial")
+        self.assertTrue(0 < len(returned) < len(box["msgs"]))
+        self.assert_honest({key: box["msgs"]}, returned)
+        # Bodies not read are neither dropped nor reported missing: later runs read them once.
+        self.assertEqual(res.health[0].unavailable, 0)
+        later = NOW
+        for _ in range(10):
+            later += timedelta(hours=1)
+            self.run_once(fake, acc, later, budget=budget, returned=returned)
+        self.assertEqual(returned, {ms.clean_mid(m[3]) for m in box["msgs"]})
+        self.assertEqual(max(fake.bodies.values()), 1)
 
     def test_budget_cut_in_new_pass_records_the_unread_stretch_and_fills_it(self):
         clock = Clock()
@@ -847,7 +877,7 @@ class OsaRunnerTest(unittest.TestCase):
                                        subprocess.TimeoutExpired("osascript", 60),
                                        (0, "9", ""), (0, "rows\n", "")], clock)
         r = ms.OsaRunner(run=run, sleep=lambda s: setattr(clock, "t", clock.t + s), clock=clock)
-        self.assertEqual(r("content", ["Google", 3, "All Mail", "x", 1000], 600), "rows")
+        self.assertEqual(r("content", ["Google", 3, "All Mail", "x", 1000, 300], 600), "rows")
         self.assertEqual(len(calls), 6)
 
     def test_mail_that_never_answers_after_a_crash_is_a_mail_error(self):

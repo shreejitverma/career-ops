@@ -438,7 +438,9 @@ def health_lines(health: dict | None, today: str) -> list[str]:
     bodiless = [b for b in boxes if b.get("unavailable") or (b["status"] == "ok" and b.get("error"))]
     ran = health.get("finished_at", "")[:16].replace("T", " ")
     stale = health.get("finished_at", "")[:10] < (datetime.fromisoformat(today) - timedelta(days=2)).date().isoformat()
-    lines.append(f"Last run {ran}: {len(boxes)} mailboxes in {len({b['account'] for b in boxes})} accounts, "
+    # A state-file or whole-run error row is reported below, but it is not a mailbox.
+    real = [b for b in boxes if b["method"] not in ("state", "sync")]
+    lines.append(f"Last run {ran}: {len(real)} mailboxes in {len({b['account'] for b in real})} accounts, "
                  f"{sum(b['read'] for b in boxes)} messages read, {sum(b['kept'] for b in boxes)} new to check.")
     if stale:
         lines.append("**The last run is more than two days old: check the launchd job and sync.log.**")
@@ -737,7 +739,7 @@ def main(argv: list[str] | None = None) -> int:
     errors = [h for h in health_rows if h["status"] == "error"]
     partial = [h for h in health_rows if h["status"] == "partial"]
     matched = sum(1 for e in fresh if e.tracker)
-    print(f"[{datetime.now():%Y-%m-%d %H:%M}] mailboxes={len(health_rows)} read={sum(h['read'] for h in health_rows)} "
+    print(f"[{datetime.now():%Y-%m-%d %H:%M}] mailboxes={sum(h['method'] != 'state' for h in health_rows)} read={sum(h['read'] for h in health_rows)} "
           f"checked={len(msgs)} job_related={len(events)} new={len(fresh)} matched={matched} timeline_added={added} "
           f"errors={len(errors)} partial={len(partial)}{' (dry run)' if args.dry_run else ''}")
     for h in errors:
