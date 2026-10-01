@@ -16,13 +16,15 @@ Pipeline:
                or naming a company you track, and keyword matches; bulk mail
                (CI notifications, newsletters, marketing) is dropped.
   3. classify- label each message: offer, rejection, assessment, interview,
-               recruiter, received, or other; suggest the pipeline stage it implies.
+               recruiter, received, reply (a Re:/Fwd: thread), or other; suggest
+               the pipeline stage it implies.
   4. match   - link it to a tracker note by company name or recruiter email domain.
   5. record  - append new events to .sync/events.jsonl, keyed by the message's
                Message-ID, so a message seen twice (two labels, two sources,
                overlapping runs) is recorded once.
-  6. review  - regenerate _Inbox-Review.md: sync health, recent events, and the
-               trackers whose current stage disagrees with what the email suggests.
+  6. review  - regenerate _Inbox-Review.md: sync health, recent events, the
+               trackers whose current stage disagrees with what the email suggests,
+               and every other unmatched job email from the last OTHER_DAYS days.
   7. apply   - with --apply, add one dated line per name-matched event to the tracker's
                "## Timeline" section, tagged with its event id so it is added once.
                Domain-only matches (e.g. an agency recruiter) appear only in the review note.
