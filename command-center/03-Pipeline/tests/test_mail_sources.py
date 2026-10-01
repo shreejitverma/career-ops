@@ -12,6 +12,7 @@ import unittest
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mail_sources as ms  # noqa: E402
@@ -943,6 +944,28 @@ class HelpersTest(unittest.TestCase):
         html = (b"Content-Type: text/html\r\n\r\n<html><style>x{}</style><p>We regret&nbsp;to inform you</p></html>")
         self.assertEqual(ms.text_snippet(html), "We regret to inform you")
         self.assertEqual(ms.text_snippet(b"not a mime message at all"), "not a mime message at all")
+
+    def test_snippet_unknown_charset_returns_body_not_headers(self):
+        raw = (b"Received: from mx.example.com by mail.example.com\r\n"
+               b"DKIM-Signature: v=1; a=rsa-sha256; d=agency.example\r\n"
+               b"Subject: Quick question about your CV\r\n"
+               b"Content-Type: text/plain; charset=unknown-8bit\r\n\r\n"
+               b"We would like to submit you to our client for the C++ position.\r\n")
+        snippet = ms.text_snippet(raw)
+        self.assertEqual(snippet, "We would like to submit you to our client for the C++ position.")
+        self.assertEqual(sj.classify({"subject": "Quick question", "snippet": snippet}), "recruiter")
+
+    def test_snippet_multipart_with_broken_part_returns_readable_text(self):
+        raw = (b'Content-Type: multipart/alternative; boundary="B"\r\n\r\n'
+               b"--B\r\nContent-Type: text/plain; charset=x-no-such-charset\r\n\r\nplain body text\r\n"
+               b"--B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>html body</p>\r\n--B--\r\n")
+        self.assertEqual(ms.text_snippet(raw), "plain body text")
+
+    def test_snippet_unparseable_message_skips_headers(self):
+        raw = b"Received: from x\r\nX-Long: " + b"h" * 3000 + b"\r\n\r\nThe body after the headers"
+        with mock.patch.object(ms.email, "message_from_bytes", side_effect=ValueError("broken")):
+            self.assertEqual(ms.text_snippet(raw), "The body after the headers")
+            self.assertEqual(ms.text_snippet(b"no header block here"), "no header block here")
 
     def test_dedicated_paths(self):
         self.assertTrue(ms.is_dedicated("JOB/Handshake"))

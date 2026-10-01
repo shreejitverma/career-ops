@@ -111,16 +111,29 @@ def html_to_text(html: str) -> str:
     return unescape(re.sub(r"(?s)<[^>]+>", " ", html))
 
 
+HEADER_END_RE = re.compile(rb"\r?\n\r?\n")
+
+
+def _part_text(part) -> str:
+    """A body part's text; an unknown or lying charset is read as UTF-8 with replacement."""
+    try:
+        text = part.get_content()
+    except (LookupError, UnicodeDecodeError):
+        text = (part.get_payload(decode=True) or b"").decode("utf-8", errors="replace")
+    return html_to_text(text) if part.get_content_type() == "text/html" else text
+
+
 def text_snippet(raw: bytes) -> str:
-    """First SNIPPET_CHARS of a message's readable text (plain part, else stripped HTML)."""
+    """First SNIPPET_CHARS of a message's readable text (plain part, else stripped HTML).
+    Header text never stands in for the body: a message that cannot be parsed at all is
+    read from its first blank line on."""
     try:
         msg = email.message_from_bytes(raw, policy=email.policy.default)
         part = msg.get_body(preferencelist=("plain", "html"))
-        text = part.get_content() if part is not None else ""
-        if part is not None and part.get_content_type() == "text/html":
-            text = html_to_text(text)
-    except Exception:  # a truncated or malformed body still yields something below
-        text = raw.decode("utf-8", errors="replace")
+        text = _part_text(part) if part is not None else ""
+    except Exception:  # a truncated or malformed message still yields its body below
+        split = HEADER_END_RE.split(raw, maxsplit=1)
+        text = split[-1].decode("utf-8", errors="replace")
     return " ".join(text.split())[:SNIPPET_CHARS]
 
 
