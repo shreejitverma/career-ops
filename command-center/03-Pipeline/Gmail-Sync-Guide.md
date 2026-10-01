@@ -172,6 +172,7 @@ Guarantees:
 - Mail.app reads in budgeted steps that resume where they stopped (`--budget-minutes`, default 45).
   Per mailbox, new mail comes first, then any stretch an earlier run left unread, then older mail back to the backfill window (`--backfill-days N`, default 180).
   The fast accounts (Exchange, iCloud, everything but Gmail through Mail.app) do all three before the slow Gmail-fallback accounts read their new mail.
+  The slow accounts take turns going first, one step further each run, so a budget that fits only some of them never leaves the same ones unread.
   New-mail reads never spend the last 30% of the budget, which is kept for unread stretches and backfill; while the Gmail-fallback accounts are still to be read, the fast accounts may use half of it, so the slow accounts' unread stretches get the rest.
   Unread stretches and backfill each start at the mailbox the previous run stopped in.
   After a long absence, a run that cannot read all the new mail keeps what it read and records the stretch between it and the previous run as unread; later runs read that stretch, newest first, without reading the covered mail again.
@@ -184,6 +185,7 @@ Guarantees:
   The top of [[_Inbox-Review]] lists any mailbox that failed or fell behind, any mailbox whose message bodies Mail could not return (with how many; those messages are classified from subject and sender, and retried while still inside the two-day re-read window unless recorded), and warns when the last run is more than two days old.
   A mailbox is partial when its new mail was not all read, when a stretch of recent mail is still unread, or when its backfill was given time and did not move; one still partial after three runs in a row is listed as failed and posts the notification.
   A backfill that moved further back is progress, not a failure: the review shows one line per account, "backfill in progress: <account> covered back to <date>, target <date>", and never notifies about it.
+- If Mail quits or crashes mid-run, the sync relaunches it in the background and retries that read once, within the time the read had left; message bodies are read from the raw message source, so Mail never renders HTML mail for the sync.
 - A failed mailbox, a run that cannot read mail at all (for example Mail automation denied, or Mail not answering), and an unreadable state file all set exit status 2, appear in the review, and post a macOS notification.
   An unreadable `checkpoints.json` or `seen.json` is moved aside as `*.corrupt-<timestamp>` (an earlier copy is never overwritten; a `--dry-run` only reports it, and `--doctor` prints an `error:` line and exits 2); the mail it covered is read again, never skipped.
 
