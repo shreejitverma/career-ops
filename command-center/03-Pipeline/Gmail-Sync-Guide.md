@@ -141,8 +141,8 @@ Step 4: Vault Automatically Updated
 
 The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs two scripts that live next to this note, then refreshes the job board:
 
-1. `sync_job_emails.py --mode daily --apply` reads recent mail from the Apple Mail accounts listed in the script, keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received), matches it to a tracker by company name (or one of the tracker's `aliases`) or recruiter domain, and appends new events to `.sync/events.jsonl`.
-   It rewrites [[_Inbox-Review]] (stage disagreements and possible untracked applications) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
+1. `sync_job_emails.py --apply --notify` reads **every new message in every account** (see "Complete coverage" below), keeps job-related messages, labels each one (offer, rejection, assessment, interview, recruiter, received, or reply for a Re:/Fwd: thread with a person; body text only counts when it is job phrasing, so news articles about interviews do not), matches it to a tracker by company name (or one of the tracker's `aliases`) or recruiter domain, and appends new events to `.sync/events.jsonl`, keyed by Message-ID.
+   It rewrites [[_Inbox-Review]] (stage disagreements, possible untracked applications, and every other unmatched job email from the last 14 days, listed by date, sender and subject) and adds one dated line to the tracker's `## Timeline` for each email that names the company.
    An email matched only by sender domain (for example an agency recruiter, who also writes about other companies) is listed in the review note as "domain match, check" and never appended.
    It never edits frontmatter; update `stage` yourself when the review suggests it.
    Bulk mail (GitHub CI notifications, newsletters, marketing, career-center events, job-alert digests) is dropped by `NOISE_RE` even from dedicated job labels, and hidden from the review even if it was recorded earlier.
@@ -151,11 +151,62 @@ The daily job (`run_daily_sync.sh`, launchd `com.shreejit.jobsync`, 09:00) runs 
 3. `node jobboard/jobboard.mjs refresh` (in the career-ops repo) re-fetches every job posting and rewrites [[_Job-Board]] from the trackers step 1 just updated.
    A failed board is logged in `sync.log` and never stops the sync.
 
+## Complete coverage (how no email is missed)
+
+`mail_sources.py` discovers every enabled account in Apple Mail and reads each one the most complete way available:
+
+| Account | Read through | What is read |
+| :--- | :--- | :--- |
+| Gmail-hosted (the Google accounts, `sverma16@stevens.edu`) and iCloud, **with an app password in the Keychain** | IMAP, by UID | Gmail: All Mail, Spam and Trash, which hold every message in every label, with each message's labels. Others: every folder. |
+| Exchange / Office 365 (`sverma16@stevens.edu` Exchange, `sverma357@gatech.edu`) | Mail.app | Every folder, including nested and duplicate-named ones, Junk and Deleted Items. |
+| Gmail-hosted **without** an app password | Mail.app (fallback) | Your job labels first, then All Mail, Spam and Trash. Slow for large mailboxes, and a message Mail downloads more than two days late can be missed; the inbox review says so until the app password is stored. |
+
+Only outgoing and system folders are skipped (Sent, Drafts, Outbox, Notes, Tasks, Journal).
+
+Guarantees:
+
+- Each mailbox has a checkpoint of what was actually read (`.sync/checkpoints.json`): the last IMAP UID, or for Mail.app the time range read and any stretch inside it still unread.
+  It moves forward only after the messages it covers were recorded, so a failed, interrupted or budget-limited run re-reads instead of skipping.
+- IMAP is exact: a message that arrives late still gets a higher UID than the checkpoint.
+  Mail.app re-reads two days before the last run to catch mail it downloaded late.
+- Mail.app reads in budgeted steps that resume where they stopped (`--budget-minutes`, default 45).
+  Per mailbox, new mail comes first, then any stretch an earlier run left unread, then older mail back to the backfill window (`--backfill-days N`, default 180).
+  The fast accounts (Exchange, iCloud, everything but Gmail through Mail.app) do all three before the slow Gmail-fallback accounts read their new mail.
+  The slow accounts take turns going first, one step further each run, so a budget that fits only some of them never leaves the same ones unread.
+  New-mail reads never spend the last 30% of the budget, which is kept for unread stretches and backfill; while the Gmail-fallback accounts are still to be read, the fast accounts may use half of it, so the slow accounts' unread stretches get the rest.
+  Unread stretches and backfill each start at the mailbox the previous run stopped in.
+  After a long absence, a run that cannot read all the new mail keeps what it read and records the stretch between it and the previous run as unread; later runs read that stretch, newest first, without reading the covered mail again.
+  A scan cut short starts at the mailbox it stopped in next time, after the job folders, so no mailbox is starved by the ones before it.
+- Consecutive Mail.app chunk reads overlap by a few positions, so a message deleted or moved between two reads cannot push another past the reader.
+- Mail from applicant-tracking and assessment platforms, or from a tracker's recruiter domain, counts as job mail even without job wording; bulk mail (CI notifications, newsletters, marketing, job-alert digests) does not.
+- A message seen twice (two labels, both sources, overlapping runs) is recorded once.
+- A message is counted as handled only once it is delivered: when a job label fails after reading a header, All Mail still delivers the same message.
+- Every run records per-mailbox health (`.sync/health.json`).
+  The top of [[_Inbox-Review]] lists any mailbox that failed or fell behind, any mailbox whose message bodies Mail could not return (with how many; those messages are classified from subject and sender, and retried while still inside the two-day re-read window unless recorded), and warns when the last run is more than two days old.
+  A mailbox is partial when its new mail was not all read, when a stretch of recent mail is still unread, or when its backfill was given time and did not move; one still partial after three runs in a row is listed as failed and posts the notification.
+  A backfill that moved further back is progress, not a failure: the review shows one line per account, "backfill in progress: <account> covered back to <date>, target <date>", and never notifies about it.
+- If Mail quits or crashes mid-run, the sync relaunches it in the background and retries that read once, within the time the read had left; message bodies are read from the raw message source, so Mail never renders HTML mail for the sync.
+- A failed mailbox, a run that cannot read mail at all (for example Mail automation denied, or Mail not answering), and an unreadable state file all set exit status 2, appear in the review, and post a macOS notification.
+  An unreadable `checkpoints.json` or `seen.json` is moved aside as `*.corrupt-<timestamp>` (an earlier copy is never overwritten; a `--dry-run` only reports it, and `--doctor` prints an `error:` line and exits 2); the mail it covered is read again, never skipped.
+
+### Store app passwords (once per address)
+
+Gmail: create one at myaccount.google.com/apppasswords (needs 2-Step Verification).
+iCloud: account.apple.com > Sign-In and Security > App-Specific Passwords.
+Then store it; the command prompts for the password and never echoes it:
+
+```sh
+security add-generic-password -s career-ops-mail -a shreejitverma@gmail.com -T /usr/bin/security -w
+```
+
+`python3 sync_job_emails.py --doctor` lists each account's read method, coverage and the exact command for any address still missing a password.
+
 Useful commands:
 
 ```sh
-python3 sync_job_emails.py --dry-run            # what would change, writes nothing
-python3 sync_job_emails.py --mode full --apply  # deeper historical scan
+python3 sync_job_emails.py --doctor             # accounts, read method, passwords, coverage
+python3 sync_job_emails.py --dry-run            # read and report, write nothing
+python3 sync_job_emails.py --backfill-days 365 --apply  # extend coverage a year back (resumable)
 python3 sync_job_emails.py --from-json FILE     # replay a saved export, no Mail needed
 python3 normalize_trackers.py                   # check trackers against _Application-Schema
 python3 -m unittest discover -s tests           # behavior tests
