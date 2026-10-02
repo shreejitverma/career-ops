@@ -97,7 +97,9 @@ select.inp { border: 1px solid var(--border); background: var(--panel); border-r
 .actions { display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .star { border: 1px solid var(--border); background: var(--panel); border-radius: 8px; width: 32px; height: 32px; color: var(--muted); font-size: 16px; line-height: 1; }
 .star[aria-pressed="true"] { color: #d99a00; border-color: #d99a00; }
-.confirm { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; background: var(--accent-soft); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--accent-soft); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.confirm .btn { white-space: nowrap; }
+.confirm label { display: inline-flex; align-items: center; gap: 6px; }
 .notes { grid-column: 1 / -1; }
 .notes textarea { width: 100%; min-height: 64px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--panel-2); resize: vertical; }
 .hist { color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -111,6 +113,15 @@ select.inp { border: 1px solid var(--border); background: var(--panel); border-r
 .card .t { font-weight: 600; font-size: 13px; }
 .card .m { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
 .card .nudge { color: var(--warn); font-size: 12px; font-weight: 600; }
+.card .due { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.card .due.over { color: var(--bad); font-weight: 600; }
+.card .links { display: flex; gap: 10px; font-size: 12px; margin-top: 6px; }
+a.b { text-decoration: none; }
+a.b:hover { filter: brightness(1.1); text-decoration: none; }
+.b.stage { font-weight: 600; }
+.b.rep { background: var(--violet-soft); color: var(--violet); border-color: transparent; }
+.b.res { font-family: var(--mono); }
+select.inp:disabled { opacity: .7; cursor: not-allowed; }
 .card select { width: 100%; }
 
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
@@ -138,7 +149,8 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   .filterbtn { display: inline-block; }
   .job { grid-template-columns: 1fr; }
   .actions { justify-content: flex-start; }
-  .board { grid-template-columns: repeat(5, 260px); }
+  .board { grid-template-columns: 1fr; }
+  .col { min-height: 0; }
   header { position: static; }
   .tabs { overflow-x: auto; scrollbar-width: none; }
   .tab { white-space: nowrap; padding: 10px 8px; }
@@ -241,14 +253,16 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
   const PAGE = 60;
   const PIPE = ['Saved', 'Applied', 'Interviewing', 'Offer', 'Rejected'];
 
-  let data = { jobs: [], companies: [], statuses: [], categories: [], seniorities: [] };
+  let data = { jobs: [], companies: [], statuses: [], applicationStatuses: [], categories: [], seniorities: [], trackers: [], resumes: [], commandCenter: { enabled: false } };
   let byId = new Map();
   let shown = PAGE;
   const blankFilters = () => ({ q: '', status: [], category: [], firmType: [], seniority: [], region: [], tags: [], company: [], source: [], posted: 'any', starred: false, closed: false, fresh: false });
   let f = Object.assign(blankFilters(), store.get('filters', {}));
   let coSort = { key: 'open', dir: -1 };
   let coType = [];
-  const pendingConfirm = new Set();
+  // job id -> '' after Apply (did you submit?), or the application status picked
+  // in the dropdown while the company's existing trackers are offered.
+  const pendingConfirm = new Map();
   const openNotes = new Set();
 
   // ── data ────────────────────────────────────────────────────────────────
@@ -258,7 +272,8 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     data = await res.json();
     byId = new Map(data.jobs.map((j) => [j.id, j]));
     baseline = data.jobs.reduce((m, j) => Math.min(m, new Date(j.firstSeen).getTime() || Infinity), Infinity) + 3600000;
-    $('#updated').textContent = data.updatedAt ? 'Updated ' + ago(data.updatedAt) + ' - ' + data.jobs.filter((j) => j.active).length + ' open roles' : 'No data yet - press Refresh jobs';
+    $('#updated').textContent = (data.updatedAt ? 'Updated ' + ago(data.updatedAt) + ' - ' + data.jobs.filter((j) => j.active).length + ' open roles' : 'No data yet - press Refresh jobs') +
+      (data.commandCenter.enabled ? ' - command center: ' + data.trackers.length + ' trackers' : '');
     $('#coList').innerHTML = data.companies.map((c) => '<option value="' + esc(c.name) + '">').join('');
     $('#addStatus').innerHTML = data.statuses.map((s) => '<option' + (s === 'Not Applied' ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
     renderAll();
@@ -268,9 +283,13 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const res = await fetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, patch: p }) });
     const body = await res.json();
     if (!res.ok) { alertBar(body.error || 'save failed'); return; }
+    if (p.status !== undefined) {
+      if (body.tracker && body.tracker.created) alertBar('Tracker created: command-center/' + body.tracker.rel);
+      if (body.linked) alertBar('Linked to command-center/' + body.linked);
+      return load();
+    }
     const j = byId.get(id);
     j.state = body.state;
-    j.status = body.state.status || 'Not Applied';
     renderAll();
   }
 
@@ -349,15 +368,16 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
 
   function renderKpis() {
     const open = data.jobs.filter((j) => j.active);
-    const c = (s) => open.filter((j) => j.status === s).length;
+    const pipe = pipelineItems();
+    const c = (s) => s === 'Not Applied' ? open.filter((j) => j.status === s).length : pipe.filter((it) => it.status === s).length;
     const fresh = open.filter((j) => isNew(j, 7) && j.status === 'Not Applied').length;
     const k = [
       ['Open roles', open.length, null],
       ['Not applied', c('Not Applied'), { status: ['Not Applied'] }, 'warn'],
-      ['Saved', c('Saved'), { status: ['Saved'] }],
-      ['Applied', c('Applied'), { status: ['Applied'] }],
-      ['Interviewing', c('Interviewing'), { status: ['Interviewing'] }],
-      ['Offers', c('Offer'), { status: ['Offer'] }],
+      ['Saved', c('Saved'), 'pipeline'],
+      ['Applied', c('Applied'), 'pipeline'],
+      ['Interviewing', c('Interviewing'), 'pipeline'],
+      ['Offers', c('Offer'), 'pipeline'],
       ['Companies', data.companies.filter((x) => x.open).length, 'companies'],
       ['New this week', fresh, { status: ['Not Applied'], posted: 'any', _fresh: true }],
     ];
@@ -366,6 +386,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
       const b = e.target.closest('.kpi'); if (!b) return;
       const act = k[Number(b.dataset.k)][2];
       if (act === 'companies') return switchTab('companies');
+      if (act === 'pipeline') return switchTab('pipeline');
       f = blankFilters();
       if (act && act._fresh) { $('#sort').value = 'seen'; f.status = ['Not Applied']; f.fresh = true; }
       else if (act) Object.assign(f, act);
@@ -426,6 +447,9 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
           (j.postedAt ? '<span title="' + esc(j.postedAt) + '">posted ' + dayAgo(j.postedAt) + '</span>' : '<span>found ' + ago(j.firstSeen) + '</span>') +
           (st.appliedAt ? '<span>applied ' + ago(st.appliedAt) + '</span>' : '') + '</div>' +
         '<div class="badges"><span class="b status st-' + slug(j.status) + '">' + esc(j.status) + '</span>' +
+          (j.tracker ? linkOrSpan(j.tracker.obsidian, 'b stage st-' + slug(j.status), 'Stage: ' + j.tracker.stage, 'Open the command-center tracker ' + j.tracker.name) : '') +
+          (j.report ? '<a class="b rep" href="/api/report?num=' + encodeURIComponent(j.report.num) + '" target="_blank" rel="noopener" title="career-ops evaluation report">Report ' + esc(j.report.num) + (j.report.score ? ' - ' + esc(j.report.score) : '') + '</a>' : '') +
+          (st.resume ? '<span class="b res" title="Resume variant you sent">' + esc(st.resume) + '</span>' : '') +
           (fresh && j.active ? '<span class="b new">New</span>' : '') +
           (!j.active ? '<span class="b closedb">Closed ' + ago(j.closedAt) + '</span>' : '') +
           '<span class="b cat">' + esc(j.category) + '</span><span class="b">' + esc(j.seniority) + '</span>' +
@@ -436,13 +460,75 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
       '</div>' +
       '<div class="actions">' +
         '<button class="btn primary" data-apply="1">Apply</button>' +
-        '<select class="inp" data-status>' + data.statuses.map((s) => '<option' + (s === j.status ? ' selected' : '') + '>' + esc(s) + '</option>').join('') + '</select>' +
+        '<select class="inp" data-status' + (j.tracker ? ' disabled title="Tracked in the command center: change stage in ' + esc(j.tracker.name) + '"' : '') + '>' + data.statuses.map((s) => '<option' + (s === j.status ? ' selected' : '') + '>' + esc(s) + '</option>').join('') + '</select>' +
         '<button class="star" data-star aria-pressed="' + Boolean(st.starred) + '" title="Star">&#9733;</button>' +
         '<button class="btn" data-notes>' + (st.notes ? 'Notes*' : 'Notes') + '</button>' +
       '</div>' +
-      (pendingConfirm.has(j.id) ? '<div class="confirm">Opened the posting. Did you submit the application? <button class="btn primary" data-mark="Applied">Yes, mark applied</button><button class="btn" data-mark="Saved">Save for later</button><button class="btn" data-mark="">Not yet</button></div>' : '') +
+      (pendingConfirm.has(j.id) && !j.tracker ? confirmHtml(j) : '') +
       (openNotes.has(j.id) ? '<div class="notes"><textarea data-notearea placeholder="Referral, recruiter, next steps...">' + esc(st.notes || '') + '</textarea>' + (hist ? '<div class="hist">History: ' + esc(hist) + '</div>' : '') + '</div>' : '') +
     '</article>';
+  }
+
+  function linkOrSpan(href, cls, text, title) {
+    return href ? '<a class="' + cls + '" href="' + esc(href) + '" title="' + esc(title) + '">' + esc(text) + '</a>' : '<span class="' + cls + '" title="' + esc(title) + '">' + esc(text) + '</span>';
+  }
+
+  // Last variant used for this role category; otherwise the one whose track
+  // (quant, fpga, ...) the role mentions, preferring one-page.
+  const resumeFor = (j) => {
+    const want = store.get('resume.' + j.category, '');
+    if (data.resumes.includes(want)) return want;
+    const text = (j.category + ' ' + (j.tags || []).join(' ') + ' ' + j.title).toLowerCase();
+    const fits = data.resumes.filter((r) => text.includes(r.split('/')[0].toLowerCase()));
+    const pool = fits.length ? fits : data.resumes;
+    return pool.find((r) => r.endsWith('one-page')) || pool[0] || '';
+  };
+
+  // The company's active trackers (computed by the server): an application
+  // status on an untracked job must either link one of them or explicitly
+  // create a new tracker.
+  const companyTrackers = (j) => (j.tracker ? [] : j.candidateTrackers || []);
+  const needsChoice = (j, status) => data.applicationStatuses.includes(status) && companyTrackers(j).length > 0;
+
+  // Show the link-or-new choice for `status` on the Jobs tab, filtered to this
+  // job; re-rendering everything reverts any select still showing it unsaved.
+  function openChoice(id, status) {
+    const j = byId.get(id);
+    pendingConfirm.set(id, status);
+    f = Object.assign(blankFilters(), { company: [j.companyId], q: j.title, closed: !j.active });
+    shown = PAGE;
+    switchTab('jobs');
+    renderAll();
+    const card = document.querySelector('article.job[data-id="' + CSS.escape(id) + '"]');
+    if (card) card.scrollIntoView({ block: 'center' });
+  }
+
+  function confirmHtml(j) {
+    const status = pendingConfirm.get(j.id) || 'Applied';
+    const fromApply = !pendingConfirm.get(j.id);
+    const existing = companyTrackers(j);
+    const pick = resumeFor(j);
+    const resume = fromApply && data.resumes.length
+      ? ' <label>Resume <select class="inp" data-resume>' + data.resumes.map((r) => '<option' + (r === pick ? ' selected' : '') + '>' + esc(r) + '</option>').join('') + '</select></label>' +
+        ' <a data-resumepdf href="/api/resume?variant=' + encodeURIComponent(pick) + '" target="_blank" rel="noopener">PDF</a>'
+      : '';
+    const mark = (label, cls, tracker) => '<button class="btn' + cls + '" data-mark="' + esc(status) + '"' + (tracker ? ' data-tracker="' + esc(tracker) + '"' : '') + '>' + label + '</button>';
+    const choices = existing.length
+      ? existing.map((t) => mark('This is my existing application: ' + esc(t.name) + ' (' + esc(t.stage) + ')', '', t.rel)).join('') + mark('New application', ' primary', 'new')
+      : mark('Yes, mark applied', ' primary');
+    const note = !data.commandCenter.enabled ? ''
+      : existing.length ? 'Linking only records it on the board; the tracker note is not changed. New application creates a separate tracker.'
+      : 'Marking applied creates a command-center tracker.';
+    return '<div class="confirm">' + (fromApply ? 'Opened the posting. Did you submit the application?' : esc(j.companyName) + ' already has a command-center tracker. Is this posting one of them?') + resume +
+      ' ' + choices + (fromApply ? '<button class="btn" data-mark="Saved">Save for later</button>' : '') + '<button class="btn" data-mark="">Not yet</button>' +
+      (note ? '<span class="updated">' + note + '</span>' : '') + '</div>';
+  }
+
+  // The pipeline: every command-center tracker plus board jobs you set a status on without one.
+  function pipelineItems() {
+    const items = data.trackers.map((t) => ({ kind: 'tracker', status: t.status, t, j: t.jobId ? byId.get(t.jobId) : null }));
+    for (const j of data.jobs) if (!j.tracker && j.status !== 'Not Applied' && j.status !== 'Not Interested') items.push({ kind: 'job', status: j.status, j });
+    return items;
   }
 
   function renderList() {
@@ -454,11 +540,26 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     $('#moreBtn').textContent = 'Show more (' + (rows.length - shown).toLocaleString() + ' left)';
   }
 
+  function trackerCard(t, j) {
+    const today = new Date().toISOString().slice(0, 10);
+    const over = t.nextActionDate && t.nextActionDate < today && !['Rejected', 'Offer'].includes(t.status);
+    return '<div class="card"><div class="t">' + esc(t.company) + '</div>' +
+      '<div class="m">' + esc(t.role || '(role not set)') + (t.applied ? ' - applied ' + esc(t.applied) : '') + (t.archived ? ' - archived' : '') + '</div>' +
+      '<span class="b stage st-' + slug(t.status) + '">' + esc(t.stage || 'no stage') + '</span>' +
+      (t.nextAction ? '<div class="due' + (over ? ' over' : '') + '" title="' + esc(t.nextAction) + '">' + (over ? 'Overdue: ' : 'Next: ') + esc(t.nextAction) + (t.nextActionDate ? ' (' + esc(t.nextActionDate) + ')' : '') + '</div>' : '') +
+      '<div class="links">' + (t.obsidian ? '<a href="' + esc(t.obsidian) + '">Tracker</a>' : '<span class="updated" title="' + esc(t.rel) + '">' + esc(t.name) + '</span>') +
+      (j ? '<a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer">Posting</a>' : '') + '</div></div>';
+  }
+
   function renderBoard() {
+    const all = pipelineItems();
     const cols = PIPE.map((s) => {
-      const items = data.jobs.filter((j) => j.status === s).sort((a, b) => new Date((b.state && b.state.updatedAt) || 0) - new Date((a.state && a.state.updatedAt) || 0));
+      const when = (it) => String(it.kind === 'tracker' ? it.t.applied || '' : (it.j.state && it.j.state.updatedAt) || '');
+      const items = all.filter((it) => it.status === s).sort((a, b) => when(b).localeCompare(when(a)));
       return '<div class="col"><h3><span>' + esc(s) + '</span><span class="updated">' + items.length + '</span></h3>' +
-        (items.length ? items.map((j) => {
+        (items.length ? items.map((it) => {
+          if (it.kind === 'tracker') return trackerCard(it.t, it.j);
+          const j = it.j;
           const st = j.state || {};
           const since = st.appliedAt ? (Date.now() - new Date(st.appliedAt).getTime()) / DAY : 0;
           return '<div class="card" data-id="' + esc(j.id) + '"><div class="t"><a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer">' + esc(j.title) + '</a></div>' +
@@ -492,10 +593,12 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const rows = data.companies.filter((c) => (!coType.length || coType.includes(c.type)) && (!q || c.name.toLowerCase().includes(q)))
       .sort((a, b) => { const k = coSort.key; const av = a[k], bv = b[k]; return (typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv))) * coSort.dir; });
     const srcLabel = { ok: 'Company board', partial: 'Board (partial)', error: 'Board failed', 'not scanned': 'Not scanned yet', 'wsq-only': 'WSQ only' };
-    const cols = [['name', 'Company'], ['type', 'Type'], ['open', 'Open roles', 1], ['notApplied', 'Not applied', 1], ['applied', 'Applied', 1], ['scan', 'Source'], ['website', 'Careers']];
+    for (const c of data.companies) c.tracked = (c.trackers || []).length;
+    const cols = [['name', 'Company'], ['type', 'Type'], ['open', 'Open roles', 1], ['notApplied', 'Not applied', 1], ['tracked', 'Your trackers'], ['scan', 'Source'], ['website', 'Careers']];
     $('#coTable').innerHTML = '<thead><tr>' + cols.map(([k, l, n]) => '<th class="' + (n ? 'num' : '') + '" data-cosort="' + k + '">' + l + (coSort.key === k ? (coSort.dir < 0 ? ' &#9662;' : ' &#9652;') : '') + '</th>').join('') + '</tr></thead><tbody>' +
       rows.map((c) => '<tr><td><button class="coname" data-company="' + esc(c.id) + '" title="Show this company\'s jobs">' + esc(c.name) + '</button></td><td>' + esc(c.type) + '</td>' +
-        '<td class="num">' + c.open + '</td><td class="num">' + c.notApplied + '</td><td class="num">' + c.applied + '</td>' +
+        '<td class="num">' + c.open + '</td><td class="num">' + c.notApplied + '</td>' +
+        '<td>' + (c.trackers || []).map((t) => linkOrSpan(t.obsidian, 'b stage st-' + slug(t.status || ''), t.stage || '?', t.name + (t.role ? ' - ' + t.role : ''))).join(' ') + '</td>' +
         '<td class="src-' + slug(c.scan) + '" title="' + esc((c.scanErrors || []).join(' | ')) + '">' + esc(srcLabel[c.scan] || c.scan) + '</td>' +
         '<td>' + (c.website ? '<a href="' + esc(c.website) + '" target="_blank" rel="noopener noreferrer">careers</a>' : '') + '</td></tr>').join('') + '</tbody>';
   }
@@ -525,7 +628,7 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const co = t.closest('[data-company]');
     if (co) { f = blankFilters(); f.company = [co.dataset.company]; f.closed = false; shown = PAGE; switchTab('jobs'); window.scrollTo(0, 0); return renderAll(); }
     const cot = t.closest('[data-cotype]'); if (cot) { const v = cot.dataset.cotype; coType = coType.includes(v) ? coType.filter((x) => x !== v) : [...coType, v]; return renderCompanies(); }
-    const cs = t.closest('[data-cosort]'); if (cs) { const k = cs.dataset.cosort; coSort = { key: k, dir: coSort.key === k ? -coSort.dir : (['open', 'notApplied', 'applied'].includes(k) ? -1 : 1) }; return renderCompanies(); }
+    const cs = t.closest('[data-cosort]'); if (cs) { const k = cs.dataset.cosort; coSort = { key: k, dir: coSort.key === k ? -coSort.dir : (['open', 'notApplied', 'tracked'].includes(k) ? -1 : 1) }; return renderCompanies(); }
     const art = t.closest('article.job');
     if (!art) return;
     const id = art.dataset.id;
@@ -533,18 +636,35 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const ap = t.closest('[data-apply]');
     if (ap) {
       if (ap.dataset.apply === '1') window.open(job.url, '_blank', 'noopener,noreferrer');
-      if (job.status === 'Not Applied' || job.status === 'Saved') { pendingConfirm.add(id); renderList(); }
+      if (!job.tracker && (job.status === 'Not Applied' || job.status === 'Saved')) { pendingConfirm.set(id, ''); renderList(); }
       return;
     }
     const mk = t.closest('[data-mark]');
-    if (mk) { pendingConfirm.delete(id); if (mk.dataset.mark) patch(id, { status: mk.dataset.mark }); else renderList(); return; }
+    if (mk) {
+      pendingConfirm.delete(id);
+      if (!mk.dataset.mark) return renderList();
+      const p = { status: mk.dataset.mark };
+      if (mk.dataset.tracker) p.tracker = mk.dataset.tracker;
+      const sel = art.querySelector('[data-resume]');
+      if (mk.dataset.mark === 'Applied' && sel && (!p.tracker || p.tracker === 'new')) { store.set('resume.' + job.category, sel.value); p.resume = sel.value; }
+      return patch(id, p);
+    }
     if (t.closest('[data-star]')) return patch(id, { starred: !(job.state && job.state.starred) });
     if (t.closest('[data-notes]')) { openNotes.has(id) ? openNotes.delete(id) : openNotes.add(id); return renderList(); }
   });
 
   document.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.matches('[data-status]')) { const id = t.closest('[data-id]').dataset.id; pendingConfirm.delete(id); return patch(id, { status: t.value }); }
+    if (t.matches('[data-resume]')) { const a = t.closest('.confirm').querySelector('[data-resumepdf]'); if (a) a.href = '/api/resume?variant=' + encodeURIComponent(t.value); return; }
+    if (t.matches('[data-status]')) {
+      const id = t.closest('[data-id]').dataset.id;
+      if (needsChoice(byId.get(id), t.value)) {
+        if (t.closest('article.job')) { pendingConfirm.set(id, t.value); return renderList(); }
+        return openChoice(id, t.value);
+      }
+      pendingConfirm.delete(id);
+      return patch(id, { status: t.value });
+    }
     if (t.id === 'posted') { f.posted = t.value; shown = PAGE; return renderAll(); }
     if (t.id === 'starred') { f.starred = t.checked; shown = PAGE; return renderAll(); }
     if (t.id === 'fresh') { f.fresh = t.checked; shown = PAGE; return renderAll(); }
@@ -601,7 +721,14 @@ form.add input, form.add select { border: 1px solid var(--border); border-radius
     const res = await fetch('/api/manual', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const out = await res.json();
     $('#addMsg').textContent = res.ok ? 'Added.' : (out.error || 'failed');
-    if (res.ok) { e.target.reset(); await load(); }
+    if (!res.ok) return;
+    e.target.reset();
+    await load();
+    if (out.tracker && out.tracker.created) alertBar('Tracker created: command-center/' + out.tracker.rel);
+    if (!out.pendingChoice || !byId.has(out.job.id)) return;
+    openChoice(out.job.id, out.pendingChoice);
+    $('#addMsg').textContent = 'Added as Not Applied. ' + out.job.companyName + ' already has a tracker: choose on the Jobs tab whether this is that application or a new one.';
+    alertBar($('#addMsg').textContent);
   };
 
   const refreshBtn = $('#refreshBtn');

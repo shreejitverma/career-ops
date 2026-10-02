@@ -48,3 +48,8 @@ links: []
 ## 💡 Retrospective & Takeaways
 - CriteriaCorp test emphasized mental math, pattern recognition, and deductive logic.
 - Ensure speed on probability & numerical estimation for future hedge fund screens.
+
+## Timeline
+
+- 2024-10-22 assessment: Garda Capital  Partners - Initial Assessment <!-- evt:0fba3f2badd5 -->
+- 2024-10-22 assessment: Garda Capital  Partners - Initial Assessment <!-- evt:cbd3b4fba62a -->

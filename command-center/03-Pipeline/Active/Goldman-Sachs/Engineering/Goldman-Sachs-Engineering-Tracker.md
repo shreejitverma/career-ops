@@ -57,3 +57,7 @@ links: []
   - String manipulation, tree/graph traversal, dynamic programming
 - **Part 3: CS Core & System Concepts**
   - Thread synchronization, memory management, database indexing
+
+## Timeline
+
+- 2024-10-02 assessment: Goldman Sachs: Complete Your Technical Assessment <!-- evt:0a23c4c727b1 -->

@@ -38,3 +38,7 @@ links: []
 ## 2. Post-Mortem & Strategic Key Learnings
 - **Core Insight**: Crypto institutional prime brokerage; strengthen digital asset low-latency trading angle.
 - **Actionable Adjustment**: Keep monitoring engineering openings and re-apply once cooldown expires.
+
+## Timeline
+
+- 2026-08-28 recruiter: Update regarding your application to FalconX <!-- evt:c30a6caaf95d -->

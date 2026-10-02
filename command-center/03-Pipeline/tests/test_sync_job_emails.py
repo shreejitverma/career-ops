@@ -59,6 +59,41 @@ class SyncTest(unittest.TestCase):
         self.assertEqual((by_name.company, how_name), ("Acme Capital", "name"))
         self.assertEqual(sj.match_tracker(msg("Hello", "someone@other.com"), self.trackers), (None, None))
 
+    def test_noise_dropped_even_from_dedicated_mailboxes(self):
+        noisy = [
+            msg("[me/airflow] Run failed: Tests - main (b5d9259)", "notifications@github.com"),
+            msg("TECH CONNECT: Hot Tech Jobs, Career Insights & More", "The Experis Team <knowledge@experis.com>"),
+            msg("Senior Python Developer at X. 4 more python developer jobs in Delhi", "Indeed <donotreply@jobalert.indeed.com>"),
+            msg("OMS Professional Branding Webinar TOMORROW", "gatech@csm.symplicity.com"),
+            msg("Save 20% on GMAT Prep", "Manhattan Prep <info@manhattanprep.com>"),
+            msg("Weekly Career Center Webinars and Events for OMS Students", "Graduate Career Development <gcd@gatech.edu>"),
+        ]
+        for m in noisy:
+            m["dedicated"] = True
+            self.assertFalse(sj.is_job_related(m), m["subject"])
+        real = msg("Update on Your Application for Quantitative Analyst", "no-reply@us.greenhouse-mail.io",
+                   snippet="Unfortunately, we will not be moving forward")
+        real["dedicated"] = True
+        self.assertTrue(sj.is_job_related(real))
+
+    def test_review_hides_previously_recorded_noise(self):
+        noise = sj.to_event(msg("Apply for an easier monthly payment", "Prodigy Finance <payments@notifications.prodigyfinance.com>",
+                                snippet="assessment"), self.trackers, self.root)
+        real = sj.to_event(msg("Thank you for your time and interest", "WellsFargoHR <wf@wellsfargo.com>",
+                               snippet="we regret to inform you"), self.trackers, self.root)
+        review = sj.render_review({noise.id: noise, real.id: real}, self.trackers, "2026-09-21", root=self.root)
+        self.assertNotIn("monthly payment", review)
+        untracked = review.split("## Possible untracked applications")[1].split("## Last")[0]
+        self.assertIn("Thank you for your time and interest", untracked)
+
+    def test_untracked_looks_back_further_than_activity(self):
+        old = sj.to_event(msg("Application Update - Senior Quantitative Developer", "TIAA@myworkday.com", date="2026-08-01",
+                              snippet="we regret to inform you"), self.trackers, self.root)
+        review = sj.render_review({old.id: old}, self.trackers, "2026-09-29", root=self.root)
+        untracked = review.split("## Possible untracked applications")[1].split("## Last")[0]
+        self.assertIn("Senior Quantitative Developer", untracked)
+        self.assertNotIn("Senior Quantitative Developer", review.split("## Last")[1])
+
     def test_record_is_idempotent(self):
         events_file = self.root / ".sync" / "events.jsonl"
         e = [sj.to_event(msg("Interview invitation from Acme Capital", "talent@acmecap.com"), self.trackers, self.root)]

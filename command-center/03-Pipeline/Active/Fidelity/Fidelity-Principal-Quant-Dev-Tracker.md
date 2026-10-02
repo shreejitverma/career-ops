@@ -69,3 +69,8 @@ links: []
 ## 4. Next Immediate Actions
 - [ ] **Check Workday portal for new Principal Quant openings** (Deadline: `2026-10-01`)
 - [ ] Review technical track notes and core architecture for [[Fidelity-Investments|Fidelity Investments]]
+
+## Timeline
+
+- 2026-06-25 received: Follow Up to Your Fidelity Application - Candidacy Update <!-- evt:54bd5b26b71e -->
+- 2026-07-08 received: Follow Up to Your Fidelity Application - Candidacy Update <!-- evt:82726b3ef149 -->

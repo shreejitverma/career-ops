@@ -82,6 +82,20 @@ EXCLUDE_PATTERNS = [
     "notifications@github.com", "e2ma.net", "substack.com", "biginterview.com",
 ]
 
+# Bulk mail that is never about one of your applications, even when a mail rule
+# files it under a job label (the Google "Job" label collects GitHub CI failures
+# and newsletters): CI notifications, newsletters, marketing, career-center
+# events, job-alert digests. It is checked against subject and sender only, so
+# it also hides events recorded before a pattern was added.
+NOISE_RE = re.compile(
+    r"notifications@github\.com|\brun failed\b|newsletter|webinar|\bevents for\b|"
+    r"career (center|services|development)|\bsave \d+%|\d+% off|monthly payment|"
+    r"jobs you may like|job alert|jobalert|recommended jobs|hot tech jobs|\bmore\b.{0,40}\bjobs\b|"
+    r"new jobs for|\bdigest\b|a scan has been completed|"
+    r"@(e2ma\.net|substack\.com|symplicity\.com|careereco\.com|manhattanprep\.com|flipboard\.com)",
+    re.I,
+)
+
 # Signal -> pattern, checked in priority order (an offer email may also say "interview").
 SIGNALS: list[tuple[str, re.Pattern]] = [
     ("offer", re.compile(r"pleased to (extend|offer)|offer (letter|of employment)|extend (you )?an offer", re.I)),
@@ -212,7 +226,13 @@ def fetch_all(mode: str) -> list[dict]:
 
 # -- filter, classify, match ------------------------------------------------------
 
+def is_noise(subject: str, sender: str) -> bool:
+    return bool(NOISE_RE.search(f"{subject} {sender}"))
+
+
 def is_job_related(msg: dict) -> bool:
+    if is_noise(msg["subject"], msg["sender"]):
+        return False
     if msg.get("dedicated"):
         return True
     combined = f"{msg['subject']} {msg['sender']} {msg.get('snippet', '')}".lower()
@@ -358,10 +378,14 @@ def stage_rank(stage: str) -> int:
 
 
 def render_review(events: dict[str, Event], trackers: list[Tracker], today: str, days: int = 30,
-                  root: Path = PIPELINE) -> str:
-    since = (datetime.fromisoformat(today) - timedelta(days=days)).date().isoformat()
-    recent = sorted((e for e in events.values() if is_iso_date(e.date) and e.date >= since),
-                    key=lambda e: e.date, reverse=True)
+                  root: Path = PIPELINE, untracked_days: int = 180) -> str:
+    def window(n: int) -> list[Event]:
+        since = (datetime.fromisoformat(today) - timedelta(days=n)).date().isoformat()
+        return sorted((e for e in events.values()
+                       if is_iso_date(e.date) and e.date >= since and not is_noise(e.subject, e.sender)),
+                      key=lambda e: e.date, reverse=True)
+
+    recent = window(days)
     by_stem = {t.path.stem: t for t in trackers}
 
     def link(e: Event) -> str:
@@ -388,10 +412,12 @@ def render_review(events: dict[str, Event], trackers: list[Tracker], today: str,
         lines += [f"| {e.date} | {link(e)} | {t.stage or '-'} | {e.suggested_stage} | {e.subject.replace('|', '/')} |" for e, t in attention]
     else:
         lines.append("Nothing: every matched email agrees with its tracker's stage.")
-    untracked = [e for e in recent if not e.tracker and e.signal not in ("other", "received")]
+    # A missing tracker matters long after the email, so this looks further back than the activity list.
+    untracked = [e for e in window(untracked_days) if not e.tracker and e.signal not in ("other", "received")]
     lines += ["", "## Possible untracked applications", ""]
     if untracked:
-        lines += ["Job emails with a clear signal that match no tracker; create a tracker if they are real applications.", "",
+        lines += [f"Job emails from the last {untracked_days} days with a clear signal that match no tracker; "
+                  "create a tracker if they are real applications.", "",
                   "| Date | Signal | From | Subject |", "| :--- | :--- | :--- | :--- |"]
         lines += [f"| {e.date} | {e.signal} | {e.sender.replace('|', '/')} | {e.subject.replace('|', '/')} |" for e in untracked]
     else:
@@ -410,7 +436,7 @@ def apply_timeline(events: list[Event], root: Path = PIPELINE, dry_run: bool = F
     Domain-only matches are left to the review note: an agency domain also sends mail about other companies."""
     added = 0
     for e in sorted(events, key=lambda e: e.date):
-        if not e.tracker or e.match != "name" or e.signal == "other":
+        if not e.tracker or e.match != "name" or e.signal == "other" or is_noise(e.subject, e.sender):
             continue
         path = find_tracker(e.tracker, root)
         if path is None:

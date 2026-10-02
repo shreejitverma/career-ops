@@ -52,3 +52,7 @@ links: []
 - **Modern C++**: C++17/20, lock-free ring buffers (SPSC/MPSC), cache-line alignment
 - **Kernel Bypass & Networking**: Solarflare OpenOnload, DPDK, Multicast UDP feed parsing
 - **Low-Latency Architecture**: Zero-allocation hot path, sub-microsecond processing
+
+## Timeline
+
+- 2025-12-10 recruiter: Immediate Opportunity---Senior C++ Software Engineer – Market Data <!-- evt:690a332db276 -->
