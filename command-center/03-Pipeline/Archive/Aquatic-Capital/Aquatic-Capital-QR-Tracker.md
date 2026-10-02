@@ -47,3 +47,4 @@ links: []
 - 2025-08-20 received: Application Update |  Quantitative Researcher, Early Career  - Aquatic Capital Management <!-- evt:bbd056b34f7d -->
 - 2026-07-29 received: Application Update |  Quantitative Researcher - Aquatic Capital Management <!-- evt:371e282e2b1c -->
 - 2026-09-28 received: Thank you for applying to Aquatic Capital Management <!-- evt:64d61bbd531b -->
+- 2026-10-01 received: Application Update |  Quantitative Researcher - Aquatic Capital Management <!-- evt:c8fd2b8fc81f -->
