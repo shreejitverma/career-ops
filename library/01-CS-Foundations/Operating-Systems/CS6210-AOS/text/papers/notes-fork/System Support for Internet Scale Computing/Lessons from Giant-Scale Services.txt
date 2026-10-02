@@ -1,0 +1,600 @@
+                                                                    Copyright 2001, IEEE Computer
+
+
+
+
+ Scalable Internet Services
+                                                                    Do not distribute.
+                                                                    See http://www.computer.org/internet/ic2001/w4046abs.htm
+
+
+
+
+                                              Lessons from
+                                              Giant-Scale Services
+                                                           Giant Web services require new tools and methods for issues
+                                                           of scale, availability, and evolution.
+
+
+                                                                        eb portals and ISPs such as                  The Basic Model
+                                                           W
+Eric A. Brewer
+University of California, Berkeley,                                     AOL, Microsoft Network, and                  I focus on “infrastructure services” —
+and Inktomi Corporation                                                 Yahoo have grown more than                   Internet-based systems that provide
+                                                           tenfold in the past five years. Despite                   instant messaging, wireless services such
+                                                           their scale, growth rates, and rapid evo-                 as iMode, and so on. These services pri-
+                                                           lution of content and features, these sites               marily reside remotely from the user,
+                                                           and other “giant-scale” services like                     although they might include local access
+                                                           instant messaging and Napster must be                     software, such as a browser. My discus-
+                                                           always available. Many other major Web                    sion is limited primarily to single-site,
+                                                           sites such as eBay, CNN, and Wal-Mart,                    single-owner, well-connected clusters,
+                                                           have similar availability requirements. In                which may be part of a larger service, as
+                                                           this article, I look at the basic model for               in the case of e-mail servers. I do not
+                                                           such services, focusing on the key real-                  cover wide-area issues such as network
+                                                           world challenges they face — high avail-                  partitioning, low or intermittent band-
+                                                           ability, evolution, and growth — and                      width, or multiple administrative
+                                                           developing some principles for attacking                  domains. There are many other important
+                                                           these problems.                                           challenges that I do not address here,
+                                                              This is very much an “experience” arti-                including service monitoring and config-
+                                                           cle. Few of the points I make here are                    uration, network quality of service (QoS),
+                                                           addressed in the literature, and most of my               security, and logging and log analysis.
+                                                           conclusions take the form of principles and                  This article is essentially about bridg-
+                                                           approaches rather than absolute quantita-                 ing the gap between the basic building
+                                                           tive evaluations. This is due partly to my                blocks of giant-scale services and the real-
+                                                           focus on high-level design, partly to the                 world scalability and availability they
+                                                           newness of the area, and partly to the pro-               require. It focuses on high availability and
+                                                           prietary nature of some of the information                the related issues of replication, graceful
+                                                           (which represents 15-20 very large sites).                degradation, disaster tolerance, and online
+                                                           Nonetheless, the lessons are easy to under-               evolution.
+                                                           stand and apply, and they simplify the                       Database management systems (DBMs)
+                                                           design of large systems.                                  are an important part of many large sites,
+
+46                            JULY • AUGUST 2001   http://computer.org/internet/   1089 -7801/01/$10.00 ©2001 IEEE                            IEEE INTERNET COMPUTING
+                                                                                                                       Giant-Scale Services
+
+                                                                                         Client                    Client
+
+but I intentionally ignore them here because they                Client                                                             Client
+are well studied elsewhere and because the issues                                                 IP network
+in this article are largely orthogonal to the use of
+databases.
+
+Advantages
+                                                              Single-site server
+The basic model that giant-scale services follow                                                    Load
+provides some fundamental advantages:                                                              manager
+                                                                                                                            Optional
+                                                                                                                            backplane
+■    Access anywhere, anytime. A ubiquitous infra-
+     structure facilitates access from home, work,
+     airport, and so on.
+■    Availability via multiple devices. Because the
+     infrastructure handles most of the processing,
+                                                                                          Persistent data store
+     users can access services with devices such as
+     set-top boxes, network computers, and smart
+     phones, which can offer far more functionali-       Figure 1.The basic model for giant-scale services. Clients connect via
+     ty for a given cost and battery life.               the Internet and then go through a load manager that hides down
+■    Groupware support. Centralizing data from           nodes and balances traffic.
+     many users allows service providers to offer
+     group-based applications such as calendars, tele-
+     conferencing systems, and group-management          assumes that queries drive the service. This is true
+     systems such as Evite (http://www.evite.com/).      for most common protocols including HTTP, FTP,
+■    Lower overall cost. Although hard to measure,       and variations of RPC. For example, HTTP’s basic
+     infrastructure services have a fundamental cost     primitive, the “get” command, is by definition a
+     advantage over designs based on stand-alone         query. My third assumption is that read-only
+     devices. Infrastructure resources can be multi-     queries greatly outnumber updates (queries that
+     plexed across active users, whereas end-user        affect the persistent data store). Even sites that we
+     devices serve at most one user (active or not).     tend to think of as highly transactional, such as e-
+     Moreover, end-user devices have very low uti-       commerce or financial sites, actually have this
+     lization (less than 4 percent), while infrastruc-   type of “read-mostly” traffic1: Product evaluations
+     ture resources often reach 80 percent utiliza-      (reads) greatly outnumber purchases (updates), for
+     tion. Thus, moving anything from the device         example, and stock quotes (reads) greatly out-
+     to the infrastructure effectively improves effi-    number stock trades (updates). Finally, as the side-
+     ciency by a factor of 20. Centralizing the          bar, “Clusters in Giant-Scale Services” (next page)
+     administrative burden and simplifying end           explains, all giant-scale sites use clusters.
+     devices also reduce overall cost, but are harder       The basic model includes six components:
+     to quantify.
+■    Simplified service updates. Perhaps the most        ■   Clients, such as Web browsers, standalone e-
+     powerful long-term advantage is the ability to          mail readers, or even programs that use XML
+     upgrade existing services or offer new services         and SOAP initiate the queries to the services.
+     without the physical distribution required by       ■   The best-effort IP network, whether the public
+     traditional applications and devices. Devices           Internet or a private network such as an
+     such as Web TVs last longer and gain useful-            intranet, provides access to the service.
+     ness over time as they benefit automatically        ■   The load manager provides a level of indirection
+     from every new Web-based service.                       between the service’s external name and the
+                                                             servers’ physical names (IP addresses) to preserve
+Components                                                   the external name’s availability in the presence
+Figure 1 shows the basic model for giant-scale               of server faults. The load manager balances load
+sites. The model is based on several assumptions.            among active servers. Traffic might flow through
+First, I assume the service provider has limited             proxies or firewalls before the load manager.
+control over the clients and the IP network.             ■   Servers are the system’s workers, combining
+Greater control might be possible in some cases,             CPU, memory, and disks into an easy-to-repli-
+however, such as with intranets. The model also              cate unit.
+
+IEEE INTERNET COMPUTING                                                            http://computer.org/internet/              JULY • AUGUST 2001   47
+Scalable Internet Services
+
+
+                                                  Clusters in Giant-Scale Services
+                                                                                                       software components. Transient
+           Table A. Example clusters for giant-scale services.                                         hardware failures and software faults
+                                                                                                       due to rapid system evolution are
+     Service                          Nodes          Queries        Nodes
+                                                                                                       inevitable, but clusters simplify the
+     AOL Web cache                    >1,000         10B/day        4-CPU DEC 4100s                    problem by providing (largely)
+     Inktomi search engine            >1,000         >80M/day       2-CPU Sun Workstations             independent faults.
+     Geocities                        >300           >25M/day       PC Based                       ■   Incremental scalability. Clusters should
+     Anonymous Web-based e-mail       >5,000         >1B/day        FreeBSD PCs                        allow for scaling services as needed to
+                                                                                                       account for the uncertainty and
+ Clusters are collections of commodity                   work service must scale to support a          expense of growing a service. Nodes
+ servers that work together on a single                  substantial fraction of the world’s           have a three-year depreciation lifetime,
+ problem. Giant-scale services use clusters              population. Users spend increasingly          for example, and should generally be
+ to meet scalability requirements that                   more time online each day, and                replaced only when they no longer
+ exceed those of any single machine.Table                analysts predict that about 1.1 billion       justify their rack space compared to
+ A shows some representative clusters and                people will have some form of                 new nodes. Given Moore’s law, a unit
+ their traffic.                                          infrastructure access within the next         of rack space should quadruple in
+      Other examples include some of Exo-                10 years.                                     computing power over three years,
+ dus Communications’ data centers, which             ■   Cost and performance. Although a              and actual increases appear to be
+ house several thousand nodes that support               traditionally compelling reason for           faster due to improvements in
+ hundreds of different services; and AOL’s               using clusters, hardware cost and             packaging and disk size.
+ recently added US$520 million data center,              performance are not really issues for
+ which is larger than three football fields and          giant-scale services. No alternative to   Given these advantages, we view commodi-
+ filled almost entirely with clusters.                   clusters can match the required scale,    ty nodes as the basic building blocks for
+ Although I assume that all giant-scale ser-             and hardware cost is typically dwarfed    giant-scale services. The goal is then to
+ vices use clusters, it is useful to review the          by bandwidth and operational costs.       exploit these advantages, particularly inde-
+ driving forces behind their use.                    ■   Independent components. Users expect      pendent faults and incremental scalability,
+                                                         24-hour service from systems that         into our higher-level goals of availability,
+ ■    Absolute scalability. A successful net-            consist of thousands of hardware and      graceful degradation, and ease of evolution.
+
+
+
+
+                       ■    The persistent data store is a replicated or par-         approach balances load well, it does not hide
+                            titioned “database” that is spread across the             inactive servers; a client with a down node’s
+                            servers’ disks. It might also include network-            address will continue to try to use it until the
+                            attached storage such as external DBMSs or                DNS mapping expires, which might take several
+                            systems that use RAID storage.                            hours. (Short “time-to-live” settings have short-
+                       ■    Many services also use a backplane. This                  er outages, but require the client to make more
+                            optional system-area-network handles inter-               DNS lookups.) Many browsers exacerbate the
+                            server traffic such as redirecting client queries         problem by mishandling DNS expiration.
+                            to the correct server or coherence traffic for the           Fortunately, many vendors now sell “layer-4”
+                            persistent data store.                                    switches to solve load management (for example,
+                                                                                      Cisco’s CSS 11800 content switch, F5 Networks’
+                       Nearly all services have several other service-spe-            Big-IP enterprise switch, and Foundry Networks’
+                       cific auxiliary systems such as user-profile data-             ServerIron Web switch). Such transport-layer
+                       bases, ad servers, and site management tools, but              switches understand TCP and port numbers, and
+                       we can ignore these in the basic model.                        can make decisions based on this information.
+                                                                                      Many of these are “layer-7” (application layer)
+                       Load Management                                                switches, in that they understand HTTP requests
+                       Load management has seen rapid improvement                     and can actually parse URLs at wire speed. The
+                       since around 1995. The original approach used                  switches typically come in pairs that support hot
+                       “round-robin DNS,” which distributes different IP              failover — the ability for one switch to take over
+                       addresses for a single domain name among                       for another automatically — to avoid the obvious
+                       clients in a rotating fashion. Although this                   single point of failure, and can handle throughputs
+
+48     JULY • AUGUST 2001           http://computer.org/internet/                                                           IEEE INTERNET COMPUTING
+                                                                                                                       Giant-Scale Services
+
+                                                                                         Client                    Client
+
+above 20 Gbits per second. They detect down                      Client                                                             Client
+nodes automatically, usually by monitoring open                                                   IP network
+TCP connections, and thus dynamically isolate
+down nodes from clients quite well.
+   Two other load-management approaches are
+typically employed in combination with layer-4
+                                                              Single-site server
+switches. The first uses custom “front-end” nodes                                                                        Round-
+that act as service-specific layer-7 routers (in soft-                                                                 robin DNS
+ware).2 Wal-Mart’s site uses this approach, for
+example, because it helps with session manage-
+ment: Unlike switches, the nodes track session
+information for each user.
+   The final approach includes clients in the load-
+management process when possible. This general
+                                                                                         Simple replicated store
+“smart client” end-to-end approach goes beyond
+the scope of a layer-4 switch.3 It greatly simplifies
+switching among different physical sites, which in       Figure 2. A simple Web farm. Round-robin DNS assigns different
+turn simplifies disaster tolerance and overload          servers to different clients to achieve simple load balancing. Persis-
+recovery. Although there is no generic way to do         tent data is fully replicated and thus all nodes are identical and can
+this for the Web, it is common with other systems.       handle all queries.
+In DNS, for instance, clients know about an alter-
+native server and can switch to it if the primary
+                                                                                       Program                 Program
+disappears; with cell phones this approach is
+implemented as part of roaming; and application                Program                                                             Program
+servers in the middle tier of three-tier database
+                                                                                                  IP network
+systems understand database failover.
+   Figures 2 and 3 illustrate systems at opposite
+ends of the complexity spectrum: a simple Web farm
+and a server similar to the Inktomi search engine
+cluster. These systems differ in load management,           Single-site server
+                                                                                                    Load
+use of a backplane, and persistent data store.                                                     manager
+   The Web farm in Figure 2 uses round-robin                                                                                 Myrinet
+                                                                                                                            backplane
+DNS for load management. The persistent data
+store is implemented by simply replicating all con-
+tent to all nodes, which works well with a small
+amount of content. Finally, because all servers can
+handle all queries, there is no coherence traffic
+and no need for a backplane. In practice, even                                           Partitioned data store
+simple Web farms often have a second LAN (back-
+plane) to simplify manual updates of the replicas.       Figure 3. Search engine cluster. The service provides support to other
+In this version, node failures reduce system capac-      programs (Web servers) rather than directly to end users.These pro-
+ity, but not data availability.                          grams connect via layer-4 switches that balance load and hide faults.
+   In Figure 3, a pair of layer-4 switches manages       Persistent data is partitioned across the servers, which increases
+the load within the site. The “clients” are actually     aggregate capacity but implies there is some data loss when a server
+other programs (typically Web servers) that use the      is down. A backplane allows all nodes to access all data.
+smart-client approach to failover among different
+physical clusters, primarily based on load.
+   Because the persistent store is partitioned           URLs, but some systems, such as clustered Web
+across servers, possibly without replication, node       caches, might also use the backplane to route
+failures could reduce the store’s effective size and     requests to the correct node.4
+overall capacity. Furthermore, the nodes are no
+longer identical, and some queries might need to         High Availability
+be directed to specific nodes. This is typically         High availability is a major driving requirement
+accomplished using a layer-7 switch to parse             behind giant-scale system design. Other infra-
+
+IEEE INTERNET COMPUTING                                                            http://computer.org/internet/              JULY • AUGUST 2001   49
+Scalable Internet Services
+
+
+
+                                                                              For example, to see if a component has an MTBF
+                                                                              of one week requires well more than a week of
+                                                                              testing under heavy realistic load. If the compo-
+                                                                              nent fails, you have to start over, possibly repeat-
+                                                                              ing the process many times. Conversely, measur-
+                                                                              ing the MTTR takes minutes or less and achieving
+                                                                              a 10-percent improvement takes orders of magni-
+                                                                              tude less total time because of the very fast debug-
+                                                                              ging cycle. In addition, new features tend to reduce
+                                                                              MTBF but have relatively little impact on MTTR,
+                                                                              which makes it more stable. Thus, giant-scale sys-
+                                                                              tems should focus on improving MTTR and simply
+                                                                              apply best effort to MTBF.
+                                                                                 We define yield as the fraction of queries that
+                                                                              are completed:
+
+                     Figure 4. 100-node 200-CPU cluster. Key design             yield = queries completed/queries offered          (2)
+                     points include extreme symmetry, internal disks,
+                     no people, no monitors, and no visible cables.           Numerically, this is typically very close to uptime,
+                                                                              but it is more useful in practice because it directly
+                                                                              maps to user experience and because it correctly
+                     structures — such as the telephone, rail, and water      reflects that not all seconds have equal value.
+                     systems — aim for perfect availability, a goal that      Being down for a second when there are no queries
+                     should apply to IP-based infrastructure services as      has no impact on users or yield, but reduces
+                     well. All these systems plan for component failures      uptime. Similarly, being down for one second at
+                     and natural disasters, but information systems           peak and off-peak times generates the same
+                     must also deal with constantly evolving features         uptime, but vastly different yields because there
+                     and unpredictable growth.                                might be an order-of-magnitude difference in load
+                        Figure 4 shows a cluster designed for high            between the peak second and the minimum-load
+                     availability: It features extreme symmetry, no peo-      second. Thus we focus on yield rather than uptime.
+                     ple, very few cables, almost no external disks, and         Because these systems are typically based on
+                     no monitors. Each of these design features reduces       queries, we can also measure query completeness
+                     the number of failures in practice. In addition, Ink-    — how much of the database is reflected in the
+                     tomi manages the cluster from offsite, and con-          answer. We define this fraction as the harvest of
+                     tracts limit temperature and power variations.           the query:
+
+                     Availability Metrics                                       harvest = data available/complete data             (3)
+                     The traditional metric for availability is uptime,
+                     which is the fraction of time a site is handling traf-   A perfect system would have 100 percent yield
+                     fic. Uptime is typically measured in nines, and tra-     and 100 percent harvest. That is, every query
+                     ditional infrastructure systems such as the phone        would complete and would reflect the entire data-
+                     system aim for four or five nines (“four nines”          base. Similarly, we can extend this idea to the
+                     implies 0.9999 uptime, or less than 60 seconds of        fraction of features available; systems such as
+                     downtime per week). Two related metrics are mean-        eBay can have some features, such as seller pro-
+                     time-between-failure (MTBF) and mean-time-to-            files, unavailable while the rest of the site works
+                     repair (MTTR). We can think of uptime as:                perfectly.
+                                                                                 The key insight is that we can influence
+                          uptime = (MTBF – MTTR)/MTBF                   (1)   whether faults impact yield, harvest, or both.
+                                                                              Replicated systems tend to map faults to reduced
+                     Following this equation, we can improve uptime           capacity (and to yield at high utilizations), while
+                     either by reducing the frequency of failures or          partitioned systems tend to map faults to reduced
+                     reducing the time to fix them. Although the for-         harvest, as parts of the database temporarily dis-
+                     mer is more pleasing aesthetically, the latter is        appear, but the capacity in queries per second
+                     much easier to accomplish with evolving systems.         remains the same.
+
+50   JULY • AUGUST 2001          http://computer.org/internet/                                                  IEEE INTERNET COMPUTING
+                                                                                                            Giant-Scale Services
+
+
+
+DQ Principle                                              database sizes, and hardware and software
+The DQ Principle is simple:                               upgrades. Overall, DQ normally scales linearly
+                                                          with the number of nodes, which means a small
+    Data per query × queries per second → constant        test cluster is a good predictor for DQ changes on
+                                                (4)       the production system. For example, Inktomi has
+                                                          been able to use four-node clusters to predict per-
+This is a principle rather than a literal truth, but it   formance improvements on 100-node clusters due
+is remarkably useful for thinking about giant-scale       to software optimizations. The DQ impact can and
+systems. The intuition behind this principle is that      should be evaluated for all proposed hardware and
+the system’s overall capacity tends to have a par-        software changes prior to deployment. Similarly,
+ticular physical bottleneck, such as total I/O band-      the best case under multiple node faults is a linear
+width or total seeks per second, which is tied to         reduction in overall DQ.
+data movement. The DQ value is the total amount               We can translate future traffic predictions into
+of data that has to be moved per second on aver-          future DQ requirements and thus into hardware
+age, and it is thus bounded by the underlying             and software targets. This lets us convert traffic
+physical limitation. At the high utilization level        predictions into capacity planning decisions, tak-
+typical of giant-scale systems, the DQ value              ing into account any expected hardware or soft-
+approaches this limitation.                               ware improvements.
+    Various systems have used versions of this                In terms of availability, these principles are espe-
+principle for a long time. For example, the query         cially valuable for analyzing fault impact. As I
+optimizer in System R used the number of I/O              mentioned, the best we can do is
+operations as the metric of optimization.5 The DQ         to degrade DQ linearly with the
+principle focuses more on bandwidth than on the           number of (node) faults. The              Absolute value is
+number of I/Os (or seeks) — mainly because I              design goal for high availability
+have found that it correlates better with capaci-         is thus to control how DQ reduc-          not typically that
+ty and seems easier to affect gracefully. On a            tions affect our three availability
+more intuitive level, service work corresponds to         metrics. The obvious limit of this        important, but
+the amount of data moved because of data copy-            principle is that it is for data-
+ing, presentation layers, and the many indepen-           intensive sites. Computation-             relative value is
+dent connections that tend to make these sys-             bound sites (such as simulation
+tems more network-bound than disk-bound.                  engines) or sites with long-laten-        very predictive.
+Also, the workload distribution tends to be fair-         cy external actions (such as chat
+ly stable overall because of the scale (we are            sites) behave differently. The vast
+aggregating over thousands of connections),               majority of the top 100 sites are data intensive,
+which means the ratio of bandwidth to I/Os is             however, which is not surprising given that the
+fairly consistent. Thus, either would be a good           Internet is primarily a communication medium.
+metric for most systems.
+    The DQ value is measurable and tunable. Adding        Replication vs. Partitioning
+nodes or implementing software optimizations              Replication is a traditional technique for increas-
+increases the DQ value, while the presence of faults      ing availability, and I will compare it to parti-
+reduces it. The absolute value is not typically that      tioning from the perspective of DQ and our
+important, but the relative value under various           availability metrics. Consider a two-node clus-
+changes is very predictive. Thus, the first step is to    ter: The replicated version has traditionally been
+define the specific DQ metric for the service by          viewed as “better” because it maintains 100 per-
+defining the target workload and using a load gen-        cent harvest under a fault, whereas the parti-
+erator to measure a given combination of hardware,        tioned version drops to 50 percent harvest. Dual
+software, and database size against this workload.        analysis shows that the replicated version drops
+Every node has a DQ capacity that depends on this         to 50 percent yield, however, while the parti-
+combination. Different nodes might have different         tioned version remains at 100 percent yield. Fur-
+values if they were bought separately; knowing the        thermore, both versions have the same initial DQ
+relative DQ values tells you how unevenly to do           value and lose 50 percent of it under one fault:
+partitioning or load balancing.                           Replicas maintain D and reduce Q (and thus
+    Given the metric and load generator, it is then       yield), while partitions keep Q constant and
+easy to measure the (relative) DQ impact of faults,       reduce D (and thus harvest).
+
+IEEE INTERNET COMPUTING                                                     http://computer.org/internet/      JULY • AUGUST 2001   51
+Scalable Internet Services
+
+              Table 1. Overload due to failures.
+                                                                              key data. We still lose 1/n of the data, but it will
+ Failures      Lost capacity     Redirected load         Overload factor      always be one of the less important partitions. This
+ 1                   1                 1                         n            combined approach preserves the key data, but
+                     n               n-1                     n-1              also allows us to use our “replicated” DQ capacity
+                                                                              to serve other content during normal operation.
+ k                   k                  k                        n               Finally, we can exploit randomization to make
+                     n               n −k                    n -k             our lost harvest a random subset of the data, (as
+                                                                              well as to avoid hot spots in partitions). Many of
+                                                                              the load-balancing switches can use a (pseudo-
+                                                                              random) hash function to partition the data, for
+                        The traditional view of replication silently          example. This makes the average and worst-case
+                     assumes that there is enough excess capacity to          losses the same because we lose a random subset
+                     prevent faults from affecting yield. We refer to this    of “average” value. The Inktomi search engine uses
+                     as the load redirection problem because under            partial replication; e-mail systems use full replica-
+                     faults, the remaining replicas have to handle the        tion; and clustered Web caches use no replication.
+                     queries formerly handled by the failed nodes.            All three use randomization.
+                     Under high utilization, this is unrealistic.
+                        Table 1 generalizes this analysis to replica groups   Graceful Degradation
+                     with n nodes. Losing two of five nodes in a replica      It would be nice to believe that we could avoid sat-
+                     group, for example, implies a redirected load of 2/3     uration at a reasonable cost simply by good design,
+                     extra load (two loads spread over three remaining        but this is unrealistic for three major reasons.
+                     nodes) and an overload factor for those nodes of 5/3
+                     or 166 percent of normal load.                           ■   The peak-to-average ratio for giant-scale sys-
+                        The key insight is that replication on disk is            tems seems to be in the range of 1.6:1 to 6:1,
+                     cheap, but accessing the replicated data requires            which can make it expensive to build out
+                     DQ points. For true replication you need not only            capacity well above the (normal) peak.
+                     another copy of the data, but also twice the DQ          ■   Single-event bursts, such as online ticket sales
+                     value. Conversely, partitioning has no real savings          for special events, can generate far above-aver-
+                     over replication. Although you need more copies              age traffic. In fact, moviephone.com added 10x
+                     of the data with replication, the real cost is in the        capacity to handle tickets for “Star Wars: The
+                     DQ bottleneck rather than storage space, and the             Phantom Menace” and still got overloaded.
+                     DQ constant is independent of whether the data-          ■   Some faults, such as power failures or natural
+                     base is replicated or partitioned. An important              disasters, are not independent. Overall DQ
+                     exception to this is that replication requires more          drops substantially in these cases, and the
+                     DQ points than partitioning for heavy write traf-            remaining nodes become saturated.
+                     fic, which is rare in giant-scale systems.
+                        According to these principles, you should             Given these facts, mechanisms for graceful degra-
+                     always use replicas above some specified through-        dation under excess load are critical for delivering
+                     put. In theory, you can always partition the data-       high availability. The DQ principle gives us new
+                     base more thinly and avoid the extra replicas, but       options for graceful degradation: We can either
+                     with no DQ difference, it makes more sense to            limit Q (capacity) to maintain D, or we can reduce
+                     replicate the data once the partitions are a conve-      D and increase Q. We can focus on harvest through
+                     nient size. You will enjoy more control over har-        admission control (AC), which reduces Q, or on
+                     vest and support for disaster recovery, and it is        yield through dynamic database reduction, which
+                     easier to grow systems via replication than by           reduces D, or we can use a combination of the two.
+                     repartitioning onto more nodes.                          Temporarily cutting the effective database size in
+                        We can vary the replication according to the          half, for instance, should roughly double our
+                     data’s importance, and generally control which           capacity. Some giant-scale services have just start-
+                     data is lost in the presence of a fault. For example,    ed applying the latter strategy.
+                     for the cost of some extra disk space we can repli-         The larger insight is that graceful degradation
+                     cate key data in a partitioned system. Under nor-        is simply the explicit process for managing the
+                     mal use, one node handles the key data and the           effect of saturation on availability; that is, we
+                     rest provide additional partitions. If the main node     explicitly decide how saturation should affect
+                     fails, we can make one of the other nodes serve the      uptime, harvest, and quality of service. Here are
+
+52   JULY • AUGUST 2001          http://computer.org/internet/                                                  IEEE INTERNET COMPUTING
+                                                                                                           Giant-Scale Services
+
+
+
+some more sophisticated examples taken from real        remaining sites must handle 50 percent more traf-
+systems:                                                fic. This will almost certainly saturate the site,
+                                                        which will employ graceful-degradation tech-
+■    Cost-based AC. Inktomi can perform AC based        niques to recover. For Inktomi, the best plan would
+     on the estimated query cost (measured in DQ).      be to dynamically reduce D by 2/3 (to get 3/2 Q)
+     This reduces the average data required per         on the remaining replicas. The current plan actu-
+     query, and thus increases Q. Note that the AC      ally reduces D to 50 percent for any disaster, which
+     policy affects both D and Q. Denying one           is simpler, but not as aggressive.
+     expensive query could thus enable several             Load management presents a harder problem for
+     inexpensive ones, giving us a net gain in har-     disaster recovery. Layer-4 switches do not help
+     vest and yield. (Although I know of no exam-       with the loss of whole clusters, so the external site
+     ples, AC could also be done probabilistically      name might become unavailable during a disaster.
+     — perhaps in the style of lottery scheduling,      In that case, you must resort to DNS changes or
+     so that retrying hard queries eventually           smart clients to redirect traffic to the other repli-
+     works.)                                            cas. As I mentioned, however, DNS might have a
+■    Priority- or value-based AC. Datek handles         very slow failover response time of up to several
+     stock trade requests differently from other        hours. With a smart-client approach, clients can
+     queries and guarantees that they will be exe-      perform the higher-level redirection automatical-
+     cuted within 60 seconds, or the user pays no       ly and immediately, which seems the most com-
+     commission. The idea is to reduce the required     pelling reason to use smart clients.
+     DQ by dropping low-value queries, indepen-
+     dently of their DQ cost.                           Online Evolution and Growth
+■    Reduced data freshness. Under saturation, a        One of the traditional tenets of highly available
+     financial site can make stock quotes expire less   systems is minimal change. This directly conflicts
+     frequently. This reduces freshness but also        with both the growth rates of giant-scale services
+     reduces the work per query, and thus increas-      and “Internet time” — the practice of frequent
+     es yield at the expense of harvest. (The cached    product releases. For these services, we must plan
+     queries don’t reflect the current database and     for continuous growth and frequent functionality
+     thus have lower harvest.)                          updates. Worse still, the frequency of updates
+                                                        means that in practice, software is never perfect;
+As you can see, the DQ principle can be used as         hard-to-resolve issues such as slow memory leaks
+a tool for designing how saturation affects our         and nondeterministic bugs tend to remain
+availability metrics. We first decide which met-        unfixed. The prevailing design philosophy aims to
+rics to preserve (or at least focus on), and then we    make the overall system tolerant of individual
+use sophisticated AC to limit Q and possibly            node failures and to avoid cascading failures.
+reduce the average D. We also use aggressive            Thus, “acceptable” quality comes down to soft-
+caching and database reduction to reduce D and          ware that provides a target MTBF, a low MTTR,
+thus increase capacity.                                 and no cascading failures.
+                                                           We can think of maintenance and upgrades as
+Disaster Tolerance                                      controlled failures, and the “online evolution”
+Disaster tolerance is a simple combination of man-      process — completing upgrades without taking
+aging replica groups and graceful degradation. A        down the site — is important because giant-scale
+disaster can be defined as the complete loss of one     services are updated so frequently. By viewing
+or more replicas. Natural disasters can affect all      online evolution as a temporary, controlled
+the replicas at one physical location, while other      reduction in DQ value, we can act to minimize
+disasters such as fires or power failures might         the impact on our availability metrics. In gener-
+affect only one replica.                                al, online evolution requires a fixed amount of
+   Under the giant-scale services model, the basic      time per node, u, so that the total DQ loss for n
+question is how many locations to establish and         nodes is:
+how many replicas to put at each. To examine the
+load redirection problem, I return to Table 1. With       ∆DQ = n · u · average DQ/node = DQ · u              (5)
+two replicas at each of three locations, for exam-
+ple, we expect to lose 2/6 of the replicas during a     That is, the lost DQ value is simply the total DQ
+natural disaster, which implies that each of the        value multiplied by the upgrade time per node.
+
+IEEE INTERNET COMPUTING                                                    http://computer.org/internet/      JULY • AUGUST 2001   53
+Scalable Internet Services
+
+
+
+                                  Ideal                                             be compatible because they will coexist. Exam-
+                           DQ                                                       ples of incompatible versions include changes
+                          value                   Rolling upgrade                   to schema, namespaces, or (intracluster) proto-
+                                                                     Big flip       cols. Neither of the other two approaches has
+                                             Fast reboot
+                                                                                    this restriction.
+                                                         Time                   ■   Big flip. The final approach is the most com-
+                                                                                    plicated. The basic idea is to update the clus-
+                     Figure 5.Three approaches to upgrades.The shad-                ter one half at a time by taking down and
+                     ed regions map DQ loss (down from the ideal                    upgrading half the nodes at once. During the
+                     value) over time for a four-node cluster. Note that            “flip,” we atomically switch all traffic to the
+                     the area of the three regions is the same.                     upgraded half using a layer-4 switch. After
+                                                                                    waiting for connections to the old half to dis-
+                                                                                    sipate (the switch only affects new connec-
+                        Upgrade time is essentially recovery time, and              tions), we then upgrade the second half and
+                     depends on the kind of change. Software upgrades               bring those nodes back into use. As with fast
+                     are most common and can be handled quickly                     reboot, only one version runs at a time. Note
+                     with a staging area, which allows both the new                 that the 50 percent DQ loss can be translated
+                     and old versions to coexist on the node. System                into either 50 percent capacity for replicas
+                     administrators can do a controlled reboot (at                  (which might be 100 percent off-peak yield) or
+                     worst) to upgrade the node within the normal                   50 percent harvest for partitions.
+                     MTTR. Without sufficient workspace, the down-
+                     time is much greater because the administrator             The big flip is quite powerful and can be used for
+                     must move the new version onto the node while              all kinds of upgrades, including hardware, OS,
+                     the system is down. Staging also simplifies return-        schema, networking, and even physical relocation.
+                     ing to the old version, which is helpful because live      When used for relocating a cluster, the big flip
+                     traffic tends to expose new bugs. Other upgrades,          must typically use DNS changes, and the upgrade
+                     such as hardware, operating system, database               time includes physically moving the nodes, which
+                     schema, or repartitioning, require significantly           means the window of 50 percent DQ loss might
+                     more downtime.                                             last several hours. This is manageable over a week-
+                        Three main approaches are used for online               end, however, and Inktomi has done it twice: first,
+                     evolution:                                                 when moving about 20 nodes from Berkeley to
+                                                                                Santa Clara, California, (about an hour apart) using
+                     ■    Fast reboot. The simplest approach is to quick-       DNS for the flip; and second, when moving about
+                          ly reboot all nodes into the new version. The         100 nodes between two cages in the same data
+                          fast reboot is straightforward, but it guarantees     center using a switch for the flip.
+                          some downtime. Thus, it is more useful to mea-           All three approaches have the same DQ loss (for
+                          sure lost yield rather than downtime. By              a given upgrade), so we can plot their effective DQ
+                          upgrading during off-peak hours, we can               level versus time, which is shown in Figure 5. The
+                          reduce the yield impact. In practice, this            three regions have the same area, but the DQ loss is
+                          requires a staging area because the upgrades all      spread over time differently. All three approaches
+                          occur at the same time and thus need to be            are used in practice, but rolling upgrades are eas-
+                          highly automated.                                     ily the most popular. The heavyweight big flip is
+                     ■    Rolling upgrade. In this approach, we upgrade         reserved for more complex changes and is used
+                          nodes one at a time in a “wave” that rolls            only rarely. The approaches differ in their handling
+                          through the cluster. This minimizes the overall       of the DQ loss and in how they deal with staging
+                          impact because only one node is down at a             areas and version compatibility, but all three ben-
+                          time. In a partitioned system, harvest will be        efit from DQ analysis and explicit management of
+                          reduced during the n upgrade windows, but in          the impact on availability metrics.
+                          a replicated system we expect 100 percent yield
+                          and 100 percent harvest because we can update         Conclusions
+                          one replica at a time, and we probably have           From my experience with several giant-scale ser-
+                          enough capacity (in off hours) to prevent lost        vices, I have defined several tools for designing
+                          yield. One disadvantage with the rolling              and analyzing giant-scale services. Starting with
+                          upgrade is that the old and new versions must         the basic architectural model leads to novel ways
+
+54   JULY • AUGUST 2001              http://computer.org/internet/                                               IEEE INTERNET COMPUTING
+                                                                                                                 Giant-Scale Services
+
+
+
+to think about high availability, including the DQ       lution and graceful degradation, for example,
+principle and the use of harvest and yield. Expe-        could be greatly automated. Similarly, future sys-
+rience has helped us develop several ways to con-        tems could provide more direct ways to integrate
+trol the impact of faults through combinations of        simple application information, such as a query’s
+replication and partitioning. These tools are use-       cost or value, into availability and load manage-
+ful for graceful degradation, disaster tolerance,        ment mechanisms. Finally, better use of smart
+and online evolution.                                    clients could simplify disaster recovery, online
+   I’ve learned several major lessons for develop-       evolution, and graceful degradation.
+ing giant-scale services:
+                                                         References
+■    Get the basics right. Start with a professional     1. A. Wolman et al., “On the Scale and Performance of
+     data center and layer-7 switches, and use sym-         Cooperative Web Proxy Caching,” Proc. 17th Symp.
+     metry to simplify analysis and management.             Operating Systems Principles 1999, ACM Press, New
+■    Decide on your availability metrics. Everyone          York, 1999, pp. 16-31.
+     should agree on the goals and how to measure        2. A. Fox et al., “Cluster-Based Scalable Network Services,”
+     them daily. Remember that harvest and yield            Proc. 16th Symp. Operating System Principles, ACM Press,
+     are more useful than just uptime.                      New York, 1997, pp. 78-91.
+■    Focus on MTTR at least as much as MTBF.             3. C. Yoshikawa et al., “Using Smart Clients to Build Scalable
+     Repair time is easier to affect for an evolving        Services,” Proc. Usenix Annual Technical Conf., Usenix
+     system and has just as much impact.                    Assoc., Berkeley, Calif., Jan. 1997.
+■    Understand load redirection during faults. Data     4. Traffic Server Technical Specification, Inktomi Corpora-
+     replication is insufficient for preserving uptime      tion, Foster City, Calif., 2001; http://www.inktomi.com/
+     under faults; you also need excess DQ.                 products/cns/products/tscclass.html.
+■    Graceful degradation is a critical part of a        5. M.M. Astrahan et al., “System R: A Relational Approach to
+     high-availability strategy. Intelligent admission      Database Management,” ACM Trans. Database Systems,
+     control and dynamic database reduction are             ACM Press, New York, June 1976, p. 97.
+     the key tools for implementing the strategy.
+■    Use DQ analysis on all upgrades. Evaluate all       Eric A. Brewer is founder and Chief Scientist of Inktomi and an
+     proposed upgrades ahead of time, and do                  associate professor of computer science at UC Berkeley. He
+     capacity planning.                                       received a PhD in computer science from MIT. His research
+■    Automate upgrades as much as possible.                   interests include mobile and wireless computing, scalable
+     Develop a mostly automatic upgrade method,               servers, and application- and system-level security. Brew-
+     such as rolling upgrades. Using a staging area           er founded the Federal Search Foundation in 2000, which
+     will reduce downtime, but be sure to have a              helped create the first U.S. government-wide portal, First-
+     fast, simple way to revert to the old version.           Gov.gov, for which he won the 2001 Federal CIO Council’s
+                                                              Azimuth Award.
+These techniques seem to get to the core issues in
+practice and provide ways to think about avail-          Readers can contact the author at brewer@cs.berkeley.edu.
+ability and fault tolerance that are predictable,
+analyzable, and measurable.                              For further information on this or any other computing topic,
+   Current solutions are essentially ad hoc appli-           please visit our Digital Library at http://computer.org/
+cations of these ideas. Techniques for online evo-           publications/dlib/.
+
+
+
+
+    Coming in 2002 ...
+                    • Peer-to-Peer Networking
+                    • Usability and the World Wide Web
+                    • Internet Telephony
+    Calls for papers are available at http://computer.org/call4ppr.htm
+
+IEEE INTERNET COMPUTING                                                         http://computer.org/internet/        JULY • AUGUST 2001   55
+

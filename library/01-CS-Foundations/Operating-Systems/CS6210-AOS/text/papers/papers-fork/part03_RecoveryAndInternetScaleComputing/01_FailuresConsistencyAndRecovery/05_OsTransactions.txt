@@ -1,0 +1,1170 @@
+                                        Operating System Transactions
+
+                             Donald E. Porter, Owen S. Hofmann, Christopher J. Rossbach,
+                                         Alexander Benn, and Emmett Witchel
+                                  Department of Computer Sciences, The University of Texas at Austin
+                                       {porterde,osh,rossbach,abenn1,witchel}@cs.utexas.edu
+
+
+
+ABSTRACT                                                                             Programming; D.4.7 [Operating Systems]: Organization
+Applications must be able to synchronize accesses to oper-                           and Design
+ating system resources in order to ensure correctness in the
+face of concurrency and system failures. System transac-                             General Terms
+tions allow the programmer to specify updates to heteroge-                           Design, Performance, Security
+neous system resources with the OS guaranteeing atomicity,
+consistency, isolation, and durability (ACID). System trans-                         Keywords
+actions efficiently and cleanly solve persistent concurrency                         Transactions, Operating Systems, TxOS, Race Conditions,
+problems that are difficult to address with other techniques.                        Transactional Memory
+For example, system transactions eliminate security vulner-
+abilities in the file system that are caused by time-of-check-                       1.   INTRODUCTION
+to-time-of-use (TOCTTOU) race conditions. System trans-
+actions enable an unsuccessful software installation to roll                            Applications often need to group accesses to operating
+                                                                                     system resources (such as files and signals) into logical units,
+back without disturbing concurrent, independent updates to
+the file system.                                                                     just as multithreaded applications must group accesses to
+   This paper describes TxOS, a variant of Linux 2.6.22 that                         shared data structures into critical regions. For example,
+implements system transactions. TxOS uses new implemen-                              local user and group accounts on Linux and similar oper-
+tation techniques to provide fast, serializable transactions                         ating systems are stored across three files that need to be
+with strong isolation and fairness between system transac-                           mutually consistent: /etc/passwd, /etc/shadow, and
+                                                                                     /etc/group.
+tions and non-transactional activity. The prototype demon-
+strates that a mature OS running on commodity hardware                                  Applications currently struggle to make consistent updates
+can provide system transactions at a reasonable performance                          to system resources. In current operating systems, individ-
+cost. For instance, a transactional installation of OpenSSH                          ual system calls are generally atomic and isolated from the
+incurs only 10% overhead, and a non-transactional compila-                           rest of the system, but it is difficult, if not impossible, to con-
+                                                                                     dense complex operations into a single system call. In sim-
+tion of Linux incurs negligible overhead on TxOS. By mak-
+                                                                                     ple cases, programmers can use a powerful, single system
+ing transactions a central OS abstraction, TxOS enables new
+transactional services. For example, one developer proto-                            call like rename, which atomically replaces the contents of
+typed a transactional ext3 file system in less than one month.                       a file. For more complex updates, options like file locking
+                                                                                     are clumsy and difficult to program. In the presence of con-
+                                                                                     currency, the problem is exacerbated because existing inter-
+                                                                                     faces are often insufficient to protect a series of system calls
+Categories and Subject Descriptors                                                   from interference by buggy or malicious applications. With
+D.4.1 [Operating Systems]: Process Management—synchro-                               the current proliferation of multi-core processors, concurrent
+nization; D.1.3 [Programming Techniques]: Concurrent                                 processing is becoming ubiquitous, exposing the inability of
+                                                                                     the traditional system call interface to ensure consistent ac-
+                                                                                     cesses.
+                                                                                        In the example of managing local user accounts, devel-
+Permission to make digital or hard copies of all or part of this work for            opers spend substantial effort creating tools that minimize,
+personal or classroom use is granted without fee provided that copies are            but fail to eliminate consistency problems. The vipw and
+not made or distributed for profit or commercial advantage and that copies
+bear this notice and the full citation on the first page. To copy otherwise, to      useradd utilities help ensure that user account databases
+republish, to post on servers or to redistribute to lists, requires prior specific   are formatted correctly and mutually consistent. To address
+permission and/or a fee.                                                             concurrency in the system, these tools create lock files for
+SOSP’09, October 11–14, 2009, Big Sky, Montana, USA.
+Copyright 2009 ACM 978-1-60558-752-3/09/10 ...$10.00.                                mutual exclusion. A careless administrator, however, can
+corrupt the files by simply editing them directly. The tools      TxOS enables user and OS developers to create powerful
+also use the sync() and rename commands to ensure                 applications and services. For example, given an initial im-
+that an individual file is not corrupted if the system crashes,   plementation of TxOS, a single developer needed less than a
+but cannot ensure that an update to multiple files is consis-     month to prototype a transactional ext3 file system.
+tently propagated. For instance, suppose a system crashes            This paper makes two primary contributions. First, it de-
+after useradd writes /etc/passwd but before it writes             scribes a new approach to OS implementation that supports
+/etc/shadow. After rebooting the system, the new user             efficient transactions on commodity hardware with strong
+will not be able to log on, yet useradd will fail because it      atomicity and isolation guarantees. Secondly, it demonstrates
+thinks the user already exists, leaving the system administra-    a prototype implementation of system transactions (TxOS)
+tor to manually repair the database files. The proliferation of   whose strong guarantees and good performance enable new
+tools to mitigate such a simple problem, as well as the tools’    solutions to systems problems such as:
+incompleteness, indicate that developers need a better API           1. Eliminating security vulnerabilities exploited by file
+for consistent system accesses.                                         system race conditions.
+   In practice, OS maintainers address the lack of concur-           2. Rolling back an unsuccessful software install or up-
+rency control in the system call API in an ad hoc manner:               grade without disturbing concurrent, unrelated updates.
+new system calls and complex interfaces are added to solve              A transactional dpkg install adds only 10% overhead
+new problems as they arise. The critical problem of elimi-              for this increase in safety.
+nating file system race conditions has motivated Solaris and         3. Providing a lightweight alternative to a database for
+Linux developers to add over a dozen new system calls, such             concurrency management and crash consistency, yield-
+as openat, over the last seven years. Linux maintainers                 ing simpler application code and system administra-
+added a close-on-exec flag to fifteen system calls in a recent          tion. Replacing Berkeley DB with flat files and system
+version of Linux [13] to eliminate a race condition between             transactions as the storage back-end for the OpenL-
+calls to open and fcntl. Individual file systems have in-               DAP directory service improves performance on write-
+troduced new operations to address consistency needs: the               mostly workloads by 2–4⇥.
+Google File System supports atomic append operations [16],           4. Allowing user-level transactional programs to make sys-
+while Windows recently adopted support for transactions in              tem calls during a transaction.
+NTFS and the Windows registry [44]. Users should not be              The remainder of the paper is structured as follows. Sec-
+required to lobby OS developers for new system calls and          tion 2 provides motivating use-cases for system transactions
+file system features to meet their concurrent programming         and Section 3 describes programming with system transac-
+needs. Why not allow users to solve their own problems by         tions and their implementation in TxOS. Section 4 describes
+supporting composition of multiple system calls into arbi-        the design of TxOS, Section 5 provides kernel implementa-
+trary atomic and isolated units?                                  tion details, and Section 6 describes how certain key subsys-
+   This paper proposes system transactions to allow program-      tems provide transactional semantics. Section 7 measures
+mers to group accesses to system resources into logical units,    the performance overhead of system transactions and evalu-
+which execute with atomicity, consistency, isolation, and dura-   ates TxOS in a number of application case studies. Section 8
+bility (ACID). System transactions are easy to use: code re-      positions TxOS in related work and Section 9 concludes.
+gions with consistency constraints are enclosed within the
+system calls, sys_xbegin() and sys_xend(). The user               2.    MOTIVATING EXAMPLES
+can abort an in-progress transaction with sys_xabort().
+                                                                     A range of seemingly unrelated application problems share
+Placing system calls within a transaction alters the seman-
+                                                                  a root cause—the lack of a general mechanism to ensure
+tics of when and how their results are published to the rest
+                                                                  consistent access to system resources. This section reviews
+of the system. Outside of a transaction, actions on system
+                                                                  two common application consistency problems and how sys-
+resources are visible as soon as the relevant internal kernel
+                                                                  tem transactions remedy those problems. System transac-
+locks are released. Within a transaction, all accesses are kept
+                                                                  tions allow software installations to recover from failures
+isolated until commit time, when they are atomically pub-
+                                                                  without disrupting concurrent, independent updates to the
+lished to the rest of the system. System transactions provide
+                                                                  file system. System transactions also eliminate race condi-
+a simple and powerful way for applications to express con-
+                                                                  tions inherent in the file system API, which can be exploited
+sistency requirements for concurrent operations to the OS.
+                                                                  to undermine security.
+   This paper describes an implementation of system trans-
+actions on Linux called TxOS, which provides transactional        2.1   Software installation or upgrade
+semantics for OS resources, including the file system, mem-
+ory management, signals, and process creation. To efficiently       Installing new software or software patches is an increas-
+provide strong guarantees, the TxOS implementation rede-          ingly common system activity as time to market pressures
+signs several key OS data structures and internal subsystem       and good network connectivity combine to make software
+interfaces. By making transactions a core OS abstraction,         updates frequent for users. Yet software upgrade remains a
+                                                                  dangerous activity. For example, Microsoft recalled a pre-
+   Victim                         Attacker                                checking the access permissions of a file and conditionally
+if(access(’foo’)){
+                               symlink(’secret’,’foo’);                   writing it. Common in setuid programs, this pattern is the
+    fd=open(’foo’);                                                       source of a major and persistent security problem in mod-
+    write(fd,...);                                                        ern operating systems. An attacker can change the file sys-
+    ...
+}                                                                         tem name space using symbolic links between the victim’s
+                                                                          access control check and the file open, perhaps tricking
+      Victim                     Attacker                                 a setuid program into overwriting a sensitive system file,
+                               symlink(’secret’,’foo’);
+sys_xbegin();                                                             like the password database. The OS API provides no way
+if(access(’foo’)){                                                        for the application to tell the operating system that it needs a
+  fd=open(’foo’);                                                         consistent view of the file system’s name space.
+  write(fd,...);
+  ...                                                                        Although most common in the file system, system API
+}                                                                         races, or time-of-check-to-time-of-use (TOCTTOU) races,
+sys_xend();                                                               can be exploited in other OS resources. Local sockets used
+                               symlink(’secret’,’foo’);
+                                                                          for IPC are vulnerable to a similar race between creation
+Figure 1: An example of a TOCTTOU attack, followed by an exam-            and connection. Versions of OpenSSH before 1.2.17 suf-
+ple that eliminates the race using system transactions. The attacker’s    fered from a socket race exploit that allowed a user to steal
+symlink is serialized (ordered) either before or after the transaction,   another’s credentials [1]; the Plash sandboxing system suf-
+and the attacker cannot see partial updates from the victim’s transac-    fers a similar vulnerability [2]. Zalewski demonstrates how
+tion, such as changes to atime.                                           races in signal handlers can be used to crack applications,
+                                                                          including sendmail, screen, and wu-ftpd [57].
+requisite patch for Vista service pack 1 because it caused an                While TOCTTOU vulnerabilities are conceptually simple,
+endless cycle of boots and reboots [28]. More generally, a                they pervade deployed software and are difficult to elimi-
+partial upgrade can leave a system in an unusable state.                  nate. At the time of writing, a search of the U.S. national
+  Current systems are adopting solutions that mitigate these              vulnerability database for the term “symlink attack” yields
+problems, but each has its own drawbacks. Microsoft Win-                  over 600 hits [37]. Further, recent work by Cai et al. [7]
+dows and other systems provide a checkpoint-based solution                exploits fundamental flaws to defeat two major classes of
+to the software update problem. Users can take a check-                   TOCTTOU countermeasures: dynamic race detectors in the
+point of disk state before they install software: if something            kernel [53] and probabilistic user-space race detectors [52].
+goes wrong, they roll back to the checkpoint. Windows                     This continuous arms race of measure and countermeasure
+checkpoints certain key structures, like the registry and some            suggests that TOCTTOU attacks can be eliminated only by
+system files [30]. Other systems, like ZFS’s apt-clone,                   changing the API.
+checkpoint the entire file system. If the software installation              In practice, such races are addressed with ad hoc extension
+fails, the system restores the pre-installation file system im-           of the system API. Linux has added a new close-on-exec flag
+age, erasing file system updates that are concurrent but inde-            to fifteen different system calls to eliminate a race condi-
+pendent from the software installation. Partial checkpointing             tion between calls to open and fcntl. Tsafrir et al. [51]
+mitigates this problem, but loses the ability to recover from             demonstrate how programmers can use the openat() family
+application installations that corrupt files not checkpointed             of system calls to construct deterministic countermeasures
+by the system. Moreover, the user or the system must create               for many races by traversing the directory tree and checking
+and manage the disk-based checkpoints to make sure a valid                user permissions in the application. However, these tech-
+image is always available. Finally, if a bad installation af-             niques cannot protect against all races without even more
+fects volatile system state, errant programs can corrupt files            API extensions. In particular, they are incompatible with the
+unrelated to the failed installation. Collectively, these prob-           O_CREAT flag to open that is used to prevent exploits on
+lems severely decrease the usability of checkpoint-based so-              temporary file creation [9].
+lutions.                                                                     Fixing race conditions as they arise is not an effective
+  System transactions provide a simple interface to address               long-term strategy. Complicating the API in the name of se-
+these software installation problems. A user executes the                 curity is risky: code complexity is often the enemy of code
+software installation or update within a transaction, which               security [4]. Because system transactions provide determin-
+isolates the rest of the system until the installation success-           istic safety guarantees and a natural programming model,
+fully completes. If the installation or upgrade needs to be               they are an easy-to-use, general mechanism that eliminates
+rolled back, independent updates made concurrently remain                 API race conditions.
+undisturbed.
+                                                                          3.   OVERVIEW
+2.2    Eliminating races for security                                       System transactions are designed to provide programmers
+  Figure 1 depicts a scenario in which an application wants               with a natural abstraction for ensuring consistent access to
+to make a single, consistent update to the file system by                 system resources. This section describes the API, seman-
+tics, and behavior of system transactions, followed by an          3.1.2    Interaction of transactional and
+overview of how system transactions are supported in TxOS,                  non-transactional threads
+our prototype implementation of system transactions within            The OS serializes system transactions and non-transac-
+Linux.                                                             tional system calls, providing the strongest guarantees and
+                                                                   most intuitive semantics [18] to the programmer. The serial-
+3.1     System transactions                                        ization of transactional and non-transactional updates to the
+                                                                   same resources is called strong isolation [5]. Previous OS
+   System transactions provide ACID semantics for updates
+                                                                   transaction designs have left the interaction of transactions
+to OS resources, such as files, pipes, and signals. In this pro-
+                                                                   with non-transactional activity semantically murky. Intuitive
+gramming model, both transactional and non-transactional
+                                                                   semantics for mixing transactional and non-transactional ac-
+system calls may access the same system state; the OS is
+                                                                   cess to the same resources is crucial to maintaining a simple
+responsible for ensuring that these accesses are correctly se-
+                                                                   interface to system resources. Strong isolation prevents un-
+rialized and contention is arbitrated fairly. The interface for
+                                                                   expected behavior due to non-transactional and transactional
+system transactions is intuitive and simple, allowing a pro-
+                                                                   applications accessing the same system resources.
+grammer to wrap a block of unmodified code in a transaction
+                                                                      The presence of system transactions does not change the
+simply by adding sys_xbegin()and sys_xend().
+                                                                   behavior of non-transactional activity in the underlying op-
+                                                                   erating system. While most system calls are already iso-
+3.1.1    System transaction semantics                              lated and atomic, there are important exceptions. For exam-
+   System transactions share several properties developers         ple, Linux does not serialize read with write. On an OS
+are likely familiar with from database transactions. System        with system transactions, non-transactional system calls can
+transactions are serializable and recoverable. Reads are only      still exhibit non-serializable behavior with respect to each
+allowed to committed data and are repeatable, which corre-         other, but non-transactional system calls serialize with trans-
+sponds to the highest database isolation level (level 3 [18]).     actions. For example, one or more calls to read in a system
+Transactions are atomic (the system can always roll back to        transaction will correctly serialize with a non-transactional
+a pre-transaction state) and durable (transaction results, once    write.
+committed, survive system crashes).
+                                                                   3.1.3    System transaction progress
+   To ensure isolation, the kernel enforces the invariant that
+a kernel object may only have one writer at a time, except-           The operating system guarantees that system transactions
+ing containers, which allow multiple writers to disjoint en-       do not livelock with other system transactions. When two
+tries. Two concurrent system transactions cannot both suc-         transactions, A and B, cannot both commit, the system se-
+cessfully commit if they access the same kernel objects and        lects one to restart (let’s say B in this example), and ensures
+at least one of the accesses is a write. Such transactions are     its decision remains consistent. If A continues and B restarts
+said to conflict and the system will detect the conflict and       and again conflicts with A, the OS will again restart B. See
+abort one of the transactions. Non-transactional updates to        § 5.2.1 for details.
+objects read or written by an active system transaction are           Guaranteeing progress for transactional threads in the pres-
+also prevented by the system. Either the system suspends           ence of non-transactional threads requires support from the
+the non-transactional work before the update, or it aborts         OS. If an OS supports preemption of kernel threads (present
+the transaction. By preventing conflicting accesses to the         in Linux 2.4 and 2.6 since 2004), then it can guarantee progress
+same kernel object, the system provides conflict serializabil-     for long running transactions by preempting non-transactional
+ity, which is commonly used to enforce serializability effi-       threads that would impede progress of the transaction.
+ciently.                                                              The OS has several mechanisms to regulate the progress
+   System transactions make durability optional because dura-      of transactions, but the use of these mechanisms is a matter
+bility often increases transaction commit latency and the pro-     of policy. For instance, allowing a long running transaction
+grammer does not always need it. The increased commit              to isolate all system resources indefinitely is undesirable, so
+latency comes from flushing data to a slow block storage de-       the OS may want a policy that limits the size of a transaction.
+vice, like a disk. Eliminating the TOCTTOU race in the file        Limiting a transaction that over-consumes system resources
+system namespace is an example of a system transaction that        is analogous to controlling any process that abuses system
+does not require durability. Durability for system transac-        resources, such as memory, disk space, or kernel threads.
+tions in TxOS is under the control of the programmer, using
+a flag to sys_xbegin()(Table 2).                                   3.1.4    System transactions for system state
+   Each kernel thread may execute a system transaction. Trans-       Although system transactions provide ACID semantics for
+actional updates are isolated from all other kernel threads,       system state, they do not provide these semantics for appli-
+including threads in different processes. We call a kernel         cation state. System state includes OS data structures and
+thread executing a system transaction a transactional kernel       device state stored in the operating system’s address space,
+thread.                                                            whereas application state includes only the data structures
+stored in the application’s address space. When a system            Subsystem          Tot.   Part.    Examples
+transaction aborts, the OS restores the kernel state to its pre-    Credentials         34       1     getuid, getcpu, setrlimit (partial)
+                                                                    Processes           13       3     fork, vfork, clone, exit, exec (par-
+transaction state, but it does not revert application state.                                           tial)
+   For most applications, we expect programmers will use a          Communication        15       0    rt_sigaction, rt_sigprocmask, pipe
+library or runtime system that transparently manages appli-         Filesystem           61       4    link, access, stat, chroot, dup,
+cation state as well as system transactions. In simple cases,                                          open, close, write, lseek
+such as the TOCTTOU example, the developer could man-               Other                13       6    time, nanosleep, ioctl (partial),
+                                                                                                       mmap2 (partial)
+age application state herself. TxOS provides single-threaded
+                                                                    Totals             136       14    Grand total: 150
+applications with an automatic checkpoint and restore mech-
+                                                                                                Unsupported
+anism for the application’s address space that marks the pages
+                                                                    Processes           33    nice, uselib, iopl, sched_yield, capget
+copy-on-write (similar to Speculator [35]), which can be en-        Memory              15    brk, mprotect, mremap, madvise
+abled with a flag to sys_xbegin() (Table 2). In Sec-                Filesystem          31    mount, sync, flock, setxattr, io_setup, inotify
+tion 4.3, we describe how system transactions integrate with        File Descriptors    14    splice, tee, sendfile, select, poll
+hardware and software transactional memory, providing a             Communication        8    socket, ipc, mq_open, mq_unlink
+complete transactional programming model for multi-threaded         Timers/Signals      12    alarm, sigaltstack, timer_create
+applications.                                                       Administration      22    swapon, reboot, init_module, settimeofday
+                                                                    Misc                18    ptrace, futex, times, vm86, newuname
+                                                                    Total              153
+3.1.5    Communication model
+   Code that communicates outside of a transaction and re-         Table 1: Summary of system calls that TxOS completely supports
+quires a response cannot be encapsulated into a single trans-      (Tot.) and partially supports (Part.) in transactions, followed by system
+action. Communication outside of a transaction violates iso-       calls with no transaction support. Partial support indicates that some
+lation. For example, a transaction may send a message to a         (but not all) execution paths for the system call have full transactional
+non-transactional thread over an IPC channel and the system        semantics. Linux 2.6.22.6 on the i386 architecture has 303 total system
+might buffer the message until commit. If the transaction          calls.
+waits for a reply on the same channel, the application will
+deadlock. The programmer is responsible for avoiding this
+send/reply idiom within a transaction.                             processing paths are fully transactional, and some are not.
+   Communication among threads within the same transac-            For example, ioctl is essentially a large switch statement,
+tion is unrestricted. This paper only considers system trans-      and TxOS does not support transactional semantics for ev-
+actions on a single machine, but future work could allow           ery case. When a partially supported call cannot support
+system transactions to span multiple machines.                     transactional semantics, or an unsupported call is issued, the
+                                                                   system logs a warning or aborts the transaction, depending
+3.2     TxOS overview                                              on the flags passed to sys_xbegin().
+   TxOS implements system transactions by isolating data              Ideal support for system transactions would include every
+read and written in a transaction using existing kernel mem-       reasonable system call. TxOS supports a subset of Linux
+ory buffers and data structures. When an application writes        system calls as shown in Table 1. The count of 150 supported
+data to a file system or device, the updates generally go into     system calls shows the relative maturity of the prototype, but
+an OS buffer first, allowing the OS to optimize device ac-         also indicates that it is incomplete. The count of unsupported
+cesses. By making these buffers copy-on-write for transac-         system calls does not proportionately represent the impor-
+tions, TxOS isolates transactional data accesses until com-        tance or challenge of the remaining work because many re-
+mit. In TxOS, transactions must fit into main memory, al-          sources, such as network sockets, IPC, etc., primarily use
+though this limit could be raised in future work by swapping       the common file system interfaces. For instance, extending
+uncommitted transaction state to disk.                             transactions to include networking (a real challenge) would
+   TxOS isolates updates to kernel data structures using re-       increase the count of supported calls by 5, whereas transac-
+cent implementation techniques from object-based software          tion support for extended file attributes (a fairly straightfor-
+transactional memory systems. These techniques are a de-           ward extension) would add 12 supported system calls. The
+parture from the logging and two-phase locking approaches          remaining count of system calls falls into three categories:
+of databases and historic transactional operating systems (Sec-    substantial extensions (memory management, communica-
+tion 4.2). TxOS’s isolation mechanisms are optimistic, al-         tion), straightforward, but perhaps less common or impor-
+lowing concurrent transactions on the assumption that con-         tant (process management, timers, most remaining file inter-
+flicts are rare.                                                   faces), and operations that are highly unlikely to be useful in-
+   Table 1 summarizes the system calls and resources for           side a transaction (e.g., reboot, mount, init_module,
+which TxOS supports transactional semantics, including the         etc.). TxOS supports transactional semantics for enough ker-
+file system, process and credential management, signals, and       nel subsystems to demonstrate the power and utility of sys-
+pipes. A partially supported system call means that some           tem transactions.
+     Function Name      Description                                         is commonly addressed by exposing a timeout parameter to
+     int sys_xbegin     Begin a transaction. The flags specify trans-       users. Setting the timeout properly is a challenge. If it is
+     (int flags)        actional behavior, including automatically
+                        restarting the transaction after an abort, ensur-   too short, it can starve long-running transactions. If it is too
+                        ing that committed results are on stable stor-      long, it can destroy the performance of the system.
+                        age (durable), and aborting if an unsupported          Eager version management degrades responsiveness in ways
+                        system call is issued. Returns status code.
+     int sys_xend()     End of transaction. Returns whether commit          that are not acceptable for an operating system. If an inter-
+                        succeeded.                                          rupt handler, high priority thread, or real-time thread aborts
+     void sys_xabort    Aborts a transaction. If the transaction was        a transaction, it must wait for the transaction to process its
+     (int no_restart)   started with restart, setting no_restart over-
+                        rides that flag and does not restart the trans-
+                                                                            undo log (to restore the pre-transaction state) before it can
+                        action.                                             safely proceed. This wait jeopardizes the system’s ability to
+                                                                            meet its timing requirements.
+                        Table 2: TxOS API                                      TxOS, in contrast, uses lazy version management, where
+                                                                            transactions operate on private copies of a data structure.
+4.     TXOS DESIGN                                                          Applications never hold kernel locks across system calls.
+  System transactions guarantee strong isolation for trans-                 Lazy versioning requires TxOS to hold locks only long enough
+actions, while retaining good performance and simple inter-                 to make a private copy of the relevant data structure. By
+faces. This section outlines how the TxOS design achieves                   enforcing a global ordering for kernel locks, TxOS avoids
+these goals.                                                                deadlock. TxOS can abort transactions instantly—the win-
+                                                                            ner of a conflict does not incur latency for the aborted trans-
+4.1      Interoperability and fairness                                      action to process its undo log.
+                                                                               The primary disadvantage of lazy versioning is the commit
+   TxOS allows flexible interaction between transactional and
+                                                                            latency due to copying transactional updates from the specu-
+non-transaction kernel threads. TxOS efficiently provides
+                                                                            lative version to the stable version of the data structures. As
+strong isolation inside the kernel by requiring all system
+                                                                            we discuss in Section 5, TxOS minimizes this overhead by
+calls to follow the same locking discipline, and by requiring
+                                                                            splitting objects, turning a memcpy of the entire object into
+that transactions annotate accessed kernel objects. When a
+                                                                            a pointer copy.
+thread, transactional or non-transactional, accesses a kernel
+object for the first time, it must check for a conflicting an-
+notation. The scheduler arbitrates conflicts when they are                  4.3   Integration with transactional memory
+detected. In many cases, this check is performed at the same                   System transactions protect system state, not application
+time as a thread acquires a lock for the object.                            state. For multi-threaded programs, the OS has no efficient
+   Interoperability is a weak spot for previous transactional               mechanism to save and restore the memory state of an in-
+systems. In most transactional systems, a conflict between a                dividual thread. User-level transactional memory (TM) sys-
+transaction and a non-transactional thread (called an asym-                 tems, however, are designed to provide efficient transactional
+metric conflict [41]) must be resolved by aborting the trans-               semantics to memory modifications by a thread, but cannot
+action. This approach undermines fairness. In TxOS, be-                     isolate or roll back system calls. Integrating user and sys-
+cause asymmetric conflicts are often detected before a non-                 tem transactions creates a simple and complete transactional
+transactional thread enters a critical region, the scheduler has            programming model.
+the option of suspending the non-transactional thread, allow-                  System transactions fix one of the most troublesome lim-
+ing for fairness between transactions and non-transactional                 itations of transactional memory systems—that system calls
+threads.                                                                    are disallowed during user transactions because they violate
+                                                                            transactional semantics. System calls on traditional operat-
+4.2      Managing transactional state                                       ing system are not isolated, and they cannot be rolled back
+  Databases and historical transactional operating systems                  if a transaction fails. For example, a file append performed
+typically update data in place and maintain an undo log. This               inside a hardware or software user transaction can occur an
+approach is called eager version management [25]. These                     arbitrary number of times. Each time the user-level transac-
+systems isolate transactions by locking data when it is ac-                 tion aborts and retries, it repeats the append.
+cessed and holding the lock until commit. This technique is                    On a TM system integrated with TxOS, when a TM ap-
+called two-phase locking, and it usually employs locks that                 plication makes a system call, the runtime begins a system
+distinguish read and write accesses. Because applications                   transaction. The user-level transactional memory system han-
+generally do not have a globally consistent order for data ac-              dles buffering and possibly rolling back the application’s
+cesses, these systems can deadlock. For example, one thread                 memory state, and the system transaction buffers updates to
+might read file A then write file B, while a different thread               system state. The updates to system state are committed or
+might read file B, then write file A.                                       aborted by the kernel atomically with the commit or abort
+  The possibility of deadlock complicates the programming                   of the user-level transaction. The programmer sees the sim-
+model of eager versioning transactional systems. Deadlock                   ple abstraction of an atomic block that can contain updates
+to user data structures and system calls. See Section 5.6 for      struct inode_header {
+                                                                     atomic_t       i_count; // Reference count
+implementation details and Sections 7.8 and 7.9 for evalua-          spinlock_t     i_lock;
+tion.                                                                inode_data     *data;    // Data object
+                                                                      // Other objects
+                                                                      address_space i_data; // Cached pages
+5.    TxOS KERNEL IMPLEMENTATION                                      tx_data xobj;    // for conflict detection
+                                                                      list i_sb_list; // kernel bookkeeping
+  This section describes how system transactions are imple-        };
+mented in the TxOS kernel. TxOS provides transactional
+                                                                   struct inode_data {
+semantics for 150 of 303 system calls in Linux, presented in          inode_header *header;
+Table 1. The supported system calls include process creation          // Common inode data fields
+and termination, credential management operations, sending            unsigned long i_ino;
+                                                                      loff_t        i_size; // etc.
+and receiving signals, and file system operations.                 };
+  System transactions in TxOS add roughly 3,300 lines of
+code for transaction management, and 5,300 lines for ob-
+ject management. TxOS also requires about 14,000 lines of          Figure 2: A simplified inode structure, decomposed into header and
+minor changes to convert kernel code to use the new object         data objects in TxOS. The header contains the reference count, locks,
+type system and to insert checks for asymmetric conflicts          kernel bookkeeping data, and the objects that are managed transac-
+when executing non-transactionally.                                tionally. The inode_data object contains the fields commonly ac-
+                                                                   cessed by system calls, such as stat, and can be updated by a transac-
+5.1    Versioning data                                             tion by replacing the pointer in the header.
+   TxOS maintains multiple versions of kernel data struc-
+tures so that system transactions can isolate the effects of       object header contains a pointer to the object’s data; transac-
+system calls until transactions commit, and in order to undo       tions commit changes to an object by replacing this pointer
+the effects of transactions if they cannot complete. Data          in the header to a modified copy of the data object. The
+structures private to a process, such as the current user id or    header itself is never replaced by a transaction, which elim-
+the file descriptor table, are versioned with a simple check-      inates the need to update pointers in other objects; point-
+point and restore scheme. For shared kernel data structures,       ers point to headers. The header can also contain data that
+however, TxOS implements a versioning system that bor-             is not accessed by transactions. For instance, the kernel
+rows techniques from software transactional memory sys-            garbage collection thread (kswapd) periodically scans the
+tems [21] and additional recent concurrent programming sys-        inode and dentry (directory entry) caches looking for
+tems [24].                                                         cached file system data to reuse. By keeping the data for
+   When a transaction accesses a shared kernel object, such        kernel bookkeeping, such as the reference count and the su-
+as an inode, it acquires a private copy of the object, called      perblock list (i_sb_list in Figure 2), in the header, these
+a shadow object. All system calls within the transaction use       scans never access the associated inode_data objects and
+this shadow object in place of the stable object until the         avoid restarting active transactions.
+transaction commits or aborts. The use of shadow objects              Decomposing objects into headers and data also provides
+ensures that transactions always have a consistent view of         the advantage of the type system ensuring that transactional
+the system state. When the transaction commits, the shadow         code always has a speculative object. For instance, in Linux,
+objects replace their stable counterparts. If a transaction can-   the virtual file system function vfs_link takes pointers
+not complete, it simply discards its shadow objects.               to inodes and dentries, but in TxOS these pointers are
+   Any given kernel object may be the target of pointers from      converted to the shadow types inode_data and dentry_-
+several other objects, presenting a challenge to replacing a       data. When modifying Linux, using the type system al-
+stable object with a newly-committed shadow object. A naïve        lows the compiler to find all of the code that needs to ac-
+system might update the pointers to an object when that            quire a speculative object, ensuring completeness. The type
+object is committed. Unfortunately, updating the pointers          system also allows the use of interfaces that minimize the
+means writing the objects that contain those pointers. By          time spent looking up shadow objects. For example, when
+writing to the pointing objects, the transaction may create        the path name resolution code initially acquires shadow data
+conflicting accesses and abort otherwise non-conflicting trans-    objects, it then passes these shadow objects directly to helper
+actions. For two concurrent transactions to successfully com-      functions such as vfs_link and vfs_unlink. The vir-
+mit in TxOS, they must write disjoint objects.                     tual file system code acquires shadow objects once on entry
+                                                                   and passes them to lower layers, minimizing the need for
+Splitting objects into header and data.                            filesystem-specific code to reacquire the shadow objects.
+  In order to allow efficient commit of lazy versioned data,
+TxOS decomposes objects into a stable header component             Multiple data objects.
+and a volatile, transactional data component. Figure 2 pro-         TxOS decomposes an object into multiple data payloads
+vides an example of this decomposition for an inode. The           when it houses data that can be accessed disjointly. For
+instance, the inode_header contains both file metadata             rently accessed by a non-transactional thread. When a thread
+(owner, permissions, etc.) and the mapping of file blocks to       detects a conflict, TxOS uses these fields to determine which
+cached pages in memory (i_data). A process may often               transactions are in conflict; the conflict is then arbitrated by
+read or write a file without updating the metadata. TxOS ver-      the contention manager (§5.2.1). Note that the reader list is
+sions these objects separately, allowing metadata operations       attached to the stable header object, whereas the reader count
+and data operations on the same file to execute concurrently       (§5.1) is used for garbage collecting obsolete data objects.
+when it is safe.                                                   By locking and testing the transactional readers and writer
+                                                                   fields, TxOS detects transactional and asymmetric conflicts.
+Read-only objects.
+   Many kernel objects are only read in a transaction, such        5.2.1    Contention Management
+as the parent directories in a path lookup. To avoid the cost         When a conflict is detected between two transactions or
+of making shadow copies, kernel code can specify read-only         between a transaction and a non-transactional thread, TxOS
+access to an object, which marks the object data as read-          invokes the contention manager to resolve the conflict. The
+only for the length of the transaction. Each data object has a     contention manager is kernel code that implements a policy
+transactional reader reference count. If a writer wins a con-      to arbitrate conflicts among transactions, dictating which of
+flict for an object with a non-zero reader count, it must create   the conflicting transactions may continue. All other conflict-
+a new copy of the object and install it as the new stable ver-     ing transactions must abort.
+sion. The OS garbage collects the old copy via read-copy              As a default policy, TxOS adopts the osprio policy [43].
+update (RCU) [29] when all transactional readers release it        Osprio always selects the process with the higher scheduling
+and after all non-transactional tasks have been descheduled.       priority as the winner of a conflict, eliminating priority and
+This constraint ensures that all active references to the old,     policy inversion in transactional conflicts. When processes
+read-only version have been released before it is freed and all    with the same priority conflict, the older transaction wins (a
+tasks see a consistent view of kernel data. The only caveat        policy known as timestamp [40]), guaranteeing liveness for
+is that a non-transactional task that blocks must re-acquire       transactions within a given priority level.
+any data objects it was using after waking, as they may have
+been replaced and freed by a transaction commit. Although          5.2.2    Asymmetric conflicts
+it complicates the kernel programming model slightly, mark-
+ing data objects as read-only in a transaction is a structured        A conflict between a transactional and non-transactional
+way to eliminate substantial overhead for memory allocation        thread is called an asymmetric conflict. Transactional threads
+and copying. Special support for read-mostly transactions is       can always be aborted and rolled back, but non-transactional
+a common optimization in transactional systems, and RCU            threads cannot be rolled back. TxOS must have the free-
+is a technique to support efficient, concurrent access to read-    dom to resolve an asymmetric conflict in favor of the trans-
+mostly data.                                                       actional thread, otherwise asymmetric conflicts will always
+                                                                   win, undermining fairness in the system and possibly starv-
+                                                                   ing transactions.
+5.2    Conflict detection and resolution                              While non-transactional threads cannot be rolled back, they
+   As discussed in Section 4.1, TxOS serializes transactions       can often be preempted, which allows them to lose con-
+with non-transactional activity as well as with other transac-     flicts with transactional threads. Kernel preemption is a re-
+tions. TxOS serializes non-transactional accesses to kernel        cent feature of Linux that allows the kernel to preemptively
+objects with transactions by leveraging the current locking        deschedule threads executing system calls inside the ker-
+practice in Linux and augmenting stable objects with infor-        nel, unless they are inside of certain critical regions. In
+mation about transactional readers and writers. Both trans-        TxOS, non-transactional threads detect conflicts with trans-
+actional and non-transactional threads use this information        actional threads before they actually update state, usually
+to detect accesses that would violate conflict serializability     when they acquire a lock for a kernel data structure. A non-
+when they acquire a kernel object.                                 transactional thread can simply deschedule itself if it loses a
+   Conflicts occur when a transaction attempts to write an ob-     conflict and is in a preemptible state. If a non-transactional,
+ject that has been read or written by another transaction. An      non-preemptible process aborts a transaction too many times,
+asymmetric conflict is defined similarly: a non-transactional      the kernel can still prevent it from starving the transaction
+thread attempts to write an object a transaction has read or       by placing the non-transactional process on a wait queue the
+written, or vice versa. TxOS embeds a tx_data object in            next time it makes a system call. The kernel reschedules the
+the header portion of all shared kernel objects that can be ac-    non-transactional process only after the transaction commits.
+cessed within a transaction. The tx_data object includes a            Linux can preempt a kernel thread if the thread is not hold-
+pointer to a transactional writer and a reader list. A non-null    ing a spinlock and is not in an interrupt handler. TxOS has
+writer pointer indicates an active transactional writer, and       the additional restriction that it will not preempt a conflict-
+an empty reader list indicates there are no readers. Locks         ing thread that holds one or more mutexes (or semaphores).
+prevent transactions from acquiring an object that is concur-      Otherwise, TxOS risks a deadlock with a transaction that
+ State            Description                                                  struct transaction {
+ exclusive        Any attempt to access the list is a conflict with the cur-      atomic_t status; // live/aborted/inactive
+                  rent owner                                                      uint64 tx_start_time;// timestamp
+                                                                                  uint32 retry_count;
+ write            Any number of insertions and deletions are allowed,             struct pt_regs *checkpointed_registers;
+                  provided they do not access the same entries. Reads             workset_list *workset_list;
+                  (iterations) are not allowed. Writers may be transac-           deferred_ops; // operations done at commit
+                  tions or non-transactional tasks.                               undo_ops;   // operations undone at abort
+ read             Any number of readers, transactional or non-                 };
+                  transactional, are allowed, but insertions and deletions
+                  are conflicts.
+ notx             There are no active transactions, and a non-                 Figure 3: Data contained in a system transaction object, which is
+                  transactional thread may perform any operation. A
+                  transaction must first upgrade to read or write              pointed to by the user area (task_struct).
+                  mode.
+
+Table 3: The states for a transactional list in TxOS. Having multi-
+ple states allows TxOS lists to tolerate access patterns that would be
+                                                                               thread wins a conflict with this thread, it will update this
+conflicts in previous transactional systems.
+                                                                               word atomically with a compare-and-swap instruction. The
+                                                                               kernel checks the status word when attempting to add a new
+                                                                               shadow object to its workset and checks it before commit.
+might need that lock to commit. By using kernel preemption                        If a transactional system call reaches a point where it can-
+and lazy version management, TxOS has more flexibility to                      not complete because of a conflict with another thread, it
+coordinate transactional and non-transactional threads than                    must immediately abort execution. This abort is required be-
+previous transactional operating systems.                                      cause Linux is written in an unmanaged language and cannot
+                                                                               safely follow pointers if it does not have a consistent view of
+5.2.3     Minimizing conflicts on lists                                        memory. To allow roll-back at arbitrary points during exe-
+   The kernel relies heavily on linked list data structures.                   cution, the transaction stores the register state on the stack
+When applied to lists, simple read/write conflict semantics                    at the beginning of the current system call in the check-
+produce a number of false positives. For instance, two trans-                  pointed_registers field. If the system aborts the trans-
+actions should both be allowed to add elements to the same                     action midway through a system call, it restores the register
+list, even though adding an element is a list write. TxOS                      state and jumps back to the top of the kernel stack (like the
+adopts techniques from previous transactional memory sys-                      C library function longjmp). Because a transaction can
+tems to define conflicts on lists more precisely [21].                         hold a lock or other resource when it aborts, supporting the
+   TxOS isolates list updates with a lock and defines conflicts                longjmp-style abort involves a small overhead to track cer-
+according to the states described in Table 3. For instance, a                  tain events within a transaction so that they can be cleaned
+list in the write state allows concurrent transactional and                    up on abort.
+non-transactional writers, so long as they do not access the                      Transactions must defer certain operations until commit
+same entry. Individual entries that are transactionally added                  time, such as freeing memory, delivering signals and file
+or removed are annotated with a transaction pointer that is                    system monitoring events (i.e., inotify and dnotify).
+used to detect conflicts. If a writing transaction also at-                    The deferred_ops field stores these events. Similarly,
+tempts to read the list contents, it must upgrade the list to                  some operations must be undone if a transaction is aborted,
+exclusive mode by aborting all other writers. The read                         such as releasing the locks it holds and freeing the memory
+state behaves similarly. This design allows maximal list con-                  it allocates. These operations are stored in the undo_ops
+currency while preserving correctness.                                         field. The tx_start_time field is used by the contention
+                                                                               manager (see Section 5.2.1), while the retry_count field
+5.3     Managing transaction state                                             stores the number of times the transaction aborted.
+   To manage transactional state, TxOS adds transaction ob-                       The workset_list is a skip list [39] that stores refer-
+jects to the kernel, which store metadata and statistics for a                 ences to all of the objects for which the transaction has pri-
+transaction. The kernel thread’s control block (the task_-                     vate copies. The workset list is sorted by the kernel locking
+struct in Linux) points to the transaction object, shown                       discipline for fast commit. Each entry in the workset con-
+in Figure 3. A thread can have at most one active trans-                       tains a pointer to the stable object, a pointer to the shadow
+action, though transactions can flat nest, meaning that all                    copy, information about whether the object is read-only or
+nested transactions are subsumed into the enclosing trans-                     read-write, and a set of type-specific methods (commit, abort,
+action. Each thread in a multithreaded application can have                    lock, unlock, release). When a transactional thread adds an
+its own transaction, and multiple threads (even those in dif-                  object to its workset, the thread increments the reference
+ferent processes) may share a transaction, as we discuss in                    count on the stable copy. This increment prevents the object
+Section 6.2.                                                                   from being unexpectedly freed while the transaction still has
+   Figure 3 summarizes the fields of the transaction object.                   an active reference to it. Kernel objects are not dynamically
+The transaction includes a status word (status). If another                    relocatable, so ensuring a non-zero reference count is suf-
+    Stable                        Stable                        Stable
+                                                                 Inode
+                                                                                 tends the locking discipline slightly, for instance by requir-
+                                   Inode
+     Inode
+    Header
+                 Inode
+                  Data            Header                        Header           ing that rename locks inodes entries in order of kernel vir-
+        57       0777               57        0777                 57            tual address. TxOS also introduces additional fine-grained
+                                                                          New    locking on objects, such as lists, that are not locked in Linux.
+                                                                  0755   Inode
+             0755     Shadow               0755    Shadow                 Data   Although these additional constraints complicate the lock-
+                       Inode
+                        Data
+                                                    Inode
+                                                     Data
+                                                                                 ing discipline, they also allow TxOS to elide coarse-grained
+                     ...                          ...             Tx A           locks such as the dcache_lock, which protects updates
+      Workset List                Workset List          Tx A
+                                                                                 to the hash table of directory entries cached in memory. By
+                           Tx A
+                                                                                 eliminating these coarse-grained locks, TxOS improves per-
+                                                               Unlock and
+                                     Pointer Swap               Release          formance scalability for individual system calls.
+       Lock Objects                New Data Objects            Tx Objects
+                                                                                 5.5     Abort Protocol
+Figure 4: The major steps involved in committing Transaction A                      If a transaction detects that it loses a conflict, it must abort.
+with inode 57 in its workset, changing the mode from 0777 to 0755. The           The abort protocol is similar to the commit protocol, but sim-
+commit code first locks the inode. It then replaces the inode header’s           pler because it does not require all objects to be locked at
+data pointer to the shadow inode. Finally, Transaction A frees the re-           once. If the transaction is holding any kernel locks, it first
+sources used for transactional bookkeeping and unlocks the inode.                releases them to avoid stalling other processes. The transac-
+                                                                                 tion then iterates over its working set and locks each object,
+ficient for guaranteeing that memory addresses remain un-
+                                                                                 removes any references to itself from the object’s transac-
+changed for the duration of the transaction.
+                                                                                 tional state, and then unlocks the object. Next, the transac-
+5.4      Commit protocol                                                         tion frees its shadow objects and decrements the reference
+                                                                                 count on their stable counterparts. The transaction walks its
+   When a system transaction calls sys_xend(), it is ready
+                                                                                 undo log to release any other resources, such as memory al-
+to begin the commit protocol. The flow of the commit pro-
+                                                                                 located within the transaction.
+tocol is shown in Figure 4. In the first step, the transaction
+acquires locks for all items in its workset. The workset is
+                                                                                 5.6     User-level transactions
+kept sorted according to the kernel locking discipline to en-
+able fast commit and eliminate the possibility of deadlock                          In order for a user-level transactional memory system to
+among committing transactions. Specifically, objects are                         use system transactions, the TM system must coordinate com-
+sorted by the kernel virtual address of the header, followed                     mit of application state with commit of the system transac-
+by lists sorted by kernel virtual address. Lists are locked last                 tion. This section provides commit protocols for the major
+to maintain an ordering with the directory traversal code.                       classes of TM implementations.
+   TxOS iterates over the objects twice, once to acquire the
+blocking locks and a second time to acquire non-blocking                         5.6.1     Lock-based STM requirements
+locks. TxOS is careful to acquire blocking locks before spin-                       TxOS uses a simplified variant of the two-phase commit
+locks, and to release spinlocks before blocking locks. Ac-                       protocol (2PC) [17] to coordinate commit of a lock-based
+quiring or releasing a mutex or semaphore can cause a pro-                       user-level software (STM) transaction with a system trans-
+cess to sleep, and sleeping with a held spinlock can deadlock                    action. The TxOS commit consists of the following steps.
+the system.                                                                         1. The user prepares a transaction.
+   After acquiring all locks, the transaction does a final check                    2. The user requests that the system commit the transac-
+of its status word with an atomic compare-and-swap instruc-                            tion through the sys_xend()system call.
+tion. If it has not been set to ABORTED, then the transaction                       3. The system commits or aborts.
+can successfully commit (this CAS instruction is the trans-                         4. The system communicates the outcome to the user through
+action’s linearization point [23]). The committing process                             the sys_xend()return code.
+holds all relevant object locks during commit, thereby ex-                          5. The user commits or aborts in accordance with the out-
+cluding any transactional or non-transactional threads that                            come of the system transaction.
+would compete for the same objects.                                                 This protocol naturally follows the flow of control between
+   After acquiring all locks, the transaction copies its updates                 the user and kernel, but requires the user transaction system
+to the stable objects. The transaction’s bookkeeping data                        to support the prepared state. We define a prepared transac-
+are removed from the objects, then the locks are released.                       tion as being finished (it will add no more data to its working
+Between releasing spinlocks and mutexes, the transaction                         set), safe to commit (it has not currently lost any conflicts
+performs deferred operations (like memory allocations/frees                      with other threads), and guaranteed to remain able to com-
+and delivering file system monitoring events) and performs                       mit (it will win all future conflicts until the end of the proto-
+any pending writes to stable storage.                                            col). In other words, once a transaction is prepared, another
+   During commit, TxOS holds locks that are not otherwise                        thread must stall or rollback if it tries to perform a conflicting
+held at the same time in the kernel. As a result, TxOS ex-                       operation. In a system that uses locks to protect a commit,
+prepare is accomplished by simply holding all of the locks        ically commit updates to stable storage (e.g., via a journal).
+required for the commit during the sys_xend()call. On a           By ensuring that all committed changes are written in a sin-
+successful commit, the system commits its state before the        gle journal transaction, we converted ext3 into a transac-
+user, but any competing accesses to the shared state are seri-    tional file system. Memory-only file systems, such as proc
+alized after the user commit.                                     and tmpfs, are automatically transactional when used within
+   Depending on the implementation details of the user TM         system transactions.
+implementation, additional integration effort may be required
+of the STM implementation. For instance, a lazy versioned         6.2   Multi-process transactions
+STM needs to ensure that a transactional write system call           A dominant paradigm for UNIX application development
+is issued with the correct version of the buffer. As an op-       is the composition of simple but powerful utility programs
+timization, the STM runtime can check the return code on          into more complex tasks. Following this pattern, applica-
+system calls within a transaction to detect an aborted sys-       tions may wish to transactionally fork a number of child
+tem transaction sooner. For the TM systems we examined,           processes to execute utilities and wait for the results to be
+coordinating commit and adding extra return checks were           returned through a pipe.
+sufficient.                                                          To support this programming paradigm in a natural way,
+5.6.2    HTM and obstruction-free STM requirements                TxOS allows multiple threads to participate in the same trans-
+                                                                  action. The threads in a transaction may share an address
+   Hardware transactional memory (HTM) and obstruction-           space, as in a multithreaded application, or the threads may
+free software TM systems [22] use a single instruction (xend      reside in different address spaces. Threads in the same trans-
+and compare-and-swap, respectively), to perform their com-        action share and synchronize access to speculative state.
+mits. For these systems, a prepare stage is unnecessary. In-         When a process forks a child inside a transaction, the child
+stead, the commit protocol should have the kernel issue the       process executes within the active transaction until it per-
+commit instruction on behalf of the user once the kernel has      forms a sys_xend()or it exits (where an exit is considered
+validated its workset. Both the system and user-level trans-      an implicit sys_xend()). The transaction commits when
+action commit or abort together depending upon the result         all tasks in the transaction have issued a sys_xend(). This
+of this specific commit instruction.                              method of process management allows transactional programs
+   For HTM support, TxOS requires that the hardware allow         to call high-level convenience functions, like system, to
+the kernel to suspend user-initialized transactions on entry to   easily create processes using the full complement of shell
+the kernel. Every HTM proposal that supports an OS [32,43,        functionality. Such execed programs run with transactional
+58] supports mechanisms that suspend user-initiated trans-        semantics, though they might not contain any explicitly trans-
+actions, avoiding the mixture of user and kernel addresses        actional code. After a child process commits, it is no longer
+in the same hardware transaction. Mixing user and kernel          part of the transaction and subsequent sys_xbegin()calls
+address creates a security vulnerability in most HTM pro-         will begin transactions that are completely independent from
+posals. Also, the kernel needs to be able to issue an xend        the parent.
+instruction on behalf of the application.                            System calls that modify process state, for example by al-
+   Though TxOS supports user-level HTM, it runs on com-           locating memory or installing signal handlers, are faster in
+modity hardware and does not require any special HTM sup-         transactionally forked tasks because they do not checkpoint
+port itself.                                                      the process’s system state. An abort will simply terminate
+                                                                  the process; no other rollback is required.
+6.    TxOS KERNEL SUBSYSTEMS
+   This section discusses how various kernel subsystems sup-      6.3   Signal delivery
+port ACI[D] semantics in TxOS. In several cases, transac-            Signal semantics in TxOS provide isolation among threads
+tional semantics need not be developed from scratch, but are      in different transactions, as well as isolation between non-
+implemented by extending functionality already present in         transactional and transactional threads. Any signal sent to
+the subsystem. For example, we use the journal in ext3 to         a thread not part of the source’s transaction is deferred un-
+provide true, multi-operation durability. We leverage Linux’s     til commit by placing it in a deferral queue, regardless of
+support for deferring signal delivery to manage signals sent      whether the receiving thread is transactional. Signals in the
+to and from transactional threads.                                queue are delivered in order if the transaction commits, and
+                                                                  discarded if the transaction aborts.
+6.1     Transactional file system                                    When an application begins a transaction, a flag to sys_-
+   TxOS simplifies the task of writing a transactional file       xbegin() specifies whether incoming signals should be
+system by detecting conflicts and managing versioned data         delivered speculatively within the transaction (speculative
+in the virtual filesystem layer. The OS provides the trans-       delivery) or deferred until commit (deferred delivery). Spec-
+actional semantics—versioning updates and detecting con-          ulative delivery enables transactional applications to be more
+flicts. The file system need only provide the ability to atom-    responsive to input. When signals are delivered specula-
+tively, they must be logged. If the transaction aborts, these      in the same system transaction, and supports transactional
+signals are re-delivered to the receiving thread so that from      signals and pipes, a range of IPC abstractions remain that
+the sender’s perspective the signals do not disappear. When a      TxOS could support. These abstractions include System V
+transaction that has speculatively received a signal commits,      shared memory, message queues, and local sockets. IPC has
+the logged signals are discarded.                                  much in common with networking, but presents some ad-
+   When signal delivery is deferred, incoming signals are          ditional opportunities because the relevant tasks are on the
+placed in a queue and delivered in order when the transac-         same system. IPC on the same system admits more cre-
+tion commits or aborts. Deferring signals allows transac-          ative approaches, such as aborting a transaction that receives
+tions to ensure that they are atomic with respect to signal        a message from a transaction that later aborts.
+handlers [57]. Enclosing signal handling code in a trans-
+action ensures that system calls in the handler are atomic,        User interfaces.
+and forces calls to the same handler to serialize. Transac-           Exchanging messages with a user while inside a trans-
+tional handling of signals eliminates race conditions without      action is unlikely to become a popular paradigm (although
+the need for the additional API complexity of sigaction.           TABS implemented a transaction GUI by crossing out text
+While the sigaction API addresses signal handler atom-             dialogs from aborted transactions [48]), because the I/O-
+icity within a single thread by making handlers non-reentrant,     centric nature of user interfaces is not a natural fit with the
+the API does not make signal handlers atomic with respect          transactional programming model. Like other communica-
+to other threads.                                                  tion channels, however, the OS could naturally support trans-
+   An application cannot block or ignore the SIGSTOP and           actions that only read from or write to a user I/O device by
+SIGKILL signals outside of a transaction. TxOS preserves           buffering the relevant data. Maintaining a responsive user in-
+the special status of these signals, delivering them directly      terface will likely mandate that developers keep transactions
+to transactional threads, even if the transaction started in de-   involving interfaces short.
+ferred delivery mode.
+   Speculative and deferred delivery apply only to delivery        Logging.
+of incoming signals sent from non-transactional threads or            Applications may wish to explicitly exempt certain out-
+from a different transaction once it commits. When a trans-        put from isolation while inside a transaction, primarily for
+action sends a signal to a thread outside of the transaction,      logging. Logging is useful for debugging aborted transac-
+it is buffered until commit. Threads in the same transaction       tions, and it is also important for security sensitive applica-
+can send and receive signals freely with other threads in the      tions. For instance, an authentication utility may wish to log
+same transaction.                                                  failed attempts to minimize exposure to password guessing
+                                                                   attacks. An attacker should not be able to subvert this policy
+6.4    Future work                                                 by wrapping the utility in a transaction that aborts until the
+                                                                   password is guessed.
+  TxOS does not yet provide transactional semantics for sev-          Most system resources can be reasonably integrated with
+eral classes of OS resources. Currently, TxOS either logs a        system transactions. However, extending transactions to these
+warning or aborts a transaction that attempts to access an         resources may complicate the programming interface and
+unsupported resource: the programmer specifies the behav-          slow the implementation. Future work will determine if sys-
+ior via a flag to sys_xbegin(). This subsection consid-            tem transactions for these resources are worth the costs.
+ers some challenges inherent in supporting these resources,
+which we leave for future work.
+                                                                   7.   EVALUATION
+Networking.                                                           This section evaluates the overhead of system transactions
+   The network is among the most important resources to            in TxOS, as well as its behavior for several case studies:
+transactionalize. Within a system transaction, some network        transactional software installation, a transactional LDAP ser-
+communication could be buffered and delayed until commit,          ver, a transactional ext3 file system, the elimination of TOCT-
+while others could be sent and logically rolled back by the        TOU races, scalable atomic operations, and integration with
+communication protocol if the transaction aborts. Network          hardware and software transactional memory.
+protocols are often written to explicitly tolerate the kinds          We perform all of our experiments on a server with 1 or 2
+of disruptions (e.g., repeated requests, dropped replies) that     quad-core Intel X5355 processors (total of 4 or 8 cores) run-
+would be caused by restarting transactions. The open chal-         ning at 2.66 GHz with 4 GB of memory. All single-threaded
+lenge is finding a combination of techniques that is high per-     experiments use the 4-core machine, and scalability mea-
+formance across a wide range of networking applications,           surements were taken using the 8 core machine. We compare
+while retaining a reasonably simple transaction API.               TxOS to an unmodified Linux kernel, version 2.6.22.6—the
+                                                                   same version extended to create TxOS .
+Interprocess communication.                                           The hardware transactional memory experiments use Meta-
+  While TxOS currently supports IPC between kernel threads         TM [41] on Simics version 3.0.27 [27]. The simulated ma-
+chine has 16 1000 MHz CPUs, each with a 32 KB level 1             is an active system transaction in a different thread. Non-
+and 4 MB level 2 cache. An L1 miss costs 24 cycles and            transactional system calls need to perform extra work to de-
+an L2 miss costs 350 cycles. The HTM uses the timestamp           tect conflicts with background transactions. The In Tx col-
+contention management policy and linear backoff on restart.       umn shows the overhead of the system call in a system trans-
+                                                                  action. This overhead is high, but represents a rare use case.
+7.1   Single-thread system call overheads                         The Tx column includes the overheads of the sys_xbegin()
+                                                                  and sys_xend()system calls.
+   A key goal of TxOS is to make transaction support ef-
+ficient, taking special care to minimize the overhead non-
+transactional applications incur. To evaluate performance         7.2   Applications and micro-benchmarks
+overheads for substantial applications, we measured the av-          Table 5 shows the performance of TxOS on a range of ap-
+erage compilation time across three non-transactional builds      plications and micro-benchmarks. Each measurement is the
+of the Linux 2.6.22 kernel on unmodified Linux (3 minutes,        average of three runs. The slowdown relative to Linux is also
+24 seconds), and on TxOS (3 minutes, 28 seconds). This            listed. Postmark is a file system benchmark that simulates
+slowdown of less than 2% indicates that for most applica-         the behavior of an email, network news, and e-commerce
+tions, the non-transactional overheads will be negligible. At     client. We use version 1.51 with the same transaction bound-
+the scale of a single system call, however, the average over-     aries as Amino [56]. The LFS small file benchmark oper-
+head is currently 29%, and could be cut to 14% with im-           ates on 10,000 1024 bytes files, and the large file benchmark
+proved compiler support.                                          reads and writes a 100MB file. The Reimplemented An-
+   Table 4 shows the performance of common file system            drew Benchmark (RAB) is a reimplementation of the Modi-
+system calls on TxOS. We ran each system call 1 million           fied Andrew Benchmark, scaled for modern computers. Ini-
+times, discarding the first and last 100,000 measurements         tially, RAB creates 500 files, each containing 1000 bytes of
+and averaging the remaining times. The elapsed cycles were        pseudo-random printable-ASCII content. Next, the bench-
+measured using the rdtsc instruction. The purpose of the          mark measures execution time of four distinct phases: the
+table is to analyze transaction overheads in TxOS, but it is      mkdir phase creates 20,000 directories; the cp phase copies
+not a realistic use case, as most system calls are already        the 500 generated files into 500 of these directories, result-
+atomic and isolated. Wrapping a single system call in a           ing in 250,000 copied files; the du phase calculates the disk
+transaction is the worst case for TxOS performance because        usage of the files and directories with the du command; and
+there is very little work across which to amortize the cost of    the grep/sum phase searches the files for a short string that
+creating shadow objects and commit.                               is not found and checksums their contents. The sizes of the
+   The Base column shows the base overhead from adding            mkdir and cp phases are chosen to take roughly similar
+transactions to Linux. These overheads have a geometric           amounts of time on our test machines. In the transactional
+mean of 3%, and are all below 20%, including a perfor-            version, each phase is wrapped in a transaction. Make wraps
+mance improvement for write. Overheads are incurred               a software compilation in a transaction. Dpkg and Install are
+mostly by increased locking in TxOS and the extra indirec-        software installation benchmarks that wrap the entire instal-
+tion necessitated by data structure reorganization (e.g., sep-    lation in a transaction, as discussed in the following subsec-
+aration of header and data objects). These low overheads          tion.
+show that transactional support does not significantly slow          Across most workloads, the overhead of system transac-
+down non-transactional activity.                                  tions is quite reasonable (1–2⇥), and often system transac-
+   TxOS replaces simple linked lists with a more complex          tions speed up the workload (e.g., postmark, LFS small file
+transactional list (§5.2.3). The transactional list allows more   create, RAB mkdir and cp phases). Benchmarks that re-
+concurrency, both by eliminating transactional conflicts and      peatedly write files in a transaction, such as the LFS large
+by introducing fine-grained locking on lists, at the expense      file benchmark sequential write or the LFS small file create
+of higher single-thread latency. The Static column adds           phase, are more efficient than Linux. Transaction commit
+the latencies due to transactional lists to the base overheads    groups the writes and presents them to the I/O scheduler all
+(roughly 10%, though more for link).                              at once, improving disk arm scheduling and, on ext2 and
+   The Static column assumes that TxOS can compile two            ext3, increasing locality in the block allocations. Write-
+versions of all system calls: one used by transactional threads   intensive workloads outperform non-transactional writers by
+and the other used by non-transactional threads. Our TxOS         as much as a factor of 29.7⇥.
+prototype uses dynamic checks, which are frequent and ex-            TxOS requires extra memory to buffer updates. We sur-
+pensive. With compiler support, these overheads are achiev-       veyed several applications’ memory overheads, and focus
+able.                                                             here on the LFS small and large benchmarks as two rep-
+   The NoTx column presents measurements of the current           resentative samples. Because the utilization patterns vary
+TxOS prototype, with dynamic checks to determine if a thread      across different portions of physical memory, we consider
+is executing a transaction. The Bgnd Tx column are non-           low memory, which is used for kernel data structures, sep-
+transactional system call overheads for TxOS while there          arately from high memory, which can be allocated to appli-
+             Call        Linux        Base            Static           NoTx          Bgnd Tx            In Tx                 Tx
+             access         2.4     2.4 1.0⇥        2.6 1.1⇥         3.2 1.4⇥        3.2 1.4⇥         11.3 4.7⇥        18.6      7.8⇥
+             stat           2.6     2.6 1.0⇥        2.8 1.1⇥         3.4 1.3⇥        3.4 1.3⇥         11.5 4.1⇥        20.3      7.3⇥
+             open           2.9     3.1 1.1⇥        3.2 1.2⇥         3.9 1.4⇥        3.7 1.3⇥         16.5 5.2⇥        25.7      8.0⇥
+             unlink         6.1     7.2 1.2⇥        8.1 1.3⇥         9.4 1.5⇥       10.8 1.7⇥         18.1 3.0⇥        31.9      7.3⇥
+             link           7.7     9.1 1.2⇥       12.3 1.6⇥        11.0 1.4⇥       17.0 2.2⇥         57.1 7.4⇥        82.6     10.7⇥
+             mkdir         64.7    71.4 1.1⇥       73.6 1.1⇥        79.7 1.2⇥       84.1 1.3⇥        297.1 4.6⇥       315.3      4.9⇥
+             read           2.6     2.8 1.1⇥        2.8 1.1⇥         3.6 1.3⇥        3.6 1.3⇥         11.4 4.3⇥        18.3      7.0⇥
+             write         12.8     9.9 0.7⇥       10.0 0.8⇥        11.7 0.9⇥       13.8 1.1⇥         16.4 1.3⇥        39.0      3.0⇥
+             geomean                    1.03⇥            1.14⇥           1.29⇥           1.42⇥             3.93⇥                6.61⇥
+
+Table 4: Execution time in thousands of processor cycles of common system calls on TxOS and performance relative to Linux. Base is the basic
+overhead introduced by data structure and code modifications moving from Linux to TxOS, without the overhead of transactional lists. Static
+emulates compiling two versions of kernel functions, one for transactional code and one for non-transactional code, and includes transactional list
+overheads. These overheads are possible with compiler support. NoTX indicates the current speed of non-transactional system calls on TxOS. Bgnd
+Tx indicates the speed of non-transactional system calls when another process is running a transaction in the background. In Tx is the cost of a
+system call inside a transaction, excluding sys_xbegin()and sys_xend(), and Tx includes these system calls.
+
+
+cations or to the page cache (which buffers file contents in                   Bench       Linux         TxOS          Linux           TxOS
+memory). High memory overheads are proportional to the                                      ext2           ACI          ext3           ACID
+                                                                               postmark      38.0      7.6   0.2⇥      180.9       154.6   0.9⇥
+amount data written. For LFS large, which writes a large
+                                                                               lfs small
+stream of data, TxOS uses 13% more high memory than                            create          4.6     0.6    0.1⇥       10.1       1.4     0.1⇥
+Linux, whereas LFS small, which writes many small files,                       read            1.7     2.2    1.2⇥        1.7       2.1     1.3⇥
+introduced less than 1% space consumption overhead. Look-                      delete          0.2     0.4    2.0⇥        0.2       0.5     2.4⇥
+ing at the page cache in isolation, TxOS allocates 1.2–1.9⇥                    lfs large
+                                                                               write seq       1.4    0.3     0.2⇥        3.4       2.0     0.6⇥
+as many pages as unmodified Linux. The pressure on the                         read seq        1.3    1.4     1.1⇥        1.5       1.6     1.1⇥
+kernel’s reserved portion of physical memory, or low mem-                      write rnd      77.3    2.6    0.03⇥       84.3       4.2   0.005⇥
+ory, is 5% higher for transactions across all benchmarks.                      read rnd       75.8   71.8     0.9⇥       70.1      70.2      1.0⇥
+This overhead comes primarily from the kernel slab alloca-                     RAB
+                                                                               mkdir           8.7     2.3    0.3⇥        9.4       2.2     0.2⇥
+tor, which allocates 2.4⇥ as much memory. The slab allo-                       cp             14.2     2.5    0.2⇥       13.8       2.6     0.2⇥
+cator is used for general allocation (via kmalloc) and for                     du              0.3     0.3    1.0⇥        0.4       0.3     0.8⇥
+common kernel objects, like inodes. TxOS’s memory use                          grep/sum        2.7     3.9    1.4⇥        4.2       3.8     0.9⇥
+indicates that buffering transactional updates in memory is                    dpkg             .8      .9    1.1⇥         .8        .9     1.1⇥
+                                                                               make            3.2     3.3    1.0⇥        3.1       3.3     1.1⇥
+practical, especially considering the trend in newer systems
+                                                                               install         1.9     2.7    1.4⇥        1.7       2.9     1.7⇥
+toward larger DRAM and 64-bit addresses.
+                                                                             Table 5: Execution time in seconds for several transactional bench-
+                                                                             marks on TxOS and slowdown relative to Linux. ACI represents non-
+7.3    Software installation                                                 durable transactions, with a baseline of ext2, and ACID represents
+   By wrapping system commands in a transaction, we ex-                      durable transactions with a baseline of ext3 with full data journaling.
+tend make, make install, and dpkg, the Debian pack-
+age manager, to provide ACID properties to software instal-
+lation. We first test make with a build of the text editor nano,             5ubuntu0.3), and no concurrent tasks were able to access the
+version 2.0.6. Nano consists of 82 source files totaling over                invalid package files during the installation.
+25,000 lines of code. Next, we test make install with an
+installation of the Subversion revision control system, ver-                 7.4    Transactional LDAP server
+sion 1.4.4. Finally, we test dpkg by installing the package                     Many applications have fairly modest concurrency con-
+for OpenSSH version 4.6. The OpenSSH package was mod-                        trol requirements for their stable data storage, yet use heavy-
+ified not to restart the daemon, as the script responsible sends             weight solutions, such as a database server. An example
+a signal and waits for the running daemon to exit, but TxOS                  is Lightweight Directory Access Protocol (LDAP) servers,
+defers the signal until commit. This script could be rewritten               which are commonly used to authenticate users and maintain
+to match the TxOS signal API in a production system.                         contact information for large organizations. System transac-
+   As Table 5 shows, the overhead for adding transactions                    tions provide a simple, lightweight storage solution for such
+is quite reasonable (1.1–1.7⇥), especially considering the                   applications.
+qualitative benefits. For instance, by checking the return                      To demonstrate that system transactions can provide light-
+code of dpkg, our transactional wrapper was able to automat-                 weight concurrency control for server applications, we mod-
+ically roll back a broken Ubuntu build of OpenSSH (4.6p1-                    ified the slapd server in OpenLDAP 2.3.35’s flat file stor-
+    Back end     Search     Search         Add              Del        confidence that TxOS transactions correctly provide atomic,
+                 Single     Subtree                                    durable updates to stable storage.
+    BDB            3229       2076      203            172
+    LDIF           3171       2107     1032 (5.1⇥)    2458 (14.3⇥)     7.6   Eliminating race attacks
+    LDIF-TxOS      3124       2042      413 (2.0⇥)     714 (4.2⇥)
+                                                                          System transactions provide a simple, deterministic method
+Table 6: Throughput in queries per second of OpenLDAP’s slapd          for eliminating races on system resources. To qualitatively
+server (higher is better) for a read-only and write-mostly workload.   validate this claim, we reproduce several race attacks from
+For the Add and Del workloads, the increase in throughput over BDB     recent literature on Linux and validate that TxOS prevents
+is listed in parentheses. The BDB storage module uses Berkeley DB,     the exploit.
+LDIF uses a flat file with no consistency for updates, and LDIF-TxOS      We downloaded the symlink TOCTTOU attacker code used
+augments the LDIF storage module use system transactions on a flat     by Borisov et al. [6] to defeat Dean and Hu’s probabilistic
+file. LDIF-TxOS provides the same crash consistency guarantees as      countermeasure [11]. This attack code creates memory pres-
+BDB with more than double the write throughput.                        sure on the file system cache to force the victim to desched-
+                                                                       ule for disk I/O, thereby lengthening the amount of time
+                                                                       spent between checking the path name and using it. This
+age module (called LDIF) to use system transactions. The               additional time allows the attacker to win nearly every time
+OpenLDAP server supports a number of storage modules;                  on Linux.
+the default is Berkeley DB (BDB). We used the SLAMD dis-                  On TxOS, the victim successfully resists the attacker by
+tributed load generation engine1 to exercise the server, run-          reading a consistent view of the directory structure and open-
+ning in single-thread mode. Table 6 shows throughput for               ing the correct file. The attacker’s attempt to interpose a
+the unmodified Berkeley DB storage module, the LDIF stor-              symbolic link creates a conflicting update that occurs after
+age module augmented with a simple cache, and LDIF using               the transactional access check starts, so TxOS puts the at-
+system transactions. The “Search Single” experiment exer-              tacker to sleep on the asymmetric conflict. The performance
+cises the server with single item read requests, whereas the           of the safe victim code on TxOS is statistically indistinguish-
+“Search Subtree” column submits requests for all entries in            able from the vulnerable victim on Linux.
+a given directory subtree. The “Add” test measures through-               To demonstrate that TxOS improves robustness while pre-
+put of adding entries, and “Del” measures the throughput of            serving simplicity for signal handlers, we reproduced two of
+deletions.                                                             the attacks described by Zalewksi [57]. The first attack is
+   The read performance (search single and search subtree)             representative of a vulnerability present in sendmail up
+of each storage module is within 3%, as most reads are served          to 8.11.3 and 8.12.0.Beta7, in which an attacker induces a
+from an in-memory cache. LDIF has 5–14⇥ the throughput                 double-free in a signal handler. The second attack, represen-
+of BDB for requests that modify the LDAP database (add                 tative of a vulnerability in the screen utility, exploits lack
+and delete). However, the LDIF module does not use file                of signal handler atomicity. Both attacks lead to root com-
+locking, synchronous writes or any other mechanism to en-              promise; the first can be fixed by using the sigaction API
+sure consistency. LDIF-TxOS provides ACID guarantees for               rather than signal, while the second cannot. We modified
+updates. Compared to BDB, the read performance is similar,             the signal handlers in these attacks by wrapping handler code
+but workloads that update LDAP records using system trans-             in a sys_xbegin, sys_xend pair, which provides sig-
+actions outperform BDB by 2–4⇥. LDIF-TxOS provides the                 nal handler atomicity without requiring the programmer to
+same guarantees as the BDB storage module with respect to              change the code to use sigaction. In our experiments,
+concurrency and recoverability after a crash.                          TxOS serializes handler code with respect to other system
+                                                                       operations, and therefore defeats both attacks.
+7.5      Transactional ext3
+   In addition to measuring the overheads of durable transac-          7.7   Concurrent performance
+tions, we validate the correctness of our transactional ext3              System calls like rename and open have been used as
+implementation by powering off the machine during a series             ad hoc solutions for the lack of general-purpose atomic ac-
+of transactions. After the machine is powered back on, we              tions. These system calls have strong semantics (a rename
+mount the disk to replay any operations in the ext3 journal            is atomic within a file system), resulting in complex imple-
+and run fsck on the disk to validate that it is in a consistent        mentations whose performance does not scale. As an ex-
+state. We then verify that all results from committed transac-         ample in Linux, rename has to serialize all cross-directory
+tions are present on the disk, and that no partial results from        renames on a single file-system-wide mutex because finer-
+uncommitted transactions are visible. To facilitate script-            grained locking would risk deadlock. The problem is not
+ing, we perform these checks using Simics. Our system suc-             that performance tuning rename is difficult, but it would
+cessfully passes over 1,000 trials, giving us a high degree of         substantially increase the implementation complexity of the
+                                                                       entire file system, including unrelated system calls.
+1
+    http://www.slamd.com/                                                 Transactions allow the programmer to combine simpler
+                                                                                  Execution Time     System Calls    Allocated Pages
+                                                                                  TxOS     Linux    TxOS Linux       TxOS      Linux
+                                                                                    .05       .05   1,084    1,024   8,755 25,876
+
+                                                                          Table 7:      Execution Time, number of system calls, and allocated
+                                                                          pages for the genome benchmark on the MetaTM HTM simulator with
+                                                                          16 processors.
+
+
+                                                                             We tested the integration of DATM-J with TxOS by mod-
+                                                                          ifying Tornado, a multi-threaded web server that is publicly
+                                                                          available on sourceforge, to use transactions. Tornado pro-
+                                                                          tects its data structures with STM transactions, and the STM
+                                                                          transparently protects concurrent reads and writes to its data
+                                                                          files from interfering with each other. The original code uses
+                                                                          file locking. For one synthetic workload, the STM version is
+Figure 5: Time to perform 500,000 renames divided across a num-           47% faster at 7 threads.
+ber of threads (lower is better). TxOS implements its renames as calls
+to sys_xbegin(), link, unlink, and sys_xend(), using 4 system             7.9    Integration with hardware TM
+calls for every Linux rename call. Despite higher single-threaded over-
+                                                                             In the genome benchmark from the STAMP transactional
+head, TxOS provides better scalability, outperforming Linux by 3.9⇥
+                                                                          memory benchmark suite [31], the lack of integration be-
+at 8 CPUs. At 8 CPUs, TxOS also outperforms a simple, non-atomic
+                                                                          tween the hardware TM system and the operating system
+link/unlink combination on Linux by 1.9⇥.
+                                                                          results in an unavoidable memory leak. Genome allocates
+                                                                          memory during a transaction, and the allocation sometimes
+system calls to perform more complex operations, yielding                 calls mmap. When the transaction restarts, it rolls back the
+better performance scalability and a simpler implementation.              allocator’s bookkeeping for the mmap, but not the results
+Figure 5 compares the unmodified Linux implementation of                  of the mmap system call, thereby leaking memory. When
+rename to calling sys_xbegin(), link, unlink, and                         the MetaTM HTM system [41] is integrated with TxOS, the
+sys_xend()in TxOS. In this micro-benchmark, we divide                     mmap is made part of a system transaction and is properly
+500,000 cross-directory renames across a number of threads.               rolled back when the user-level transaction aborts.
+   TxOS has worse single-thread performance because it makes                 Table 7 shows the execution time, number of system calls
+four system calls for each Linux system call. But TxOS                    within a transaction, and the number of allocated pages at
+quickly recovers the performance, performing within 6% at                 the end of the benchmark for both TxOS and unmodified
+2 CPUs and out-performing rename by 3.9⇥ at 8 CPUs.                       Linux running on MetaTM. TxOS rolls back mmap in un-
+The difference in scalability is directly due to TxOS using               successful transactions, allocating 3⇥ less heap memory to
+fine-grained locking to implement transactions, whereas Linux             the application. Benchmark performance is not affected. No
+must use coarse-grained locks to maintain the fast path for               source code or libc changes are required for TxOS to detect
+rename and keep its implementation complexity reason-                     that mmap is transactional.
+able. While this experiment is not representative of real                    The possibility of an mmap leak is a known problem [58],
+workloads, it shows that solving consistency problems with                with several proposed solutions, including open nesting [33]
+modestly complex system calls like rename will either harm                and a transactional pause instruction [58]. All previously
+performance scalability or introduce substantial implemen-                proposed solutions complicate the programming model, the
+tation complexity. Because of Linux’s coarse-grained locks,               hardware, or both. System transactions address the memory
+TxOS’ atomic link/unlink pair outperforms the Linux                       leak with the simplest hardware requirements and user API.
+non-atomic link/unlink pair by a factor of 1.9⇥ at 8
+CPUs.                                                                     8.    RELATED WORK
+                                                                             In this section we contrast TxOS with previous research in
+7.8    Integration with software TM
+                                                                          OS transactions, transactional memory, Speculator, transac-
+   We qualitatively verify that system transactions can be in-            tional file systems, and distributed transactions.
+tegrated with existing transactional memory systems by ex-
+tending a software and hardware TM implementation to use                  Previous transactional operating systems.
+system transactions. We integrated DATM-J [42], a Java-                      Locus [55] and QuickSilver [20,45] are operating systems
+based STM, with system transactions. The only modifica-                   that support transactions. Both systems use database imple-
+tions to the STM are to follow the commit protocol when                   mentation techniques for transactions, isolating data struc-
+committing a user level transaction that invokes a system                 tures with two-phase locking and rolling back failed trans-
+call and to add return code checks for aborted system trans-              actions from an undo log. A shortcoming of this approach
+actions, as outlined in Section 4.3.                                      is that simple locks, and even reader-writer locks, do not
+capture the semantics of container objects, such as a direc-         Feature                         Amino   TxF     Valor   TxOS
+                                                                     Low overhead kernel               No    Yes       Yes     Yes
+tory. Multiple transactions can concurrently and safely cre-         implementation
+ate files in the same directory so long as none of them use the      Can be root fs?                   No     Yes     Yes      Yes
+same file name or read the directory. Unfortunately, creating        Framework for                     No    No 2     Yes      Yes
+                                                                     transactionalizing other file
+a file in these systems requires a write lock on the direc-          systems
+tory, which serializes the writing transactions and eliminates       Simple programmer interface       Yes     No      No      Yes
+concurrency. To compensate for the poor performance of               Other kernel resources in a       No    Yes 3     No      Yes
+reader-writer locks, both systems allow directory contents to        transaction
+change during a transaction, which reintroduces the possi-
+                                                                  Table 8: A summary of features supported by recent transactional
+bility of the TOCTTOU race conditions that system trans-
+                                                                  file systems.
+actions ought to eliminate. In contrast, TxOS implements
+system transactions with lazy version management, more so-        TOCTTOU attack occurred in Speculator, the attacker and
+phisticated containers, and asymmetric conflict detection, al-    victim would be part of the same speculation, allowing the
+lowing it to provide higher isolation levels while minimizing     attack to succeed. Speculator has been extended to paral-
+performance overhead.                                             lelize security checks [36] and to debug system configura-
+                                                                  tion [50], but does not provide ACID semantics for user-
+Transactional Memory.
+                                                                  delimited speculation, and is thus insufficient for applica-
+   Transactional Memory (TM) systems provide a mecha-
+                                                                  tions like atomic software installation/update.
+nism to provide atomic and isolated updates to application
+data structures. Transactional memory is implemented either       Transactional file systems.
+as modifications to cache coherence hardware (HTM) [19,              TxOS simplifies the task of writing a transactional file sys-
+32], in software (STM) [12], or as a hybrid of the two [8,10].    tem by detecting conflicts and versioning data in the virtual
+   Volos et al. [54] extend the Intel STM compiler with xCalls,   file system layer. Some previous work such as OdeFS [15],
+which support deferral or rollback of common system calls         Inversion [38], and DBFS [34] provide a file system interface
+when performed in a memory transaction. Because xCalls            to a database, implemented as a user-level NFS server. These
+are implemented in a single, user-level application, they can-    systems do not provide atomic, isolated updates to local disk,
+not isolate transaction effects from kernel threads in differ-    and cannot address the problem of coordinating access to
+ent processes, ensure durable updates to a file, or support       OS-managed resources. Berkeley DB and Stasis [46] are
+multi-process transactions, all of which are needed to per-       transactional libraries, not file systems. Amino [56] supports
+form a transactional software installation and are supported      transactional file operation semantics by interposing on sys-
+by TxOS.                                                          tem calls using ptrace and relying on a user-level database
+   The system transactions supported by TxOS solve a fun-         to store and manage file system data and metadata. Other file
+damentally different problem from those solved by                 systems implement all transactional semantics directly in the
+TxLinux [43]. TxLinux is a variant of Linux that uses hard-       file system, as illustrated by Valor [49], Transactional NTFS
+ware transactional memory as a synchronization primitive to       (also known as TxF) [44], and others [14, 45, 47].
+protect OS data structures within the kernel, whereas TxOS           Table 8 lists several desirable properties for a transactional
+exports a transactional API to user programs. The tech-           file system and compares TxOS with recent systems. Be-
+niques used to build TxLinux enforce consistency for ker-         cause Amino’s database must be hosted on a native file sys-
+nel memory accesses within short critical regions. How-           tem, it cannot be used as the root file system. TxF can be
+ever, these techniques are insufficient to implement TxOS,        used as the root file system, but the programmer must ensure
+which must guarantee consistency across heterogeneous sys-        that the local system is the two-phase commit coordinator if
+tem resources, and which must support system transactions         it participates in a distributed transaction.
+spanning multiple system calls. TxLinux requires hardware            Like TxOS, Valor provides kernel support in the page cache
+transactional memory support, whereas TxOS runs on cur-           to simplify the task of adding transactions to new file sys-
+rently available commodity hardware.                              tems. Valor supports transactions larger than memory, which
+                                                                  TxOS currently does not. Valor primarily provides logging
+Speculator.
+                                                                  and coarse-grained locking for files. Because directory oper-
+  Speculator [35] applies an isolation and rollback mecha-
+                                                                  ations require locking the directory, Valor, like QuickSilver,
+nism to the operating system that is very similar to trans-
+                                                                  is more conservative than necessary with respect to concur-
+actions, allowing the system to speculate past high-latency
+                                                                  rent directory updates.
+remote file system operations. The transactional semantics
+                                                                     In addition to TxF, Windows Vista introduced a transac-
+TxOS provides to user programs is a more complicated en-
+deavor. In TxOS, transactions must be isolated from each          2
+                                                                    Windows provides a kernel transaction manager, which coordi-
+other, while Speculator is designed for applications to share     nates commits across transactional resources, but each individual
+                                                                  filesystem is still responsible for implementing checkpoint, roll-
+speculative results when they access the same data. Spec-         back, conflict detection, etc.
+ulator does not eliminate TOCTTOU vulnerabilities. If a           3
+                                                                    Windows supports a transactional registry.
+tional registry (TxR) and a kernel transaction manager             10.   ACKNOWLEDGMENTS
+(KTM) [44]. KTM allows applications to create kernel trans-           We extend thanks to Michael Bond, Michael Dahlin, Kath-
+action objects that can coordinate transactional updates to        ryn McKinley, Edmund Nightingale, Vitaly Shmatikov, Mi-
+TxF, TxR, and user-level applications, such as a database or       chael Walfish, Jean Yang, and the anonymous reviewers for
+software updater. KTM coordinates transaction commit, but          careful reading of drafts, and to our shepherd Paul Barham
+each individual filesystem or other kernel component must          for valuable feedback and suggestions. We also thank Indra-
+implement its own checkpoint, rollback, conflict detection,        jit Roy and Andrew Matsuoka for help developing TxOS.
+etc. In contrast, TxOS minimizes the work required to trans-       This research is supported by NSF Career Award 0644205
+actionalize a file system by providing conflict detection and      and the DARPA computer science study panel, phase 1. We
+isolation in shared virtual filesystem code.                       thank Virtutech for their Simics academic site license pro-
+   TxOS and KTM also represent different points in the de-         gram and Intel for an equipment donation.
+sign space of transactional application interfaces. KTM re-
+quires that all transactional accesses be explicit, whereas        11.   REFERENCES
+TxOS allows unmodified libraries or applications to be wrapped
+                                                                    [1] http://www.employees.org/˜satch/ssh/faq/
+in a transaction. Requiring each system call to be explic-
+                                                                        TheWholeSSHFAQ.html.
+itly transactional is a more conservative design because un-
+supported operations do not compile, whereas TxOS detects           [2] http://plash.beasts.org/wiki/PlashIssues/
+these dynamically. A key downside to KTM’s low-level in-                ConnectRaceCondition.
+terface is that it requires individual application developers to    [3] M. K. Aguilera, A. Merchant, M. Shah, A. Veitch, and
+be aware of accesses that can deadlock with completely un-              C. Karamanolis. Sinfonia: a new paradigm for
+related applications on the same system (such as accessing              building scalable distributed systems. In SOSP, New
+two files in opposite order), and implement their own time-             York, NY, USA, 2007. ACM.
+out and backoff system. In contrast, transactions in TxOS           [4] D. J. Bernstein. Some thoughts on security after ten
+cannot deadlock and TxOS can arbitrate conflicts accord-                years of qmail 1.0. In CSAW, 2007.
+ing to scheduler policies (Section 5.2.1) without any expert        [5] C. Blundell, E. C. Lewis, and M. M. K. Martin.
+knowledge from the developer.                                           Deconstructing transactions: The subtleties of
+   TxOS provides programmers with a simple, natural in-                 atomicity. In Fourth Annual Workshop on Duplicating,
+terface, augmenting the POSIX API with only three sys-                  Deconstructing, and Debunking. Jun 2005.
+tem calls (Table 2). Other transactional file systems require       [6] N. Borisov, R. Johnson, N. Sastry, and D. Wagner.
+application programmers to understand implementation de-                Fixing races for fun and profit: How to abuse atime. In
+tails, such as deadlock detection (TxF) and the logging and             USENIX Security, 2005.
+locking mechanism (Valor).                                          [7] X. Cai, Y. Gui, and R. Johnson. Exploiting unix
+                                                                        file-system races via algorithmic complexity attacks.
+Distributed transactions.                                               Oakland, 2009.
+   A number of systems, including TABS [48], Argus [26],            [8] C. Cao Minh, M. Trautmann, J. Chung, A. McDonald,
+and Sinfonia [3], provide support for distributed transac-              N. Bronson, J. Casper, C. Kozyrakis, and K. Olukotun.
+tional applications at the language or library level. User-             An effective hybrid transactional memory system with
+level services cannot isolate system resources without OS               strong isolation guarantees. In ISCA. Jun 2007.
+support.                                                            [9] C. Cowan, S. Beattie, C. Wright, and
+                                                                        G. Kroah-Hartman. RaceGuard: Kernel protection
+9.   CONCLUSION                                                         from temporary file race vulnerabilities. In USENIX
+                                                                        Security 2001, pages 165–176.
+   This paper argues for system transactions as a general-
+purpose, natural way for programmers to synchronize ac-            [10] P. Damron, A. Fedorova, Y. Lev, V. Luchangco,
+cess to system resources, a problem currently solved in an              M. Moir, and D. Nussbaum. Hybrid transactional
+ad hoc manner. TxOS supports transactions for system re-                memory. In ASPLOS, 2006.
+sources, including the file system, signals, memory alloca-        [11] D. Dean and A. J. Hu. Fixing races for fun and profit:
+tion, and process management. Although system transac-                  how to use access(2). In USENIX Security, pages
+tions in TxOS are limited in size and the scope of resources            14–26, 2004.
+involved, they can solve a number of important, long-standing      [12] D. Dice, O. Shalev, and N. Shavit. Transactional
+problems from a number of domains, including file system                locking II. In DISC, pages 194–208, 2006.
+race conditions. This paper describes novel implementation         [13] U. Drepper. Secure file descriptor handling. In
+techniques for system transactions that are efficient and min-          LiveJournal, 08.
+imize the effort required to extend transaction support to ad-     [14] E. Gal and S. Toledo. A transactional flash file system
+ditional resources, such as converting a given file system im-          for microcontrollers. In USENIX, 2005.
+plementation to a transactional file system.                       [15] N. Gehani, H. V. Jagadish, and W. D. Roome. Odefs:
+     A file system interface to an object-oriented database.        Supporting nested transactional memory in LogTM. In
+     In VLDB, 1994.                                                 ASPLOS, 2006.
+[16] S. Ghemawat, H. Gobioff, and S.-T. Leung. The             [34] N. Murphy, M. Tonkelowitz, and M. Vernal. The
+     google file system. SOSP, 2003.                                design and implementation of the database file system,
+[17] J. Gray. Notes on data base operating systems. In              2002.
+     Operating Systems, An Advanced Course.                    [35] E. B. Nightingale, P. M. Chen, and J. Flinn.
+     Springer-Verlag, 1978.                                         Speculative execution in a distributed file system. In
+[18] J. Gray and A. Reuter. Transaction Processing:                 SOSP, 2005.
+     Concepts and Techniques. Morgan Kaufmann, 1993.           [36] E. B. Nightingale, D. Peek, P. M. Chen, and J. Flinn.
+[19] L. Hammond, V. Wong, M. Chen, B. Carlstrom,                    Parallelizing security checks on commodity hardware.
+     J. Davis, B. Hertzberg, M. Prabhu, H. Wijaya,                  In ASPLOS, 2008.
+     C. Kozyrakis, and K. Olukotun. Transactional memory       [37] NIST. National Vulnerability Database.
+     coherence and consistency. In ISCA, June 2004.                 http://nvd.nist.gov/, 2008.
+[20] R. Haskin, Y. Malachi, and G. Chan. Recovery              [38] M. A. Olson. The design and implementation of the
+     management in QuickSilver. ACM Trans. Comput.                  inversion file system. In USENIX, 1993.
+     Syst., 6(1):82–108, 1988.                                 [39] W. Pugh. Skip lists: a probabilistic alternative to
+[21] M. Herlihy and E. Koskinen. Transactional boosting:            balanced trees. Communications of the ACM,
+     A methodology for highly-concurrent transactional              33:668–676, 1990.
+     objects. In PPoPP, 2008.                                  [40] R. Rajwar and J. R. Goodman. Transactional lock-free
+[22] M. Herlihy, V. Luchangco, M. Moir, and I. William              execution of lock-based programs. ASPLOS, 2002.
+     N. Scherer. Software transactional memory for             [41] H. Ramadan, C. Rossbach, D. Porter, O. Hofmann,
+     dynamic-sized data structures. In PODC, 2003.                  A. Bhandari, and E. Witchel. MetaTM/TxLinux:
+[23] M. P. Herlihy and J. M. Wing. Linearizability: a               Transactional memory for an operating system. In
+     correctness condition for concurrent objects. ACM              ISCA, 2007.
+     TOPLAS, 12(3), 1990.                                      [42] H. E. Ramadan, I. Roy, M. Herlihy, and E. Witchel.
+[24] M. Kulkarni, K. Pingali, B. Walter,                            Committing conflicting transactions in an STM.
+     G. Ramanarayanan, K. Bala, and L. P. Chew.                     PPoPP, 2009.
+     Optimistic parallelism requires abstractions. In PLDI,    [43] C. Rossbach, O. Hofmann, D. Porter, H. Ramadan,
+     New York, NY, USA, 2007. ACM Press.                            A. Bhandari, and E. Witchel. TxLinux: Using and
+[25] J. Larus and R. Rajwar. Transactional Memory.                  managing transactional memory in an operating
+     Morgan & Claypool, 2006.                                       system. In SOSP, 2007.
+[26] B. Liskov, D. Curtis, P. Johnson, and R. Scheifer.        [44] M. Russinovich and D. Solomon. Windows Internals.
+     Implementation of Argus. SOSP, 1987.                           Microsoft Press, 2009.
+[27] P. Magnusson, M. Christianson, and J. E. et al. Simics:   [45] F. Schmuck and J. Wylie. Experience with transactions
+     A full system simulation platform. In IEEE Computer,           in QuickSilver. In SOSP. ACM, 1991.
+     Feb 2002.                                                 [46] R. Sears and E. Brewer. Stasis: Flexible transactional
+[28] P. McDougall. Microsoft pulls buggy windows vista              storage. In OSDI, 2006.
+     sp1 files. In Information Week.                           [47] M. I. Seltzer. Transaction support in a log-structured
+     http://www.informationweek.com/                                file system. In 9th International Conference on Data
+     story/showArticle.jhtml?articleID=                             Engineering, 1993.
+     206800819.                                                [48] A. Z. Spector, D. Daniels, D. Duchamp, J. L.
+[29] P. E. McKenney. Exploiting Deferred Destruction: An            Eppinger, and R. Pausch. Distributed transactions for
+     Analysis of Read-Copy Update Techniques in                     reliable systems. In SOSP, 1985.
+     Operating System Kernels. PhD thesis, 2004.               [49] R. Spillane, S. Gaikwad, M. Chinni, E. Zadok, and
+[30] Microsoft. What is system restore. 2008.                       C. P. Wright. Enabling transactional file access via
+     http://support.microsoft.com/kb/959063.                        lightweight kernel extensions. FAST, 2009.
+[31] C. C. Minh, J. Chung, C. Kozyrakis, and K. Olukotun.      [50] Y.-Y. Su, M. Attariyan, and J. Flinn. Autobash:
+     Stamp: Stanford transactional applications for                 improving configuration management with operating
+     multi-processing. In IISWC, 2008.                              system causality analysis. In SOSP, 2007.
+[32] K. E. Moore, J. Bobba, M. J. Moravan, M. D. Hill, and     [51] D. Tsafrir, T. Hertz, D. Wagner, and D. D. Silva.
+     D. A. Wood. LogTM: Log-based transactional                     Portably preventing file race attacks with user-mode
+     memory. In HPCA, 2006.                                         path resolution. Technical report, IBM Research
+[33] M. J. Moravan, J. Bobba, K. E. Moore, L. Yen, M. D.            Report, 2008.
+     Hill, B. Liblit, M. M. Swift, and D. A. Wood.             [52] D. Tsafrir, T. Hertz, D. Wagner, and D. D. Silva.
+     Portably solving file TOCTTOU races with hardness           and G. J. Popek. Transactions and synchronization in a
+     amplification. In FAST, 2008.                               distributed operating system. In SOSP, 1985.
+[53] E. Tsyrklevich and B. Yee. Dynamic detection and       [56] C. P. Wright, R. Spillane, G. Sivathanu, and E. Zadok.
+     prevention of race conditions in file accesses. In          Extending ACID semantics to the file system. Trans.
+     USENIX Security, 2003.                                      Storage, 3(2):4, 2007.
+[54] H. Volos, A. J. Tack, N. Goyal, M. M. Swift, and       [57] M. Zalewski. Delivering signals for fun and profit.
+     A. Welc. xCalls: Safe I/O in memory transactions. In        2001.
+     EuroSys, 2009.                                         [58] C. Zilles and L. Baugh. Extending hardware
+[55] M. J. Weinstein, J. Thomas W. Page, B. K. Livezey,          transactional memory to support non-busy waiting and
+                                                                 non-transactional actions. In TRANSACT, Jun 2006.
+

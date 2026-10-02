@@ -1,0 +1,1034 @@
+                 Implementing                     Global Memory                        Management                     in a Workstation                         Cluster
+
+                         Michael       J, Feeley, Wdliam           E. Morgan, t Frederic H. Pighin, Anna R. Karlin,                              Henry M. Levy
+                                                         Department         of Computer          Science and Engineering
+                                                                            University       of Washington
+                                                                                    and
+                                                                         Chandramohan A. Thekkath
+                                                                        DEC Systems Research Center
+
+
+
+
+ Abstract                                                                                          agent, exporting         services to other nodes, but not acting in a co-
+                                                                                                   ordinated      way.     Such autonomy          has advantages,         but results in an
+ Advances        in network       and processor         technology       have greatly              underutilization        of resources that could be used to improve                       per-
+ changed the communication             and computational         power of local-area               formance.        For example,        global    memory       management         allows the
+ workstation      clusters.   However,      operating     systems still treat work-                operating      system to use cluster-wide            memory       to avoid many disk
+ station clusters as a collection            of loosely-connected           processors,            accesses; this becomes more important                      with the widely       growing
+ where each workstation            acts as an autonomous            and independent                disparity      between processor speed and disk speed. We believe that
+ agent. This operating         system structure makes it difficult            to exploit           as processor performance               increases and communication                  latency
+ the characteristics      of current clusters, such as low-latency             commu-              decreases, workstation          or personal        computer       clusters     should be
+ nication,    huge primary        memories,      and high-speed         processors, in             managed more as a multicomputer                  than as a collection         of indepen-
+ order to improve        the performance        of cluster applications.                           dent machines.
+     This paper describes the design and implementation                        of global               We have defined a global             memory         management         algorithm     and
+ memory      management        in a workstation       cluster. Our objective         is to         implemented        it in the OSF/1 operating system, running on a collec-
+ use a single, unified,        but distributed       memory      management         algo-          tion of DEC Alpha           workstations        connected      by a DEC AN2 ATM
+ rithm at the lowest level of the operating                 system.     By managing                network [1]. By inserting            a global memory management                 algorithm
+ memory      globally     at this level, all system- and higher-level               soft-          at the lowest OS level, our system integrates,                   in a natural way, all
+ ware, including        VM,    file systems, transaction          systems, and user                cluster memory for use by all higher-level                 functions,      including     VM
+ applications,     can benefit from available cluster memory. We have                              paging, mapped files, and file system buffering.                        Our system can
+ implemented       our algorithm in the OSF/1 operating system running                             automatically         reconfigure     to allow    machines       to join     and in most
+ on an ATM-connected             cluster of DEC Alpha            workstations.       Our           cases, to depart the cluster at any time.                    In particular,      with our
+ measurements show that on a suite of memory-intensive                        programs,            algorithm       and implementation,            no globally-managed            data is lost
+ our system improves performance               by a factor of 1.5 to 3.5. We also                  when a cluster node crashes.
+ show that our algorithm           has a performance         advantage over others
+                                                                                                       Using      our system,     which      we call GMS          (for Global       Memory
+ that have been proposed in the past.
+                                                                                                   Service),      we have conducted         experiments         on clusters of up to 20
+                                                                                                   machines using a suite of real-world                    application     programs.        Our
+                                                                                                   results show that the basic costs for global                  memory        management
+ 1      Introduction
+                                                                                                   operations      are modest and that application               performance       improve-
+ This paper examines global memory management                         in a workstation             ment can be significant,             For example,        we show a 1.5- to 3.5-fold
+ cluster.    By a cluster,      we mean a high-speed             local-area     network            speedup for a collection            of memory-intensive         applications      running
+ with 100 or so high-performance              machines operating          within   a sin-          with GMS; these speedups are close to optimal                         for these applica-
+ gle administrative       domain.       Our premise is that a single, unified,                     tions, given the relative speeds of remote memory                       and disk.
+ memory      management         algorithm     can be used at a low-level           of the              The paper is organized             as follows.         Section     2 compares        our
+ operating     system to manage memory                 cluster-wide.       In contrast,            work to earlier systems.             In Section 3 we describe our algorithm
+ each operating       system in today’s         clusters acts as an autonomous                     for global      memory       management.           Section      4 details     our OSF/1
+                                                                                                   implementation.           We present performance               measurements            of the
+ tAuthor’s    current address: DECwest Engineering,    Bellevue, WA.                               implementation          in Section 5.         Section    6 discusses limitations           of
+  This work was supported in part by the N~tlontd       Science Foundation     (Grants no
+  CDA-9 123308, CCR-9200832,         tmd GER-9450075),     ARPA Cumegie Mellon        Uni-
+                                                                                                   our algorithm      and implementation,            and possible solutions          to those
+  versity Subcontract #38 1375-50196,    the Wmhington   Technology    Center, md Digital          limitations.     Finally,    we summarize         and conclude in Section 7.
+  Equipment    Corpomtion.    M. Feeley was supported in part by a fellowship from Intel
+  Co~oration,     W. Morgan was supported in p~rt by Digital Equipment     Corpomtion
+
+
+Permission to make digitahwd        copy of part or all of this work for personaJ                  2     Comparison                With          Previous         Work
+or classroom use is granted without fee provided that copies are not made
+or distributed for profit or commercial advantage, the mpyright notice, the
+title of the publication and its date appear, and notice is given that                             Several previous studies have examined various ways of using
+~PYin9     i$ by permission of ACM, Inc. To oopy otherwise, to republish,     to                   remote memory. Strictly theoretical results related to this problem
+post on servers, or to redistribute to Ma, reqtares prior specific permission                      include     [2, 3, 7, 24].    Leach et al. describe remote paging in the
+andfor a fee.
+                                                                                                   context of the Apollo          DOMAIN            System [15].         Each machine         in
+SIGOPS ’95 12/95 CO, USA
+CI 1995 ACM 0-89791-71 5-4/95/0012...$3.50
+
+
+
+
+                                                                                           201
+    the network      has a paging server that accepts paging requests from                             Similar      management         issues exist at the software          level in single
+    remote nodes. This system allowed local users to statically                      restrict          address space systems such as Opal [6], and at the hardware level
+    the amount of physical           memory      available     to the paging server.                   in NUMA    and COMA architectures [9, 21],       Eager et al. [11]
+       Comer and Griffioen           described a remote memory model in which                          describe strategies for choosing              target nodes on which            to offload
+    the cluster contains workstations,            disk servers. and remote memory                      tasks in a distributed         load sharing environment.
+    servers   [8]. The remote memory              servers were dedicated machines
+    whose large primary         memories       could be allocated by workstations
+                                                                                                       3       Algorithm
+    with heavy paging         activity.     No client-to-client         resource sharing
+    occurred,     except through       the servers. Felten and Zahorj an gener-
+                                                                                                       This section describes the basic algorithm                   used by GMS. The de-
+    alized this idea to use memory             on idle client machines as paging
+                                                                                                       scription     is divided into two parts. First, we present a high-level               de-
+    backing     store [12]. When a machine becomes idle, its kernel acti-
+                                                                                                       scription     of the global replacement         algorithm.       Second, we describe
+    vates an otherwise        dormant      memory        server, which registers itself
+                                                                                                       the probabilistic          process by which page information            is maintained
+    for remote use. Whenever              a kernel replaces a VM page, it queries
+                                                                                                       and exchanged in the cluster.
+    a central registry      to locate active memory               servers, picking      one at
+    random      to receive the replacement              victim.     Felten and Zahorj an
+    used a simple queueing           model to predict performance.                                     3.1       The      Basic    Algorithm
+
+       In a different      environment,       Schilit     and Duchamp       have used re-              As previously            stated, our goal is to globally         coordinate      memory
+    mote paging to enhance the performance                   of mobile computers [18].                 management,          We assume that nodes trust each other but may crash
+    Their goal is to permit small memory-starved                   portable computers to               at any time. All nodes run the same algorithm                    and attempt to make
+    page to the memories        of larger servers nearby: pages could migrate                          choices that are good in a global cluster sense, as well as for the
+    from server to server as the portables migrate.                                                    local node.         We classify        pages on a node P as being either local
+.
+       Franklin      et al. examine       the use of remote memory             in a client-            pages, which         have been recently         accessed on P, or global           pages,
+    server DBMS          system [13].       Their       system assumes a centralized                   which are stored in P’s memory                 on behalf of other nodes.           Pages
+    database server that contains the disks for stable store plus a large                              may also be private           or shared, shared pages occur because two or
+    memory cache. Clients interact with each other via a central server.                               more nodes might access a common                   file exported     by a file server.
+    On a page read request, if the page is not cached in the server’s                                  Thus, a shared page may be found in the active local memories
+    memory,       the server checks whether              another client     has that page              of multiple        nodes; however,         a page in global       memory       is always
+    cached; if so, the server asks that client to forward                  its copy to the             private.
+    workstation        requesting    the read.      Franklin      et al. evaluate several                    In general, the algorithm          changes the local/global       memory        bal-
+    variants of this algorithm         using a synthetic          database workload.                   ance as the result of faults caused by an access to a nonresident
+       Dahlin     et al. evaluate the use of several algorithms               for utilizing            page. Node P, on a fault, performs                the following       global     replace-
+    remote      memory,     the best of which            is called N-chance       forward-             ment algorithm,            which we describe in terms of 4 possible cases:
+    ing [10].      Using    N-chance       forwarding,        when a node is about to
+    replace     a page, it checks whether               that page is the last copy in                  Case 1: The faulted page is in the global memory of another node,
+    the cluster (a “singlet”);         if so, the node forwards            that page to a                       Q, We swap the desired page in Q’s global memory                        with any
+    randomly-picked         node, otherwise         it discards the page. Each page                              global    page in P’s global        memory.        Once brought        into P’s
+    sent to remote memory            has a circulation         count, N, and the page is                         memory,        the faulted    page becomes a local page, increasing
+    discarded     after it has been forwarded              to N nodes.      When a node                          the size of P’s local memory           by 1. Q’s local/global          memory
+    receives a remote page, that page is made the youngest on its LRU                                            balance is unchanged.           This is depicted in Figure       1.
+    list, possibly      displacing     another      page on that node; if possible,                    Case 2: The faulted              page is in the global         memory      of node Q,
+    a duplicate      page or recirculating          page is chosen for replacement.                              but P’s memory          contains    only local pages.         Exchange       the
+    Dahlin    et al.     compare     a~gorithms using a simulator             running     one                    LRU local page on P with the faulted                 page on Q. The size
+    two-day trace of a Sprite workload;              their analysis examines file sys-
+                                                                                                                 of the global       memory      on Q and the local memory              on P are
+    tem data pages only (i.e., no VM paging activity                      and no program                         unchanged.
+    executable).
+       Our work is related to these previous studies, but also differs in                              Case 3: The page is on disk. Read the faulted page into node P’s
+    significant ways. First, our algorithm is integrated with the lowest                                    memory, where it becomes a local page. Choose the oldest
+    level of the system and encompasses                     all memory      activity:     VM                     page in the cluster (say, on node Q) for replacement                  and write
+    paging, mapped files, and explicit              file access. Second, in previous                             it to disk if necessary. Send a global page on node P to node
+    systems, even where client-to-client                sharing occurs, each node acts                           Q where it continues           as a global     page.    If P has no global
+    as an autonomous agent. In contrast, we manage memory globally,                                              pages, choose P’s LRU local page instead.                 This is shown in
+    attempting to make good choices both for the faulting node and the                                           Figure    2.
+
+    cluster as a whole (we provide a more detailed comparison                           of the         Case 4: The faulted             page is a shared page in the local               memory
+    global vs. autonomous scheme following    the presentation                          of our
+                                                                                                                 of another node Q, Copy that page into a frame on node P,
+    algorithm      in the next section).         Third,      our system can gracefully
+                                                                                                                 leaving the original         in local memory on Q. Choose the oldest
+    handle addition and deletion of nodes in the cluster without user                                            page in the cluster (say, on node R) for replacement                  and write
+    intervention.  Finally, we have an implementation    that is well
+                                                                                                                 it to disk if necessary. Send a global page on node P to node
+    integrated     into a production        operating      system: OSF/1.
+                                                                                                                 R where it becomes a global page (if P has no global pages,
+       Several other efforts, while not dealing directly with remote                                             choose P’s LRU local page).
+    paging. relate to our work,    Most fundamental     is the work of
+    Li and Hudak, who describe a number of alternative strategies for                                        The behavior         of this algorithm     is fairly    straightforward.       Over
+     managing pages in a distributed           shared virtual memory system [ 16].                     time, nodes that are actively                computing       and using memory         will
+
+
+
+
+                                                                                                 202
+                                                                                                                obviously        impossible          to maintain complete global age information
+                                                                                                                at every instant; therefore,               we use a variant in which each node has
+                                                                                                                only approximate                information        about global pages. The objective
+                                                                                                                of our algorithm           is to provide a reasonable tradeoff between the ac-
+                                                                                                                curacy of information                 that is available     to nodes and the efficiency
+                                                                                                                of distributing          that information.             The key issue is guaranteeing
+                                                                                                                the validity        of the age information               and deciding      when it must be
+                                                                                                                updated.
+                                                                                                                    Our algorithm              divides time into epochs, Each epoch has a maxi-
+      Figure    1: Global replacement                  with hit in the global cache,                            mum duration, 7’, and a maximum                        number of cluster replacements,
+                                                                                                                M, that will be allowed in that epoch. The values of T and M vary
+                                                                                                                from epoch to epoch, depending                      on the state of global memory and
+
+
+
+
+                         dP
+                             H(M1 P                  Hml Q
+
+                              L(XI.I Cache             L4ud C’,’hc                                              the workload.           A new epoch is triggered                 when either(1)         the dura-
+                                                                                                                tion of the epoch, T, has elapsed, (2) M global                            pages have been
+                         n                                                Gk)h,lly
+                                                                                                                replaced,        or (3) the age information               is detected to be inaccurate.
+                                                                          Ohlcst
+                              Gk)b,l C,l’hc            Gh)h<tl C,,LhC     P<,g,                                 Currently,        each epoch is on the order of 5–10 seconds.
+
+                                  Any
+                                                                                                                    Our system maintains                  age information         on every node for both
+                                  P,gc
+                                                                                                                local and global pages. At the start of each epoch, every node sends
+                                                                                                                a summary of the ages of its local and global pages to a designated
+                                                                                                                initiator      node.       Using this information,               the initiator     computes     a
+                                                                                                                weight, w;, for each node Z, such that out of the M oldest pages in
+                               w                                                                                the network,         w, reside in node i’s memory                  at the beginning        of the
+
+Figure     2: Global          replacement           showing       miss in the global cache.                     epoch.       The initiator          also determines        the minimum           age, MinAge,
+
+The faulted       page is read from                  disk,    and the oldest page in the                        that will be replaced from the cluster (i e., sent to disk or discarded)
+                                                                                                                in the new epoch. The initiator                    sends the weights w, and the value
+network is either discarded (if clean) or written                             back to disk.
+                                                                                                                A4irulge      to all nodes in the cluster. In addition,                 the initiator     selects
+                                                                                                                the node with the most idle pages (the largest w,) to be the initiator
+fill their memories             with local pages and will                  begin using remote                   for the following              epoch.
+memory in the cluster; nodes that have been idle for some time and                                                 During         an epoch, when a node P must evict a page from its
+whose pages are old will                      begin to fill their memories              with global             memory to fault in a page from disk (Cases 3 and 4), it first checks
+pages. The balance between local and global storage on a node is                                                if the age of the evicted page is older than &finAge.                        If so, it simply
+thus dynamic       and depends on its workload                          and the workload         in the         discards       the page (since this page is expected                       to be discarded
+cluster.     The basic issue is when to change the amount of global                                             sometime         during this epoch).               If not, P sends the page to node i,
+store and local storage, both on a node and in the cluster overall.                                  In         where the probability               of choosing        node i is proportional        to w,. In
+general, on a fault requiring                   a disk read, the (active) faulting               node           this case, the page discarded                   from     P becomes a global             page on
+grows its local memory, while the cluster node with the oldest page                                             node i, and the oldest page on i is discarded.
+(an “idle”     node) loses a page to disk. Global memory grows when                                                Our algorithm               is probabilistic:     on average, during an epoch, tbe
+the faulting     node has no global                  pages and the oldest page in the                           ith node receives w, /M                 of the evictions in that epoch, replacing             its
+network      is a local page (i.e., the oldest local page on the faulting                                       oldest page for each one. This yields two useful properties.                               First,
+node becomes a global page, replacing                          the oldest cluster page.)                        our algorithm          approximates            LRU in the sense that if M pages are
+   Ultimately,      our goal is to minimize                   the total cost of all memory                      discarded        by global         replacement         during    the epoch, they are the
+references      within        the cluster.          The cost of a memory                  reference             globally      oldest M pages in the cluster.                    Second, it yields a simple
+depends on the state of the referenced                         page: in local          memory,       in         way to determine               statistically    when M pages have been replaced;
+global     memory        on another node, or on disk.                        A local hit is over                i.e., when the node with the largest w~ receives w, pages, it declares
+three orders of magnitude                       faster than a global             memory     or disk             an end to the epoch.
+access, while a global memory                       hit is only two to ten times faster                            To reduce the divergence from strict LRU, it is thus important                              to
+than a disk access. Therefore,                      in making           replacement      decisions,             keep the duration              of the epoch T and the value of M appropriate
+we might choose to replace a global page before a local page of the                                             for the current behavior of the system. The decision                             procedure for
+same age, because the cost of mistakenly                             replacing       a local page is            choosing these values considers (1) the distribution                         of global page
+substantially     higher.             Which      decision     is better depends on future                       ages, (2) the expected rate at which pages will be discarded from the
+behavior. To predict future behavior, a cost function is associated                                             cluster, and (3) the rate at which the distributed age information  is
+with each page. This cost function is related to LRU, but is based on                                           expected to become inaccurate. t The latter two rates are estimated
+both the age of the page and its state. Our current implementation                                              from their values in preceding epochs. Roughly                          speaking, the more
+boosts the ages of global                      pages to favor their replacement                   over          old pages there are in the network,                    the longer T should be (and the
+local pages of approximately                     the same age.                                                  larger M and A4inAge                  are); similarly,     if the expected discard rate
+                                                                                                                is low, T can be larger as well. When the number of old pages
+3.2      Managing Global Age Information                                                                        in the network is too small, indicating that all nodes are actively
+                                                                                                                using their memory, MinAge is set to O, so that pages are always
+When a faulted page is read from disk (Cases 3 and 4), our al-
+                                                                                                                discarded or written to disk rather than forwarded.
+gorithm discards the oldest page in the cluster. As described so
+far, we assume full               global        information       about the state of nodes                         fThe     age distribution     on a node ch~nges when Its global     pages me consumed      due
+and their pages in order to locate this oldest page. However,                                     it N          to m mcreme       in Its local ciiche size.
+
+
+
+
+                                                                                                          203
+3.3         Node Failures and Coherency
+                                                                                                                      Fuults
+
+Node failures in the cluster do not cause data loss in global memory,
+                                                                                                              VM
+because all pages sent to global memory are clean; i.e., a dirty page                                                                         .   ___—      —— _       .
+                                                                                                                          Red
+moves from local to global memory                    only when it is being written                            Wntc        Fre
+
+to disk.      We do not change the number of disk writes that occur;
+our system allows a disk write to complete                     as usual but promotes
+that page into the global cache so that a subsequent fetch does not
+require a disk read. If a node housing a requested remote page is
+down, the requesting            node simply      fetches the data from disk.
+                                                                                                                                 Gq)uge
+      Likewise,     since our algorithm        deals with only clean pages, co-                                                  PutpaRe
+herence semantics            for shared pages are the responsibility                of the
+higher-level       software     that creates sharing in the first place.                  For               Y                                                                  w-------,
+instance,      in our system shared pages occur when nodes access a                                       : Diiiii                    &
+                                                                                                          1
+common NFS tile, e.g., an executable.                  Thus, the coherence seman-                                                     I                                        ..
+                                                                                                                                -J                                             .    .   .   .    .    .   .    J
+tics seen by the users of our system are no stronger and no weaker
+than what NFS provides.                                                                                Figure        3:     Structure         of Modified      OSF/1         Memory                  Management
+                                                                                                       System
+3.4         Discussion
+
+The goal of a global             memory     management            system is to utilize
+network-wide          memory      resources        in order to minimize          the total             Inserting      these calls into the UBC and VM                          modules               allows us to
+cost of all memory           references.    At the same time, it should avoid                          track the collection                  of pages on the node.                  It also allows                  us to
+impacting         programs      not using     global    memory,         To meet these                  forward       disk reads to the GMS. Disk writes occur exactly as in the
+goals, we believe         that the memory            management        algorithm        must           original      OSF/1 system.
+use global,       rather than local knowledge            to choose among the var-
+ious possible        states that a page might           assume:       local, global,        or
+disk. This knowledge            must be efficient       to maintain,      distribute,     and
+                                                                                                       4.1         Basic Data Structures
+evaluate. In practice, the algorithm               must operate without          complete
+                                                                                                       Our algorithm             manages pages in the cluster, which                            are ultimately
+information,        and must be able to determine                when information           is
+                                                                                                       backed by secondary storage: either a local disk or an NFS server’s
+out of date.
+                                                                                                       disk. Each page of data must be uniquely                            identified,          so that we can
+      Our     algorithm      is intended      to    meet   these needs           by using              track the physical                 location   of that page (or the multiple                            locations
+periodically-distributed           cluster-wide      page age information               in or-
+                                                                                                       for a shared page). We uniquely                      identify       a page in terms of the file
+der to: (1) choose those nodes most likely                      to have idle memory                    blocks that back it. In OSF/1, pages are a fixed multiple                                                   of disk
+to house global pages, (2) avoid burdening                     nodes that are actively                 blocks;       entire pages, rather than blocks,                      are transferred                   between
+using their memory,             (3) ultimately      maintain      in cluster-wide         pri-         the disk driver               and the rest of the kernel.                Thus, to identify                      the
+mary memory           the pages most likely         to be globally      reused, and (4)
+                                                                                                       contents of a page. it is sufficient                    to know the 1P address of the
+maintain       those pages in the right places.                                                        node backing             that page, the disk partition               on that node, the inode
+                                                                                                       number,        and the offset within              the inode where the page resides.
+                                                                                                       We use a 128-bit                   cluster-wide    unique       identifier           (UID)             to record
+4       Implementation
+                                                                                                       this information.                  We ensure that the page identified                         by each UID
+
+We have modified          the OSF/1 operating           system on the DEC Alpha                        is in one of four states: (1) cached locally                            on a single node, (2)
+
+platform       to incorporate    the algorithm       described above. This section                     cached locally                on multiple      nodes, (3) cached on a single node on
+
+presents the details of our implementation.                                                            behalf of another node, or (4) not cached at all.
+
+  Figure 3 shows a simplified representation  of the modified                                             We maintain                three principal     data structures, keyed by UID.
+OSF/1 memory management subsystem.        The boxes represent
+                                                                                                          1. The page-frame-directory                     (PFD) is a per-node                        structure that
+functional        components      and the arrows show some of the control
+                                                                                                                contains a record for each page (local or global) that is present
+relationships.       The two key components              of the basic OSF/ 1 mem-
+                                                                                                                on the node.                A successful      UID       lookup          in the PFD yields
+ory system are (1) the VM                system,       which     supports cmonymou.s
+                                                                                                                information               about the physical           page frame               containing             the
+pages devoted to process stacks and heaps, and (2) the Unified
+                                                                                                                data, LRU statistics                 about the frame,         and whether                     the page
+Buffer Cache (UBC), which caches file pages. The UBC contains
+                                                                                                                is local or global. An unsuccessful lookup                                  implies            that the
+pages from both mapped tiles and files accessed through normal
+                                                                                                                particular page is not present on this node,
+read/write        calls and is dynamically-sized;              this is similar    in some
+ways to the Sprite            tile system [17].         At the same level as VM                           2. The global-cuche-directo~                         (GCD)         is a cluster-wide                        data
+and UBC,          we have added the GMS              module,      which     holds global                        structure that is used to locate the 1P address of a node that
+pages housed on the node. Page-replacement                         decisions     are made                       has a particular page cached. For performance reasons, the
+by the pageout daemon and GMS. A custom TLB handler provides                                                    GCD is organized as a hash table, with each node storing
+information about the ages of VM and UBC pages for use by GMS,                                                  only a portion of the table.
+  We modified the kernel to insert calls to the GMS at each point
+where pages were either added to or removed from the UBC.                                                 3. The page-ownership-directory                           (POD)           maps the UID                     for a
+Similarly, we inserted calls into the VM swapping code to keep                                                  shared page to the node storing the GCD section containing
+track of additions and deletions to the list of anonymous pages.                                                that page.             For non-shared        pages, the GCD entry is always
+
+
+
+
+                                                                                                 204
+                                           No(Ic B
+                                                                                                                 entries.     Subsequently         when the TLB       handler performs         a virtual-
+                                                                                                                 to-physical       translation     on a TLB miss, it sets a bit for that physical
+
+
+
+                                        c)
+                                             GCD
+
+                                             n.-             >....             .
+                                                                                                                 frame.      A kernel thread samples the per-frame                 bit every period in
+                                            4-                                                                   order to maintain         LRU statistics for all physical          page frames,
+                                                                               UID
+
+                                UID
+
+                                                                                                                 4.3      Inter-node          Communication
+
+                                                                                                                 Between nodes we use simple non-blocking                    communication.        In our
+                                                                                                                 current implementation,             we assume that the network is reliable and
+                                                                                                                 we marshal and unmarshal to and from 1P datagrams directly.                         This
+                                                                                                                 is justified     primarily      by the increased reliability        of modern      local
+                            Figure      4: Locating             a Page.
+                                                                                                                 area networks such as AN2 that have flow control to eliminate                          cell
+                                                                                                                 loss due to congestion           [23]. To date, we have not noticed a dropped
+                                                                                                                 packet in any of our experiments.                  However,      our implementation
+           stored on the node that is using the page. The POD is repli-                                          can be readily changed to use any other message-passing                        package
+         cated on all nodes and is changed only when machines are                                                or transport protocol.
+           added or deleted from the cluster.
+                                                                                                                 4.4      Addition         and Deletion        of Nodes
+    Finding     a page following          a fault requires a two-step                    lookup,      as
+shown in Figure 4. First, the requesting                             node (e.g., node A in Fig-                  When a node is added to the cluster, it checks in with a designated
+ure 4) uses the UID to hash into the POD, producing                                   an 1P address              master node, which then notifies               all the existing      members of the
+of the node (node B) implementing                           the appropriate           region of the              new addition.        The master node distributes          new copies of the page-
+global-cache-directory.           The requester sends a message containing                                       ownership-directory             to each node, including       the newly added one.
+the UID to the GMS on that node, requesting                                 the page identified                  Each node distributes            the appropriate    portions of tbe global-cache-
+by the UID,       The GMS on the node does a lookup                                  in the global-              directory       to the new node.          In the current      implementation,          the
+cache-directory,        which     results in either a miss or a hit.                          In case            master node is pre-determined                and represents        a single    point     of
+of a miss, a message is sent to the original                               node.       In case of a              failure that can prevent addition of new nodes. It is straightforward
+hit, the GCD node forwards                the request to the node that contains                                  to extend our implementation                 to deal with     master node failure
+the page-frame-directory               for the UID             (node C), which replies to                        through      an election      process to select a new master, as is done in
+the requesting       node.      Figure 4 shows three nodes involved                            in the            other systems [14, 18].
+lookup.      When a faulted page is not shared, nodes A and B are iden-                                             Node deletions            are straightforward      as well.     The master node
+tical, thereby decreasing the number of network                                messages needed.                  checks periodically          for the liveness of the other nodes. When it de-
+This distribution       of the page management information                             is somewhat               tects a crashed node, it redistributes             the page-ownership-directory.
+similar to the handling          of distributed             locks in VAXclusters              [14].              As with addition,         global-cache-directories        are also redistributed         at
+   The page-ownership-directo~                       provides           an extra level of indi-                  that time.
+rection that enables us to handle the addition                            or deletion      of nodes
+from the cluster        without        changing        the hash function.                 A central
+                                                                                                                 4.5      Basic Operation             of the Algorithm
+server running       on one of the workstations                          is responsible       for up-
+dating the indirection           table and propagating                     it to the rest of the                 Section 3 described the basic operation of the algorithm                  in terms of
+cluster. This updating           must occur whenever there is a reconfigura-                                     a series of page swaps between nodes (see Cases 1-4). However, in
+tion. Parts of the global-cache-directory                            database are redistributed                  the actual implementation,            the swaps are performed         in a somewhat
+on reconfiguration          as well.     However, none of these operations                         are           different      fashion.
+critical     to the correct operation            of the cluster.               In the worst case,                   On a fault, the faulting node allocates a frame from its free-frame
+during      the redistribution         process, some requests may fail to find                                   list and executes a remote getpage              operation     for the missing page.
+pages in global memory and will be forced to access them on disk.                                                The inter-node        interaction     for a getpage operation        is conceptually
+                                                                                                                 identical      to the scenario shown in Figure 4: on a hit, the actual
+4.2        Collecting       Local Age Information                                                                data is returned; on a miss, the requesting              node goes to disk (or to
+                                                                                                                 the NFS server).          The global-cache-directory             is updated with the
+An important       part of our algorithm             is its page aging process, which                            new location        of the page and the page-frame-directory                  structures
+provides      information       for global         decision           making.        Unfortunately,              on the requester and the remote node are updated suitably. If the
+it is difficult to track the ages of some pages in OSF/1. For pages                                              remote node was caching the page on behalf of another node, i.e.,
+belonging to files accessed via explicit read/write requests, these                                              it was a global page, then the remote node deletes its entry from
+calls can provide        the required        age information.                      However,   access             the page-frame-directory.             (Recall from Section 3 that there needs
+to anonymous         and mapped tile pages is invisible                              to the operat-              to be only one copy of a global page in the system, because the cost
+ing system.        Furthermore,          the OSF/ 1 FIFO-with-second-chance                                      of remotely       accessing a global page is independent              of which node
+replacement        algorithm      provides         little     useful global           age informa-               it is on.) The only other possibility              is that the requested page is a
+tion for our purposes, particularly                   on a system that is not heavily                            local shared page, in which case the remote marks it as a duplicate.
+faulting-exactly         the case in which                  we wish to know the ages of                          In either case, the requesting node adds an entry.
+pages.                                                                                                              The getpage operation represents one half of the swap; the sec-
+   In order        to collect         age information                  about       anonymous       and           ond half is executed at a later time in the context of the pageout
+mapped pages, we modified the TLB handler, which is imple-                                                       daemon. As getpage operations are executed on a node, the free
+mented in PALcode [20], once a minute, we flush the TLB of all                                                   list shrinks,      eventually      causing    the pageout daemon to wakeup.
+
+
+
+
+                                                                                                           205
+                                         No(Ic B                                                                                                            Latency in +$
+                                           GCD                                                                Operation                            Non-Shared Page     Shared Page
+                                                                                                                                                   Miss       Hit      Miss    Hit
+                                          .1...!                                                              Request Generation                    7         61        65     65
+                         <UID,C>     D                                                                        Reply Receipt                                   156        5     150
+                                                                                                              GCD Processing                        8          8        59     61
+                                                                                                              Network ktW&SW                         -       1135      211    1241
+
+
+
+
+            @)--m
+                                                                                                              Target Processing                      -        80         -     81
+                                                                                                              Total                                 15           1440           340         1558
+
+
+              Nmic
+                A                                                   N(vJc C                                   Table 1: Performance                  of the Getpage         Operation        (#s)
+
+                Figure     5: Executing            a Putpage Operation.
+                                                                                                 in Section 4.1, if the page is non-shared,                           the GCD (global-cache-
+                                                                                                 directory)           node is the same as the requesting                     node.
+                                                                                                        The rows provide              the following            information.          Request       Gener-
+The pageout daemon, in concert with the GMS, the UBC, and the
+                                                                                                 ation        is the time          for the requesting            node to generate           a getpage
+VM managers (see Figure 3), attempts to evict the oldest pages on
+                                                                                                 request, including                access to the page-ownership-directory                          to con-
+the node. These evictions           are handled by the GMS module, which
+                                                                                                 tact the GCD node.                   Reply        Receipt      is the requester       time spent to
+has age information          about all these pages. Some of the pages are
+                                                                                                 process the reply from the remote node; e.g., for a hit, this includes
+pushed to other idle nodes (using a putpage operation);                       others are
+                                                                                                 tbe cost of copying                data from the network                buffer into a free page
+discarded     because they are older than the MinAge                      value for the
+                                                                                                 and freeing the network buffer.                          GCD     Processing      accounts for the
+current     epoch.     Those putpage operations              that go to other nodes
+                                                                                                 total time spent in the GCD lookup operation                              as well as forwarding
+may eventually        cause older pages on those nodes to be forwarded
+                                                                                                 the request to the PFD node.                         Network       HW&,SW           is the total time
+or discarded.
+                                                                                                 spent in the network                hardware and the operating                  system’s network
+    When a node performs             a putpage operation,          apart from send-
+                                                                                                 protocol.          The bulk of this time is spent in hardware;                            when send-
+ing the page to the target node, it also updates the global-cache-
+                                                                                                 ing large packets, the total latency introduced                               by the sending and
+directory    at the node that is responsible              for the affected page. The
+                                                                                                 receiving          controllers      is comparable             to the transmission         time on the
+target node and the sending              node each update their page-frame-
+                                                                                                 fiber. Target Processing                  refers to the time on the remote node to do
+directory    structures,     If the evicted page is a shared global page for
+                                                                                                 a lookup           in the page-frame-directory                   and reply to the requesting
+which a duplicate        exists elsewhere in the cluster, then it is simply
+                                                                                                 node. Total is the sum of the rows and represents the latency seen
+discarded.
+                                                                                                 by the initiating           node before the getpage operation                       completes. t To
+    The target node for a putpage operation                 is selected by executing
+                                                                                                 put these numbers in perspective,                            on identical     hardware,       the cost
+the algorithm        described in Section 3,2. Figure 5 depicts the major
+                                                                                                 of a simple user-to-user                   UDP packet exchange for requesting                        and
+steps involved       in a putpage operation.
+                                                                                                 receiving          an 8 Kbyte page is about 1640 ps.
+                                                                                                        The Total line for the first column                      shows the cost of an unsuc-
+5     Performance                                                                                cessful attempt to locate a non-shared                            page in the cluster.            In this
+                                                                                                 case, the requested page is not in the global cache and a disk access
+This section provides performance                   measurements of our implemen-                is required.           This cost thus represents the overhead we add to an
+tation of global       memory       management           from several perspectives.              OSF/1 disk access. The OSF/1 disk access time varies between
+First, we present microbenchmarks                    that give a detailed breakdown              3600 ps and 14300 ps, so this represents                                  an overhead         of only
+of the time for fundamental               global       memory    management       oper-          O.UI.        170 on a miss.
+ations.     Second,      we look      at the speedup obtained              by memory-                   Table 2 shows the costs for a putpage operation.                                  As shown in
+intensive applications when using our system, Third, we examine                                  Figure 5, a putpage updates the global-cache-directory    as well as
+the effectiveness of our algorithm under different global loading                                the page-frame-directory  structures on the source and target nodes.
+parameters. All experiments were carried out using DEC Alpha                                     In the case of shared pages, the sending node might need to initiate
+workstations     running       OSF/1 V3.2, connected by a 155 Mb/s DEC                           two network             transmissions—one                    to the GCD and another to the
+AN2 ATM         network.       The page size”on the Alpha                and the unit of         PFD; this time is reflected                       in Request      Generation.            In a putpage
+transfer for our measurements              is 8 Kbytes.                                          operation, the sending node does not wait for a reply from the target
+                                                                                                 before returning from a putpage call; therefore,                               in the bottom row
+5.1       Microbenchmarks                                                                        we show Sender Latency rather than the total.                                  For shared pages,
+                                                                                                 this     latency       is   the    same      as    Request      Generation;        for non-shared
+Here we report simple              measurements          to evaluate the underlying              pages, the latency also includes the GCD                               processing,        because the
+performance      of our current implementation.               The experiments      were          GCD is on the same node.
+done using eight 225-MHz    DEC 3000-700 workstations                             in the           Putpage requests are typically                         executed by a node under memory
+environment above, each with a local disk and connection                          to one         pressure to free frames,  An important metric is therefore the
+or more NFS tile servers that export shared files, including                   program           latency for a frame to be freed; this consists of the sum of the
+binaries.     All of these measurements                were taken on otherwise      idle         Sender        Latency        and the time for the network                   controller     to transmit
+machines.                                                                                        a buffer, so that the operating                     system can add it to the free list. For
+   Table 1 itemizes the cost of a getpage operation. The getpage                                 8 Kbyte            pages, the combined                  transmission      and operating           system
+cost depends on whether the page is shared or non-shared and
+whether      there is a hit or miss in the global               cache,     As described                 t We could reduce the getpage           hit latency 203 MS by eliminating  a copy and short
+                                                                                                 circuiting     the network-p~cket         delivery path, hut have not yet included these changes.
+
+
+
+
+                                                                                           206
+                                              Latency in ps
+        Operation                   Non-Shared Page      Shared Page
+        Request Generation                 58                102
+        GCD Processing
+        Network HW&SW
+        Target Processing
+                                  II       7
+                                          989
+                                          178
+                                                              I
+                                                              12
+                                                             989
+                                                             181
+        Sender Latency                           65                   102                               Table 4: Average Access Times for Shared Pages (ins)
+
+           Table 2: Performance       of the Putpage       Operation     (~s)
+                                                                                                             Operation                CPU cost        Network Traffic
+                                                                                                                                         ps               bytesls
+                  Access ~pe                Access Latency in ms                                             Initiator Request         78xn               25xn
+                                            GMS I      No GMS                                                Gather Summary             3512              154 X n
+                  Sequential Access          2.1         3.6                                                 Distribute Weights        45Xrs      / (108+ 2xn)xn             U
+
+                u Random Access              2.1         14.3
+                                                                                                Table 5: Normalized          overhead for age information            for 2-second
+    Table 3: Average Access Times for Non-shared                     Pages (ins)                epoch
+
+
+
+overhead is about 300 ~s.                                                                       access will thus result in an NFS request to the server, which will
+   Table 3 compares           the average data-read         time for non-shared                 require a disk access. In the final case, the NFS server has enough
+pages with and without          GMS. For this experiment,             we ran a syn-             memory so that it can satisfy client requests without               accessing the
+thetic program       on a machine         with    64 Mbytes       of memory.      The           disk. Here, the cost of an access is simply the overhead of the NFS
+program       repeated] y accesses a large number of anonymous                   (i.e.,         call and reply between the client            and the server.     Notice     that an
+non-shared)       pages, in excess of the total physical               memory.      In          NFS server-cache hit is 0.2 ms faster than a GMS hit for a single.
+steady state for this experiment,          every access requires a putpage to                   This reflects the additional        cost of the putpage operation      performed
+free a page and a getpage to fetch the faulted page. The average                                by GMS when a page is discarded from the client cache. In NFS,
+read time thus reflects the overhead of both operations,                                        discarded pages are dropped as they are in GMS for duplicates,                    in
+   The first row of Table 3 shows the average performance                       of se-          which case GMS is 0.2 ms faster than NFS.
+quential      reads to non-shared     pages. The numbers shown with no
+GMS reflect the average disk access time; the difference                    between             5.2      Bookkeeping         Overheads
+the sequential      and random      access times indicates           the substantial
+benefit OSF gains from prefetching                and clustering    disk blocks for             This section describes the cost of performing              the essential GMS
+sequential      reads.    Nevertheless,     using GM S reduces the average                      bookkeeping        operations,    which    include   the periodic     flushing    of
+sequential      read time     by 41 YO for non-shared          pages.       For con-            TLB entries as well as the overhead of collecting              and propagating
+sequential      accesses, GMS       shows a nearly        a 7-fold     performance              global page age information.
+improvement.        Here the native OSF/ 1 system is unable to exploit                              On the 225-MHz         processor,     our modified    TLB     handler    intro-
+clustering     to amortize    the cost of disk seeks and rotational          delays.            duces a latency of about 60 cycles (an additional                18 cycles over
+   Table 4 shows the data-access times for NFS files that can be                                the standard handler) on the TLB till path. In addition,               since TLB
+potentially     shared.     In this experiment,       a client machine       with 64            entries are flushed every minute,           with a 44 entry TLB,        we intro-
+Mbytes of memory           tries to access a large NFS tile that will not fit                   duce a negligible        overhead     of 2640 (60x44)      cycles per minute.
+into its main memory,          although    there is sufficient      memory      in the          In practice,     we have seen no slowdown            in the execution       time of
+cluster to hold all of its pages, There are four cases to consider,                             programs with the modified            TLB handler.
+   In the first case, shown in the first column of Table 4, we assume                               Collecting     and propagating      the age information     consists of mul-
+that all NFS pages accessed by the client will                be put into global                tiple steps: (1) the initiator        triggers   a new epoch by sending out
+memory.        This happens in practice           when a single NFS client ac-                  a request to each node asking for summary                age information,        (2)
+cesses the file from a server. For the most part, the behavior of the                           each node gathers tbe summary              information   and returns it to the
+system is similar        to the experiment       described above: there will be                 initiator,    and (3) the initiator    receives the information,       calculates
+a putpage and a getpage for each access. In this case, tbe pages                                weights and epoch parameters, and distributes            the data back to each
+will be fetched from global memory                on idle machines,                             node.
+   The second case is a variation                of the first, where two clients                    The three rows of Table 5 represent the CPU cost and the network
+are accessing the same NFS tile.                 One client bas ample memory                    traffic induced by each of these operations. For steps one and three,
+to store the entire file while the other client does not. Because of                            tbe table shows the CPU overhead on the initiator                   node and the
+the memory pressure, the second client will do a series of putpage                              network traffic it generates as a function of the number of nodes,
+and getpage operations.          The putpage operations            in this case are             n, The CPU cost in step two is a function of the number of pages
+for shared pages, for which copies already exist in the file buffer                             each node must scan: 0.29 ps per local page and 0.54 AS for each
+cache of the other client (i.e., they are duplicates).    Such a putpage                        globa~ page scanned. The overhead shown in the table assumes that
+operation causes the page to be dropped; there is no network trans-                             each node has 64 Mbytes           (8192 pages) of local memory            and that
+mission. The average    access   cost in this case is therefore  the cost                       2000 global pages are scanned. We display network traffic as a rate
+of a getpage.                                                                                   in bytes per second by assuming a worst-case triggering interval
+   The next two cases examine the cost of a read access when there                              of 2 seconds (a 2-second epoch would be extremely                   short), Given
+is no GMS. In the first case, we constrain the NFS file server so that                          this short epoch length and a 100-node network,               CPU overbead is
+it does not have enough buffer cache for the entire fi le. A client read                        less than 0.8?6 on the initiator          node and less than 0.2?Z0on other
+
+
+
+
+                                                                                          207
+nodes, while the impact on network                 bandwidth      is minimal.
+                                                                                                                  I
+                                                                                                                                                    /-—
+
+
+                                                                                                                                                     ——
+                                                                                                                    [
+5.3      Execution         Time Improvement                                                                                                                                                d        Bca”g CAD
+
+                                                                                                                                                                                           A        VLSI Router
+
+
+
+
+                                                                                                                  I
+This section examines           the performance           gains seen by several ap-
+
+
+
+
+                                                                                                                  &:;
+                                                                                                                                                                                           +–       Compiled      L,”k
+plications     with the global memory             system. These applications             are                                                                             —x
+                                                                                                                                                                                           —x—      007
+memory and file 1/0 intensive,            so under normal circumstances,                per-
+
+                                                                                                                  I
+                                                                                                                                                                                           —        R.”d,,
+formance suffers due to disk accesses if the machine has insufficient                                                                                ,.,X
+                                                                                                                                                                                           +        we]> QU,ry Suw!
+                                                                                                                                              ,,
+memory for application             needs. In these situations we would expect
+                                                                                                                       / .+--”         //22
+global     memory       management        to improve       performance,        assuming
+                                                                                                                        ..-
+that enough idle memory              exists in the network.        The applications
+we measured were the following:                                                                                   ()             50       lrm               150        2eo         250
+
+                                                                                                                              Amount   of Idle Memory             in Network
+                                                                                                                                             (MBytes)
+Boeing       CAD       is a simulation        of a CAD      application     used in the
+         design of Boeing aircraft,           based on a set of page-level        access                                      Figure    6: Workload                  Speedup with GMS
+         traces gathered at Boeing.             During    a four-hour      period, eight
+         engineers      performed      various operations        accessing a shared
+         500-Mbyte       database. We simulated           this activity    by replaying
+         one of these traces.
+
+VLSI      Router       is a VLSI routing program developed at DEC WRL
+         for microprocessor         layout.    The program is memory intensive
+         and can cause significant             paging activity    on small-memory
+         machines.
+
+Compile       and Link       is a partial       compile     and link      of the OSF/1
+         kernel.   By far, the most time is spent in file 1/0 for compiler
+         and linker access to temporary,            source, and object files.
+
+007       is an object-oriented       database benchmark          that builds a parts-                            5                                  10                              15                             20
+                                                                                                                                                            Number      of Nodes
+         assembly database in virtual            memory and then performs               sev-
+         eral traversals     of this database [4].           The benchmark         is de-            Figure      7: Workload             speedup as we vary the number of nodes. Two
+         signed to synthesize the characteristics             of MCAD        design data             fifths of the nodes are idle and the remainder                                            run a mix of three
+         and has been used to evaluate the performance                    of commercial              workloads.
+         and research object databases.
+
+Render        is   a    graphics      rendering       program      that      displays      a         idle memory                is insufficient              to meet the application’s                       demands,
+         computer-generated          scene from a pre-computed               178-Mbyte               our system provides                  relatively              good performance.                Beyond           about
+         database [5].       In our experiment,           we measured the elapsed                    200 Mbytes               of free memory                      in the cluster,         the performance                 of
+         time for a sequence of operations                that move the viewpoint                    these applications                does not show any appreciable                               change, but at
+         progressively      closer to the scene without          changing      the view-
+                                                                                                     that point, we see speedups of from                                     1.5 to 3.5, depending                on the
+         point angle.
+                                                                                                     application.             These speedups are significant                              and demonstrate                the
+Web Query          Server     is a server that handles queries against the full                      potential         of using remote memory                          to reduce the disk bottleneck.
+         text of Digital’s     internal       World-Wide-Web        pages (and some                     Figure 6 shows the speedup of each application                                             when running
+         popular external Web pages). We measured its performance                                    alone with sufficient                global             memory.           To demonstrate                that those
+         for processing a script containing 150 typical user queries.                                benefits      remain          when multiple                    applications          run simultaneously,
+                                                                                                     competing          for memory                 in a larger network,                  we ran another exper-
+      To provide       a best-case estimate        of the performance          impact of             iment.      Here we varied the number of nodes from five to twenty;
+global     memory        management,          we measured        the speedup of our                  in each group of five workstations,                                 two were idle and each of the
+applications relative to a native OSF system.                     Nine nodes were                    remaining three ran a different workload (007, Compile and Link,
+used for these measurements:     eight 225-MHz                    DEC 3000 Model                     or Render). The idle machines had sufficient memory to meet the
+700 machines           rated at 163 SPECint92             and one 233-MHz           DEC              needs of the workloads.                        Thus, when running                     with twenty            nodes,
+AlphaStation 400 4/233 rated at 157 SPECint92. The AlphaStation                                      eight were idle and each of the three workloads was running on
+had 64 Mbytes of memory and ran each application in turn. The                                        four different nodes. The results of this experiment, shown in Fig-
+other eight machines           housed an amount of idle memory                  that was             ure 7, demonstrate                 that the speedup remains nearly constant as the
+equally divided          among them. We varied the total amount of idle                              number of nodes is increased.
+cluster memory           to see the impact of free memory size. Figure 6
+shows the speedup of each of the applications                    as a function     of the
+                                                                                                     5.4      Responsiveness                        to Load Changes
+amount of idle network memory.
+   As Figure 6 shows, global memory management has a beneficial                                      Our algorithm is based on the distribution and use of memory load
+impact on all the applications. With zero idle memory, application                                   information. An obvious question, then, is the extent to which our
+performance with and without GMS is comparable.      This is in                                      system can cope with rapid changes in the distribution of idle pages
+agreement with our microbenchmarks that indicate GMS overheads                                       in the network. To measure this, we ran a controlled experiment,
+are only 0.40.1 qo when there is no idle memory.    Even when                                        again using nine nodes. In this case, the 233-MHz AlphaStation
+
+
+
+
+                                                                                               208
+       2.4 {                                                                                                                  4,
+                                                                                                                                                                                  H N. CIUJWX(Ml,= Nwkd~
+
+
+
+
+                                                                                                                       ;      34                                                 I nms(kk.iwcdul,                  I
+                                                                                                                                                                                                                   1
+                                                                                                                       *
+                                                                                                                        LI
+                                                                                                                                   I
+
+
+
+
+           I   ‘–——                                           -——------                        --.,
+               0           5               1()          15         2(1             25           30
+
+                               Interval   Between Load Redistributions     (see)                                                             25%                     37.5%                            50%
+
+                                                                                                                                          Idleness Skew (X7.   or nodes have 1OI)-X% or idle memory)
+Figure 8: Effect of varying the frequency with which nodes change
+from idle to non-idle              on the performance            of the 007         benchmark.                    Figure 9: Effect of varying distribution                   of idleness on performance
+                                                                                                                  of 007       benchmark.
+
+ran a memory-intensive                    application        (we chose 007              for this and
+several other tests, because its relatively                      short running            time made               to be evicted is picked in the following                   order. If there are sufficient
+the evaluation          more practical);           the other eight nodes were divided                             pages on the free list such that allocating                   one will not trigger page
+into two sets:           those with              idle memory      and those without                  idle         reclamation            (by the pageout        daemon),       we allocate             a free page
+memory.            The total idle memory             in the network       was fixed at 150%                       for the forwarded             page and no page is evicted.                        Otherwise,         we
+of what is needed by 007                    for optimal       performance,         and 4 of the 8                 choose in turn:            the oldest duplicate        page in the UBC,                the oldest
+nodes had most of the idle memory.                           For the experiment,            every X               recirculating           page, or a very old singlet.          If this process locates a
+seconds we caused an idle node to switch with a non-idle node.                                                    victim,     it is discarded and replaced with the forwarded                           page. If no
+   Figure 8 shows the speedup of the 007 benchmark (again,                                                        victim is available, the recirculation               count of the forwarded               page is
+relative       to a non-GMS               system)     as a function        of the frequency                       decremented and it is either forwarded                  or, if the recirculation               count
+with which           the load changes occurred.                   As the graph indicates,                         has reached zero, dropped.
+our system is successful                   at achieving        speedup even in the face                               The modifications            improve the original         algorithm           while preserv-
+of frequent          and rapid changes.              At a maximum           change rate of 1                      ing its key features:            (1) a random choice of a target node is made
+second, we still see a speedup of 1.9 over the non-global                                    system,              without          using global knowledge,           and (2) singlets               are kept in the
+despite the fact that the change requires a swap of 70MB                                      of data             cluster at the expense of duplicates,                 even if they might be needed
+between the non-idle               and idle nodes, which adds significant                       stress            in the near future.
+to the system.          At lower change rates of 20 to 30 seconds, we see                                             Figure           9 shows the effect       of varying       idleness           in the cluster.
+only a small (4910)impact on the speedup.                                                                         Here, for each point of the idleness-distribution                            graph we show
+                                                                                                                  four bars—three             for N-chance and one for GMS. The captions on
+                                                                                                                  the N-chance bars indicate, for each case, the total amount of idle
+5.5     The Effect of Idle Memory                             Distribution
+                                                                                                                  memory that was distributed in the network.    For example, for
+Another        key question          about our algorithm           is the extent to which                         Idle = Needed, the network contained exactly the number of idle
+it is affected by the distribution                   of idle pages in the network.                    To          pages needed by the application,                  while for Idle=            2 x Needed the
+measure this impact,                we constructed            an experiment              to vary the              network contained             twice the idle pages needed by the application,
+number of nodes in which                     idle pages are distributed.                  Again,      we          The GMS bar is measured with Idle = Needed.                                 From the figure,
+measured the speedup of the 007                         benchmark        on one node, while                       we see that for degrees of idleness                    that are more skewed,                    it is
+we controlled          the distribution            of idle pages on 8 other nodes, We                             difficult    for N-chance to find the least loaded nodes. For example,
+chose three points in the spectrum, arranging                        in each case that XYO                        in the case of 25% of the nodes holding                      75% of the pages, GMS
+of the nodes contained               (100 – X)?tO of the idle memory,                      The cases              achieves a substantial             speedup relative         to N-chance             in all cases,
+we consider are (1) 25% of the nodes had ‘75~0                           of the free memory,                      even if the N-chance algorithm is given twice the idle memory in
+(2) 37.5% of the nodes housed 62.5% of the free memory, and (3)                                                   the network. As we move along the graph to 37.57., where 3 of
+50% of the nodes held 50% of the free memory. Case (1) is the                                                     the 8 nodes hold 63% of the idle pages, N-chance                              is equivalent          to
+most skewed, in that most of the free memory is housed on a small                                                 CiMS only when given twice the idle memory. Obviously, when
+number of nodes, while in case (3) the idle memory                                      is uniformly              there is plenty of free memory in the cluster, the exact distribution
+distributed.                                                                                                      of idle pages becomes secondary and the performance                                 of N-chance
+   For comparison,              we show results for our algorithm                         and for N-              is comparable           to that of our algorithm,       as long as it has more pages
+chance forwarding,              the best algorithm           defined by Dahlin et al.[ 10].                       than are needed.
+It is interesting       to compare with N-chance, because it differs from                                             The effectiveness            of the GMS system and its load information
+our algorithm          in significant            ways. as described        in Section 2. To                       is in fact shown by two things: first, it is superior to N-chance with
+the best of our knowledge,                       there is no existing        implementation                       non-uniform             idleness distributions,      even given fewer idle pages;
+of the N-chance algorithm                    described by Dahlin et al. [10].                      Con-           second, and perhaps more important, the performance of GMS, as
+sequently, we implemented                     N-chance in OSF/ 1. We made                      a few              show by the graph, is more-or-less independent    of the skew. In
+minor modifications to the original algorithm. Our implementation                                                 other words, GMS is successful at finding and using the idle pages
+is as follows.                                                                                                    in the network, even though it had no excess idle pages to rely on.
+   Singlet pages are forwarded by nodes with an initial recirculation                                                 The differences           between these algorithms              are mostly due to the
+count of N = 2. When a singlet arrives at a node, the victim                                       page           random nature of the N-chance algorithm.                      Since N-chance chooses
+
+
+
+
+                                                                                                            209
+                                                                                                                                                                                  ■ N.CIU”LI! [Idle= Needed]
+                                                               ■ N. CI,WCL (Me= Nw(U)
+                                                                                                                                                                                  D N-Clmmc (Idle= 1.5x Needed)
+                                                               ❑ N-c1w,cL’ (idle= 1,5x NwdwJl
+                                                                                                                                                                                  ❑ N-Chunce (Idle= 2 x Ncukl)
+                                                               !S+N. CIXU>CC
+                                                                           (k!], = 2 x NCIXW
+                                                                                                                                                                                  fC GMS (MI..    NdUI)
+
+                                                               J
+
+
+
+
+                                                                                                                         203
+
+                                                                                                                              0
+                           25%                      37.5%                          50%                                                       25%                       37.5%                             50%
+                        Idleness Skew (X%   of nodes ha~e 1OO-X % of idle memory)                                                         IdlenessSkew (X%       of nodes have 1OO-X% of idle memory)
+
+
+Figure      10: Effect        of varying        distribution        of idleness on the per-                     Figure 11: Effect of varying distribution of idleness on network
+formance       of a program          actively      accessing local memory,                     half of          activity.
+which consists of shared data that is duplicated                          on other nodes.
+
+                                                                                                                        2,6 ~
+
+
+a target node at random,             it works best if idle memory is uniformly
+distributed,     which will not always be the case.
+
+
+5.6       Interference            with Non-Idle             Nodes
+
+A possible negative effect of global memory management, men-
+tioned above, is that the global management                          may negatively            impact
+applications       running        on non-idle       nodes in the cluster.                A heavily
+paging      node can interfere           with      other non-idle           nodes by adding
+management           overhead,      by replacing        needed pages, or by causing                                       I   ~1                                                                                  1
+
+
+network      traffic.                                                                                                             1          2            3            4             5               6            7
+
+   As one test of this effect, we ran an experiment                              as before with                                                  Number       of Nodes Running   Benchmark
+
+9 nodes.        One node ran the 007                  benchmark,           generating           global
+                                                                                                                Figure 12: Performance impact of a single idle node serving the
+memory       traffic.       On the remaining            8 nodes, we distributed                    idle         remote memory needs for multiple client nodes.
+pages as in the previous              section,       creating        different     skews of the
+idle pages. However,              in this case, all the non-idle             nodes ran a copy
+of a synthetic       program that loops through various pages of its local
+memory;        half of the pages accessed by this program                               are shared              chooses nodes at random, as previously                         described, so remote pages
+among the various running instances, while half are private to each                                             from 007              are sent to the non-idle             nodes.     Second, N-chance                at-
+instance.                                                                                                       tempts to keep singlets               in the network             by displacing            duplicates,
+   Figure       10 shows the average sIowdown                         of the synthetic            pro-          even if they have been recently                       referenced.          This      second effect
+grams for both GMS                 and the three N-chance                 tests given various                   is evident            in this test, i.e., the active, shared, local pages on the
+distributions        of idle memory,            as before.         The slowdown           gives the             non-idle nodes are displaced by remote pages sent (randomly)                                           to
+performance          decrease relative           to the average performance                      when           those nodes by the N-chance algorithm.   When the program                                             on
+007      was not running.          For all the distributions             tested, GMS causes                     the non-idle            node references one of these displaced                       pages, a fault
+virtually    no slowdown           of the synthetic         program when 007                    is gen-         occurs and the page is retrieved from one of the other nodes or from
+erating     global       memory      traffic.       In contrast,         N-chance          causes a             disk.    To make room for the faulted page, the node must discard
+slowdown        of as much as 2.5, depending                        on the amount               of idle         its LRU page by forwarding                       it or dropping          it if it is a duplicate.
+memory       and its distribution.          For 3 idle nodes (37.5’%0), N-chance                                This additional             paging increases network                traffic      and reduces the
+causes a slowdown                of 1.2, even when twice the needed idle mem-                                   performance             of all programs running             in tbe cluster.
+ory is available.           When the idle memory                   is uniformly       distributed,
+N-chance again does as well as GMS, as long as there is additional
+                                                                                                                5.7      CPU Load on Idle Nodes
+idle memory in the cluster.
+  Figure 11 shows, for the same experiment, the network traffic in                                              The experiment              in the previous          section demonstrates                 the success
+megabytes measured during the test, which took 100-200 seconds.                                                 of GMS in avoiding                 nodes without           idle memory.            However,       even
+Here we see the network impact of the two algorithms for the                                                    nodes with substantial              amounts of idle memory                  maybe “non-idle,”
+various idle page distributions. For the more skewed distribution                                               i.e., may be running programs executing in a small subset of local
+of 2570, GMS generates less than 1/3 of the network traffic of                                                  memory. A global management system such as ours does place
+N-chance, given the same number of idle pages in the network,                                                   CPU overhead on such a node in order to use its idle memory,
+At twice the number of idle pages, N-chance still generates over                                                through the getpage and putpage requests that it must respond to.
+50% more traffic than GMS. Not until the idle memory is uniformly                                                  To evaluate the extent of this impact under heavy load, we
+distributed does the N-chance network traffic equal the GMS traffic.                                            performed an experiment in which only one node had idle memory,
+   The reasons for these differences are two-fold, First, N-chance                                              We then monitored                the CPU load on that node as we increased the
+                                                                                                                number of clients using its memory for their global storage. Again,
+
+
+
+                                                                                                          210
+                                                                                 T 3(K)()
+                                                                                                          domain.       All of the kernels must trust each other in various ways.
+                                                                      /i                                  In particular,     one node must trust another to not reveal or corrupt
+                                                                                                          its data that is stored in the second node’s global memory.                   Without
+                                                                                                          mutual trust, the solution         is to encrypt       the data on its way to or
+                                                                                                          from global memory.           This could be done most easily at the network
+                                                                                                          hardware level [19].
+                                                                                                             Our current algorithm is essentially a modified global LRU re-
+                                                                                                          placement scheme. It is well known that in some cases, such as
+                                                                                                          sequential      file access, LRU may not be the best choice [22].                    The
+                                                                                                          sequential case could be dealt with by limiting                its buffer space, as is
+                                                                                                          done currently in the OSF/1 file buffer cache. Other problems could
+                   1        2        3       4         5        6          7                              exist as weH. The most obvious is that a single badly-behaving pro-
+                         Number     of Nodes Running   Benchmark                                          gram on one node could cause enormous paging activity,                     effectively
+                                                                                                          flushing    global memory.        Of course, even without           global memory,
+Figure    13: Impact of multiple            clients on CPU performance                      of an         a misbehaving       program could flood the network or disk, disrupting
+idle node.                                                                                                service. Again, one approach is to provide                a threshold    limiting     the
+                                                                                                          total amount of global memory storage that a single node or single
+                                                                                                          application      could consume.
+                                                                                                              If only a few nodes have idle memory,                 the CPU load on these
+we used 007,           increasing     the number           of 007     client nodes from
+                                                                                                          nodes could be high if a large number of nodes all attempt to use that
+one to seven, ensuring in all cases that the idle node had sufficient
+                                                                                                          idle memory simultaneously.             If there are programs running            on the
+memory to handle all of their needs.
+                                                                                                          idle machines, this could adversely affect their performance.                        This
+    Figure    12 shows that when seven copies of 007                             were simul-
+                                                                                                          effect was measured in the previous section.                  A possible solution is
+taneously     using the remote memory               of the idle node, the average
+                                                                                                          to incorporate      CPU-load      information       with page age information,
+speedup achieved by GMS was only moderately                            lowered.        That is,
+                                                                                                          and to use it to limit CPU overhead on heavily-loaded                    machines,
+the applications        using the idle node’s memory                  did not seriously
+                                                                                                              In the end, all global memory schemes depend on the existence
+degrade in performance            as a result of their sharing a single global
+                                                                                                          of “a reasonable amount of idle memory”                   in the network.        If the
+memory provider,
+                                                                                                          idle memory drops below a certain point, the use of global memory
+    On the other hand, Figure             13 shows the result of that workload
+                                                                                                          management        should be abandoned until it returns to a reasonable
+on the idle node itself.        The bar graph shows the CPU overhead ex-
+                                                                                                          level.     Our measurements        show the ability           of our algorithm       and
+perienced by the idle node as a percentage of total CPU cycles. As
+                                                                                                          implementation       to find and effectively        utilize    global memory even
+well, Figure 13 plots the rate of page-transfer                (getpage and putpage)
+                                                                                                          when idle memory is limited.
+operations    at the idle node during that execution.                      From this data,
+we see that when seven nodes were running                       007        simultaneously,
+the idle node received an average of 2880 page-transfer                            operations             7        Conclusions
+per second, which          required      56% of the processor’s                  CPU cycles.
+This translates        to an average per-operation              overhead of 194 ps,                       Current-generation          networks,    such as ATM,         provide    an order-of-
+consistent with our micro-benchmark                    measurements.                                      magnitude       performance     increase over existing          10 Mb/s Ethernets;
+                                                                                                          another order-of-magnitude—to               gigabit    networks—is         visible    on
+                                                                                                          the horizon.       Such networks         permit    a much tighter        coupling      of
+6     Limitations
+                                                                                                          interconnected      computers,      particularly      in local area clusters.         To
+                                                                                                          benefit from this new technology,           however, operating          systems must
+The most fundamental              concern with respect to network-wide                        re-
+                                                                                                          integrate     low-latency     high-bandwidth        networks      into their design,
+source management           is the impact of failures,              In most distributed
+                                                                                                          in order to increase the performance            of both distributed      and parallel
+systems, failures       can cause disruption,              but they should not cause
+                                                                                                          applications.
+permanent     data loss.        Temporary        service loss is common                 on any
+                                                                                                              We have shown that global memory                  management         is one prac-
+distributed   system, as anyone using a distributed                   file system is well
+                                                                                                          tical and efficient     way to share cluster-wide               memory     resources.
+aware. Whh our current algorithm,                 all pages in global memory are
+                                                                                                          We have designed            a memory     management           system that attempts
+clean, and can therefore be retrieved from disk should a node hold-
+                                                                                                          to make cluster-wide         decisions on memory usage, dynamically                   ad-
+ing global pages fail. The failure of the initiator                  or master nodes is
+                                                                                                          justing the local/global       memory balance on each node as the node’s
+more difficult     to handle; while we have not yet implemented                              such
+                                                                                                          behavior and the cluster’s behavior change, Our system does not
+schemes, simple algorithms               exist for the remaining               nodes to elect
+                                                                                                          cause data loss should nodes fail, because only clean pages are
+a replacement.
+                                                                                                          cached in global memory;          cached data can always be fetched from
+    A reasonable extension            to our system would permit dirty pages
+                                                                                                          disk if necessary.
+to be sent to global memory without               first writing     them to disk. Such
+                                                                                                              The goal of any global         memory       algorithm      is to reduce the av-
+a scheme would have performance                   advantages, particularly                  given
+                                                                                                          erage memory        access time.         Key to our algorithm           is its use of
+distributed file systems and faster networks, at the risk of data loss
+                                                                                                          periodically-distributed        ch.rster-wide      age information       in order to:
+in the case of failure.  A commonly used solution is to replicate
+                                                                                                          (1) house global pages in those nodes most likely to have idle mem-
+pages in the global memory               of multiple       nodes; this is future work
+                                                                                                          ory, (2) avoid burdening nodes that are activcJy using their memory,
+that we intend to explore.
+                                                                                                          (3) ultimately maintain in cluster-wide primary memory the pages
+    Another   issue is one of trust. As a chrster becomes more closely
+                                                                                                          most likely to be globally        reused, and (4) maintain           those pages in
+coupled, the machines act more as a single timesharing                           system. Our
+                                                                                                          the right places. Algorithms            that do not have these properties             are
+mechanism        expects a single, trusted, cluster-wide                       administrative
+
+
+
+
+                                                                                                    211
+unlikely     to be successful in a dynamic               cluster environment.                               [9]   A, L, Cox and R. J. Fowler.              The implementation               of a coher-
+   We have implemented                   our algorithm        on the OSF/1 operating                              ent memory          abstraction     on a NUMA             multiprocessor:            Ex-
+system running on a cluster of DEC Alpha workstations                            connected                        periences       with    PLATINUM.             In Proceedings           of the     12th
+by a DEC AN2 ATM network.                    Our measurements            show the under-                          ACM       Symposium       on Operating         Systems      Principles,      Decem-
+lying costs for global memory management                         operations in light of a                         ber 1989.
+real implementation,            and the potential        benefits of global memory
+                                                                                                           [10]   M. D. Dahlin,          R. Y. Wang, T. E. Anderson,                  and D. A. Pat-
+management          for applications        executing     within    a local-area cluster.
+                                                                                                                  terson.     Cooperative       caching:        Using remote client            memory
+                                                                                                                  to improve         file system performance.              In Proceedings         of the
+
+Acknowledgments                                                                                                   USENIX       Conference       on Operating           Systems       Design    and Im-
+                                                                                                                  plementation,          November       1994.
+Jeff Chase was closely involved                in early discussions of this work.
+                                                                                                           [11]   D. L. Eager, E. D. Lazowska,                and J. Zahorjan.         Adaptive        load
+Comments           from Brian Bershad, Jeff Chase, Dylan McNamee,                         Hal
+                                                                                                                  sharing in homogeneous             distributed       systems. IEEE          Trans.    on
+Murray, John Ousterhout,                 Chuck Thacker, and the anonymous ref-
+                                                                                                                  Software     Engineering,         SE- 12(5), May 1986.
+ereeshelped         improve     thequality      of the paper. The authors would
+like tothank         Ted Romerfor           his help with Alpha           PALcode,        Dy-              [12]   E. W. Felten and J. Zahorjan.                 Issues in the implementation
+lan McNamee           and Brad Chamberlain               for the Render application,                              of a remote memory             paging system.            Technical        Report 91-
+Jeremy Dion and Patrick Boyle for the VLSI                          router, Steve Glass-                          03-09,     Department       of Computer            Science and Engineering,
+man for the Web Query Server, Vivek Narasayya for help with the                                                   University        of Washington,       Mar. 1991.
+007     benchmark,       and Ashutosh Tiwary for the Boeing CAD traces.                                    [13]   M. J. Frankling,         M. J. Carey, and M. Livny.                  Global      mem-
+We would also like to thank Hal Murray                     for his help with the AN2                              ory management            in client-server           DBMS       architectures.         In
+network,       and the DEC SRC community                  for donating        workstations                        Proceedings         of the 18th    VLDB       Conference,        August      1992.
+for our experiments.
+                                                                                                           [14]   N. P. Kronenberg,           H. M. Levy, and W. D. Strecker.                     VAX-
+                                                                                                                  chrsters: A closely-coupled              distributed      system. ACM           Trans.
+References                                                                                                        Comput.      Syst., 4(2):130-146,            May 1986.
+
+                                                                                                           [15]   P. J. Leach,         P. H. Levine,       B. P. Douros,           J. A. Hamilton,
+ [1]    T. E, Anderson,          S. S. Owicki,       J. B. Saxe, and C. P. Thacker.
+                                                                                                                  D. L. Nelson,           and B. L. Stumpf.               The architecture         of an
+        High-speed       switch scheduling           for local-area      networks.      ACM
+                                                                                                                  integrated        local network.      IEEE    Journal      on Selected       A reas in
+        Trans.      Comput.     Syst.,    11(4):319-352,         NOV. 1993.
+                                                                                                                  Communications,            1(5):842–857,         Nov.    1983.
+  [2]   M. Bern, D. Greene, and A. Raghunathan.                       Online algorithms
+                                                                                                           [16]   K. Li and P. Hudak.               Memory       coherence         in shared virtual
+        for cache sharing.          In Proceedings         of the 25th ACM           Sympo-
+                                                                                                                  memory systems. ACM                Trans.     Comput.       Syst., 7(4):32      1–359,
+        sium     on Theory      of Computing,        May 1993.
+                                                                                                                  Nov.      1989.
+  [3]   D. Black and D. D. Sleator. Competitive                     algorithms     for repli-
+                                                                                                           [17]   M. N. Nelson,           B. B. Welch, and J. K. Ousterhout.                   Caching
+        cation and migration              poblems.      Technical     Report CMU-CS-
+                                                                                                                  in the Sprite network         files ystem, ACM            Trans.     Comput.     Syst.,
+        89-201, Department               of Computer      Science, Carnegie-Mellon
+                                                                                                                  6(1):134-154,          Feb. 1988.
+        University,      1989.
+                                                                                                           [18]   B. N. Schilit          and D. Duchamp.               Adaptive      remote      paging.
+  [4]   M. J. Carey, D. J. Dewitt,                 and J. F. Naughton.            The 007                         Technical         Report CUCS-004091,                Department       of Computer
+        benchmark.            In Proc.     of the ACM         SIGMOD          International
+                                                                                                                  Science, Columbia           University,       February       1991.
+        Conference       on Management             of Data,      May 1993.
+                                                                                                           [19]   M.D.      Schroeder, A. D. Birrell,           M. Burrows,        H. Murray, R. M.
+  [5]   B. Chamberlain,            T. DeRose,           D. Salesin,      J. Snyder,           and                 Needham,          T. L. Rodeheffer,          E. H. Satterthwaite,           and C. P.
+        D. Lischinski.         Fast rendering       of complex environments             using                     Thacker. Autonet: A high-speed, self-configuring                            local area
+        a spatial hierarchy.         Technical       Report 95-05-02.           Department                        network using point-to-point links. IEEE Journal                          on Selected
+        of Computer Science and Engineering,                       University      of Wash-                       Areas     in Communications,           9(8):13       18–1335, Oct. 1991.
+        ington, May 1995.
+                                                                                                           [20]   R. L. Sites, editor.          Alpha     Architecture         Reference       Manual.
+  [6]   J. S. Chase, H. M. Levy, M. J. Feeley, and E. D. Lazowska.                                                Digital     Press, One Burlington            Woods Drive, Burlington,                MA
+        Sharing       and protection         in a single-address-space             operating                      01803, 1992.
+        system.       ACM       Trans.     Comput.      Syst.,     12(4):27    1–307,    NOV.
+                                                                                                           [21)   P. Stenstrom, T. Joe, and A. Gupta. Comparative                        performance
+        1994.
+                                                                                                                  evaluation of cache-coherent NUMA           and COMA architec-
+  [7]   M. Chrobak, L. Larmore,                 N. Reingold, and J. Westbrook.                                    tures. In Proceedings      of the 19th International Symposium
+        Page migration algorithms               using work functions. Technical                                   on Computer   A rchitecture,    May 1992.
+        Report YALE/DCS/RR-9                  10, Department           of Computer            Sci-
+                                                                                                           [22]   M. Stonebraker.          Operating      system support for database man-
+        ence, Yale University,             1992.
+                                                                                                                  agement.        Commun.      ACM,      24(7):412418,             July 1981.
+  [8]   D. Comer         and J. Griffioen.           A new design for distributed
+                                                                                                           [23]   C. P. Thacker and M. D. Schroeder.                       AN2     switch overview.
+        systems:        The remote          memory       model.       In Proceedings            of
+                                                                                                                  In preparation.
+        the Summer        1990     USENIX       Conference,        pages 127–1 35, June
+           1990.                                                                                           [24]   J. Westbrook.            Randomized          algorithms        for multiprocessor
+                                                                                                                  page migration.          In DIMACS          Series    in Discrete      Mathematics
+                                                                                                                  and Theoretical          Computer       Science,      volume 7, 1992.
+
+
+
+
+                                                                                                     212
+

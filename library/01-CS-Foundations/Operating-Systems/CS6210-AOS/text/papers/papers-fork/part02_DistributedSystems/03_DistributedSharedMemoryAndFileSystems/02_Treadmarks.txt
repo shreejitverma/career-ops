@@ -1,0 +1,619 @@
+                 Cristiana Amza, Alan L. Cox,                              igh-speed networks and improved microprocessor performance
+                 Sandhya Dwarkadas,                                        are making networks of workstations an appealing vehicle for
+                 Pete Keleher, Honghui Lu,                                 parallel computing. By relying solely on commodity hardware
+                 Ramakrishnan Rajamony,                           and software, networked workstations can offer parallel processing at a
+                 Weimin Yu, and                                   relatively low cost.
+                 Willy Zwaenepoel                                   Anetwork-of-workstationsmultiprocessor can be realized as a proces-
+                 Rice University                                  sor bank in which dedicated processors provide computing cycles, or it
+                                                                  can consist of a dynamically varying set of machines that perform long-
+                                                                  running computations during idle periods. In the latter case, the hard-
+                                                                  ware cost is essentially zero, since many organizations already have
+                                                                  extensive workstation networks.
+                                                                     In terms of performance, networked workstations approach or exceed
+                                                                  supercomputer performance for some applications. These loosely cou-
+                                                                  pled multiprocessors will by no means replace the more tightly coupled
+                                                                  designs, which, because of lower latencies and higher bandwidths, are
+                                                                  more efficient for applications with stringent synchronization and com-
+                 Shared memory ,dcilitates                        munication requirements. However, advances in networking technology
+                                                                  and processor performance are expanding the class of applications that
+                 the transition from sequential                   can be executed efficiently on networked workstations.
+
+                 to parallel processing. Since                    DSM OVERVIEW
+                                                                    In this article, we discuss our experience with parallel computing on
+                 most data structures can                         networks ofworkstations using the TreadMarks distributed shared mem-
+                                                                  ory (DSM) system. DSM allows processes to assume a globally shared vir-
+                 be retained, simply adding                       tual memory even though they execute on nodes that do not physically
+                                                                  share mem0ry.I
+                 synchronization achieves                           Figure 1 illustrates a DSM system consisting of N networked work-
+                                                                  stations, each with its own memory. The DSM software provides the
+                 correct, efficient programs                      abstraction of a globally shared memory, in which each processor can
+                                                                  access any data item without the programmer having to worry about
+                 for many applications.                           where the data is or how to obtain its value. In contrast, the “native,” or
+
+                 Computer                                                                                              0018 9162/96/$5 00 0 1996 IEEE
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+ message passing, programming model on workstation
+ networks requires the programmer to specify inter-                                                                ProcN
+ processor communication-a daunting task for programs
+ with complex data structures and sophisticated paral-
+ lelization strategies.
+    In a DSM system, the programmer can focus on devel-
+ oping algorithms instead of managing partitioned data
+                                                                                             Network
+                                                                                                     .
+ sets and communicating values. Also, since DSM provides                Shared memorv
+ the same programming environment as hardware shared-
+ memory multiprocessors,programs written for a DSM sys-
+ tem are easily ported to a shared memory multiprocessor. Figure 1. Distributed shared memory: Each proces-
+ However, porting from a hardware shared-memory mul- sor sees a shared address space, denoted by the
+ tiprocessor to a DSM system may require more modifica- dashed outline, rather than a collection of
+ tions because the DSM system’s higher latencies put a distributed address spaces.
+ greater value on locality of memory access.
+    The programming interfaces to DSM systems may dif-
+ fer in various respects. Here, we focus on the memory
+structure and consistency model. An unstructured memory
+ appears as a linear array of bytes, but in a structured mem- Application programming interface
+ ory, processes access memory in terms of objects or tuples.            The TreadMarksAPI is simple but powerful (see Figure
+The consistancy model refers to how shared memory 2 for the C language interface). It provides facilities for
+ updates become visible to the system’sprocesses. The intu- process creation and destruction, synchronization, and
+ itive model is that a read should always return the last shared memory allocation. Memory allocated by
+value written. Unfortunately, the notion of “the last value Tmk-malloc() is shared. Memory allocated statically or
+written” is not well defined in a distributed system.Amore by a call to malloc() is private to each process.
+ precise notion is sequential consistency, in which all                Understanding the purpose of the synchronization
+ processes see memory as if they were exe-
+ cuting on a single multiprogrammed
+ processor.2 With sequential consistency,            /* the maximum number of parallel processes supported by TreadMarks I
+ the notion of “the last value written” is pre-
+ cisely defined. The simplicityof this model         #define TMK-NPROCS
+ may, however, exact a high price in terms           I* the actual number of parallel processes in a particular execution */
+ of performance; therefore, much research            extern unsigned Tmk-nprocs;
+has been done on relaxed memory models.
+                                                     I* the process id, an integer in the range 0 ... Tmk-nprocs - 1 *I
+    One distinguishing feature of a DSM
+ implementation is whether it uses the vir-          extern unsigned Tmk-proc-id;
+tual-memory page-protection hardware to              /* the number of lock synchronization objects provided by TreadMarks */
+detect shared memory accesses. The naive
+                                                     #define TMK-NLOCKS
+use of virtual-memoryprotection hardware
+may lead to poor performance because of              /* the number of barrier synchronization objects provided by TreadMarks */
+discrepancies between the machine’s page             #define TM K-NBARRI ERS
+size and the application’s granularity of
+                                                     I* Initialize TreadMarks and start the remote processes. */
+sharing.
+    Our system, TreadMark~,~         provides        void      Tmk-startup(int argc, char **argv)
+shared memory as a linear array of bytes             /* Terminate the calling process. Other processes are unaffected. */
+via a relaxed memory model called release
+                                                     void      Tmk-exit(int status)
+consistency.The implementation uses the
+virtual memory hardware to detect                    /* Block  the  calling process until every other process arrives at the barrier. */
+accesses, but it uses a multiple-writer pro-         void      Tmk-barrier(unsigned id)
+tocol to alleviate problems caused by mis-           /* Block the calling process until it acquires t h e specified lock. * I
+matches between page size and application
+granularity.                                         void      Tmk-lock-acquire(unsigned id)
+    TreadMarks runs at the user level on             I* Release the specified lock. */
+Unix workstations, without kernel modifi-            void      Tmk-lock-release(unsigned id)
+cations or special privileges and with stan-
+dard Unix interfaces, compilers, and                 I* Allocate the specified number of bytes of shared memory. *I
+linkers. As a result, the system is fairly           char     *Tmk_malloc(unsigned size)
+portable and has been ported to a number             I* Free shared memory allocated by Tmk-malloc. *I
+of platforms. These include IBM RS-6000,
+SP-1, and SP-2; DEC Alpha and DEC-                   void      Tmkfree(char *ptr)
+Station, as well as Hewlett-Packard,Silicon
+Graphics, and Sun systems.                         Figure 2. TreadMarks C interface.
+
+                                                                                                                 February 1996
+
+
+
+
+ Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+                 primitives is essential to programming with TreadMarks.        that starts at a designated city, passes through every other
+                 Synchronization primitives let the programmer specify          city on the map once, and returns to the original city. The
+                 ordering constraints between different processes’ con-         program maintains the length of the shortest route found
+                 flrcting shared-memory accesses. Two                                            so far in Shortest-length. Partial routes are
+                 shared-memoryaccesses are said to con-                                          expanded one city at a time. If the current
+                 flict if they are issued by different proces-                                   length of a partial route plus a lower bound
+                 sors to the same memory location and at                                          on the remaining portion is longer than the
+                 least one access is a write. Parallel pro-                                       current shortest tour, that route is not
+                 grams are subject to data races, a bug that                                      explored further, because it cannot lead to
+                 makes execution timing-dependent, if                                             a shorter total. The lower bound is com-
+                 there is no synchronization between two                                          puted by a fast, conservative approxima-
+                 conflicting accesses. For example, if one                                        tion of the length of the minimum
+                 access is a read and the other is a write,                                       spanning tree connecting all nodes not yet
+                 other execution orders may cause different                                       in the trip with the current route’sfirst and
+                 outcomes for each execution. Data races                                          last nodes.
+                 can be avoided by introducing synchro-                                              The sequential TSP program keeps a
+                 nization.                                                                        queue of partial tours, with the most promis-
+                    TreadMarks provides two synchroniza-                                          ing one at the head. Promise is determined
+                 tion primitives:barriers and exclusive locks.Aprocesswaits     by the sum of the length of the current tour and the lower
+                 at a barrier by calling Tmk-barrier(). Barriers are global:    bound on the length to connect the remaining cities. The
+                                                                                program adds partial tours until a partial tour longer than
+                 The calling process is stalled until all processes arrive at the
+                 same barrier. AT&-lock-acquireO call acquires a lock for       a threshold number of cities reaches the top of the queue.
+                 a calling process, and Tmk-lock-release() releases it. No      It removes this partial tour and tries all permutations of the
+                 process can acquire a lockwhile another is holding it. Alock   remaining cities. Next, the program compares the shortest
+                 can be used to implement critical sections.However, these      tour including this partial tour with the current shortest
+                 particular synchronizationprimitivesare not fundamental        tour and, if necessary, updates it. Finally, the program
+                 to TreadMarks’ design, and we may add other primitives         returns to the tour queue and tries againto remove apromis-
+                 later.                                                         ing partial tour of sufficientlength.
+                                                                                    Figure 4 shows pseudocode for the parallel TreadMarks
+                  Two simple illustrations                                      TSP program. Process 0 allocates the shared data struc-
+                     Two simple problems (larger applications are discussed tures (the queue and the minimum length). Exclusive
+                  later) illustrate the TreadMarks M I . Jacobi iteration access is achieved by surrounding all accesses to these
+                  (Figure 3) shows the use of barriers, and the traveling shared data structures by a lock acquire and a lock release.
+                  salesman problem (Figure 4) shows the use of locks.           Allprocesses wait at Tmk-barrier(0) to ensure proper ini-
+                                                                                 tializationbefore computation. Each process then acquires
+                     JACOBI   ITERATION. Jacobi is a method for solving par-     the queue lock to find a promising partial tour that is long
+                  tial differentialequations. Our exampleiterates over a two- enough to expand sequentially.When such a tour is found,
+                  dimensional array. During each iteration, every matrix the process releases the queue lock. After expanding the
+                  element is updated to the average of its nearest neighbors current partial tour, a process acquiresthe lock on the min-
+                  (above, below, left, and right). Jacobi uses a scratch array imum length, updates the minimum length if necessary,
+                  to store new values to avoid overwriting an element’s old and then releases the lock. This process continues until
+                  value before it is used by its neighbor. In the parallel ver- the queue is empty.
+                  sion, all processors are assigned roughly equal-size bands
+                  of rows. Neighboring processes share the rows on a band‘s IMPLEMENTATION CHALLENGES
+                  boundary.                                                         DSM systems can either migrate or replicate data to
+                     The TreadMarks version of Jacobi iteration (Figure 3) implement the shared memory abstraction. Most DSM sys-
+                  uses two arrays: a grid array allocated in shared memory tems replicate data because that approach gives the best
+                  and a scratch array private to each process. The grid array performance for a wide range of application parameters4
+                  is allocated and initialized by process 0. Synchronization With replicated data, memory consistencyis central to the
+                  is by means of barriers. Tmk-barrier(0) guarantees that system, since the DSM software must control replication
+                  process 0 completes initialization before processes start in a manner that provides a single shared-memory abstrac-
+                  computing. Tmk-barrier( 1) ensures that no processor tion.
+                  overwrites a grid value before all processors have read the       The consistency model defines the expected memory
+                  value computed in the previous iteration. Tmk-barrier(2) behavior for the programmer. The first DSM system, Ivy,l
+                  prevents any processor from starting the next iteration implemented sequential consistency.2In this memory
+                  before all grid values computed in the current iteration model, processes observe shared memory as if they were
+                  are written. In other words, this barrier avoids a data race executing on a multiprogrammed uniprocessor with a sin-
+                  between the writes in the second nested loop and the reads gle memory. In other words, all memory accesses are
+                  in the first nested loop of the next iteration.                totally ordered, and the order is compatible with the pro-
+                                                                                 gram’s memory access order in each process.
+                     TRAVELINGSALESMAN PROBLEM. TSP uses a simple                   Ivy‘s implementation of sequential consistencyuses the
+                  branch-and-bound algorithm to find the shortest route virtual memoryhardware to maintain memory consistency.
+
+                  Computer
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+  #define     M 1024                                               queue-type *Queue;
+  #define     N 1024                                               int        “Shortest-length;
+  float       **grid;               I* shared array *I             int         queue-lock-id, min-lockid;
+  float       scratch[M][N];        I* private array *I
+                                                                   main()
+  main()                                                           {
+                                                                       Tm k-startu p();
+  I                                                                    queue-lock-id = 0;
+      Tmk-sta rtup();                                                  min-lock-id = 1;
+                                                                       if (Tmk-proc-id == 0) {
+      if( Tmk-proc-id == 0) {                                              Queue = Tmk-malloc( sizeof(queue-type) );
+          grid = Tmk-malloc( M*N*sizeof(float) );                          Shortest-length = Tmk-malloc( sizeof(int) );
+          initialize grid;                                                 initialize Queue and Shortest-length;
+      1                                                                1
+                                                                       Tm k-barrier(0);
+      Tmk-barrier(0);                                                  while( true ) do {
+                                                                           Tmk-lock-acquire(queue-lock-id);
+      length = M I Tmk-nprocs;                                               if( queue is empty) {
+      begin = length * Tmk-proc-id;                                               Tmk-lock-release(queue-lock-id);
+      end = length * (Tmk-proc-id+l);                                             Tmk-exit();
+                                                                              I
+      for( number of iterations) {                                           Keep adding t o queue until a long,
+                                                                             promising tour appears at the head;
+          for( i=begin; ieend; i++ )                                         Path = Delete the tour from the head;
+              for( j=O; jeN; j++ )                                         Tmk-lock-reIease(queue-lock-id);
+                 scratch[il[jl = (grid[i-11~1+grid[i+l]~]+
+                                  grid[i][j-I lgrid[il~+ll)/4;             length = recursively try all cities not on Path,
+                                                                                    find the shortest tour length
+          Tmk-barrier(1);
+                                                                           Tmk-lock-acquire(min-lock-id);
+          for( i=begin; ieend; i++)                                          if (length < *Shortest-length)
+              for( j=O; j<N; j++ )                                                *Shortest-length = length;
+                 grid[i][j] = scratch[il[j];                               Tmk-lock-reIease(min-lock-id);
+                                                                       1
+          Tm k-barrier(2);                                         I
+
+                                                                 Figure 4. Pseudocodefor the TreadMarks traveling
+                                                                 salesman program.
+
+Figure 3. Pseudocodefor the TreadMarks Jacobi pro-
+gram.
+
+
+
+The local (physical) memories of each processor form a
+cache on the global virtual address space (see Figure 5 ) .
+When a page is not in a processor’s local memory, a page
+fault occurs. The DSM software brings an up-to-date copy
+of that page from its remote locationinto local memory and
+restarts the process. Figure 5 shows the activityfor a page
+fault at processor 1,which results in retrievalof a copy from
+processor 3’s local memory. For a read fault, the page is
+replicatedwith read-only access for all replicas. For a write
+fault, an invalidate message is sent to all processors with
+copies of the page. Each processor receiving this message
+invalidates its copy and sends an acknowledgment to the
+writer. As a result, the writer’s copy of the page becomes
+the sole copy.
+   Because of its simplicity and intuitiveappeal, sequential
+consistency is generallyviewed as a “natural” consistency        Figure 5. Operation of the Ivy DSM system.
+model. However, its implementation can cause extensive
+communication,which is expensiveon a workstation net-
+work. Sending a message can involve traps into the operat-          Ivy encountered several communication problems. For
+ing system kernel, interrupts, context switches, and             example, updating the current shortest tour in the trav-
+execution of several networkingsoftwarelayers. Therefore,        eling salesman problem sent invalidations to all other
+the number of messages and the amount of data exchanged          processors that cache the page containing the current
+must be kept low.                                                shortest tour. However, since this variable is accessed only
+
+                                                                                                              February 1996
+
+
+
+
+ Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+                within the critical section protected by the correspond-          anteed by a lock acquire and release around these opera-
+                ing lock, it suffices to send an invalidation only to the next    tions. To access the tour queue, a process must acquire the
+                processor acquiring the lock and only at the time of lock         lock. It therefore sufficesto inform the next process acquir-
+                acquisition.                                                      ing the lock of the changes to the tour queue, which can be
+                  Another problem involved false sharing, which occurs            done when the lock is acquired.
+                when two or more unrelated data objects are located in               These two examples illustrate release consistency’s
+                the same page and are written concurrently by separate            underlying principle. Synchronization is introduced in a
+                processors. Since virtual memory pages are                                         shared memory parallel program to pre-
+                large, false sharing can be common. The                                            vent processes from accessing certain
+                Jacobi program in Figure 3 suffers from                                            memory locations before the synchro-
+                false sharing if the grid array is laid out so                                     nization operation completes. From that
+                that portions allocated to different proces-                                       it follows that a process does not need to
+                sors lie within the same page. As both                                             be informed of modifications until the
+                processors update their portion of the grid                                        synchronization operation completes. If
+                array, they write concurrently to the same                                          the program is free of data races, it will
+                page. Assume that initially processor P,                                            appear as if it is executing on a sequen-
+                holds the sole writable copy. When proces-                                          tially consistent memory, the intuitive
+                sor P, writes to the page, it sends an inval-                                      memory model that programmers expect.
+                idate message to processorP,. P, sends the                                         The above is true on one condition: A11
+                page to P, and invalidates its own copy.                                            synchronization must use TreadMarks-
+                When P, next writes to the page, the same                                           supplied       primitives.     Otherwise,
+                sequence occurs wiih P, and P, interchanged. As each              TreadMarks cannot tell when to make shared memory
+                process writes to the page while it is held by the other          consistent.
+                process, the page travels across the network.This repeated
+                back-and-forthtransmissionis often called the “ping-pong          Release consistency implementations
+                effect.”                                                             The release consistency definition specifies the latest
+                   To address these problems, we experimented with the            time a shared memoryupdate can become visible to a par-
+                followingrelaxed consistency models and protocols.                ticular processor. This allows considerable latitude in
+                                                                                  when and how shared memory updates are propagated.
+                LAZY RELEASE CONSISTENCY                                          TreadMarks uses the lazy release consistencya l g ~ r i t h m . ~
+                                                                                  Roughly speaking, this enforces consistency at acquire
+                Release consistency model                                         time, in contrast to Munin’s5earlierversion of release con-
+                  The intuition underlying release consistency is as fol-         sistency, sometimes called “eager release consistency,”
+                lows. Parallel programs should not have data races                which enforces consistency at release time.
+                because they may lead to wrong results. Thus, sufficient             Figure 6 illustrates the principal advantage of lazy
+                synchronization must be present to prevent data races.            release consistency.Assume x is replicated at all proces-
+                More specifically, synchronization must be present                sors. With eager release consistency, a message must be
+                between two conflictingaccesses to shared memory. This            sent to all processors informing them of the change to x.
+                synchronization eliminates the need to make any shared            However, only the next processor that acquires the lock
+                memory update from one process visible to another                 can access x. With lazy release consistency, only that
+                process before they synchronize with each other, because          processor is informed of the change to x, thus reducing
+                the second process will not access the data until the syn-        message traffic. Lazy release consistency also allows pig-
+                chronization operation has been executed.                         gybacking the notification onto the lock grant message
+                  To illustrate this principle, we wiIl use the Jacobi and        from the releasing to the acquiring process.
+                TSP examples (Figures 3 and 4). In Jacobi, writes to shared          Communicating that a page has changed and commu-
+                memory occur after barrier 1is passed, when the newly             nicating the changed values within the page are distinct
+                computed values are copied from the scratch array to the          operations in TreadMarks. To perform the latter,
+                grid array. This phase of the computation terminates when         TreadMarks uses an invalidate protocol. A modified page
+                barrier 2 is passed. Barrier 2 prevents processes from start-     is invalidated after an acquire. A later access causes an
+                ing the next iteration before all new values are written to       access miss, which in turn causes installation of an up-to-
+                the grid array, and it is essential for correctness (to avoid     date copy ofthe page. An alternative method would be an
+                data races) regardless of the memorymodel. However, its           update protocol in which the acquire message contains
+                presence lets us delay notifying a process about another          the new values. (See Keleher3for details on TreadMarks
+                process’s updates until the barrier is lowered.                   protocols.)
+                  In TSP, the tour queue is the primary shared data struc-
+                ture. Processors fetch tasks from the queue and work on           MULTIPLE-WRITER PROTOCOLS
+                them, creating new tasks and inserting them in the queue.          Most hardware cache and DSM systems use single-
+                Updates to the task queue structure require a series of           writer protocols. These protocols let multiple readers
+                shared memory writes regarding task size and so on.               access a page simultaneously,but a writer must have sole
+                Atomic access to the task queue data structure is neces-          access before performing modifications. Single-writer
+                sary for correct program execution. only one processor is         protocols are easy to implement because all copies of a
+                permitted access to the task queue at a time. This is guar-       page are always identical, and page faults can be satis-
+
+                 Computer
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+fied by retrieving a page from any processor that has a
+valid copy.                                                               acq(l) w(x) rel(1)
+   Unfortunately, this simplicity often comes at the
+expense of message traffic, Before a page can be written,                                      acq(l) w(x) rei([)
+all other copies must be invalidated. These invalidations
+can cause access misses if processors are still accessingthe
+page. Also, false sharing can degrade performance even
+more because of interference between unrelated accesses.
+DSM systems typically suffer much more from false shar-
+ ing than hardware systems because they track data
+ accesses at the granularity of virtual memory pages
+instead of cache lines.
+   As the name implies, multiple-writer protocols allow
+multiple processes to have, at the same time, a writable
+copy of a page. Assume that processes P, and P, concur-
+rently write to different locations within the same page
+and that both initially have an identical valid copy.            Figure 6. Eager release consistency (top) versus lazy
+TreadMarks uses the virtual memory hardware to detect            release consistency (bottom). The figure depicts the
+modifications (see Figure 7). The shared page is initially       execution of three processes, P,, P2. and Pw with the
+write-protected. WhenP, writes to the page, TreadMarks           time axis going from left to right. The processes
+creates a copy, or a twin, and saves it as part of the           acquire and release the lock I and read and write
+TreadMarks data structures on P,. It then unprotects the         the variable x.
+page in the user’s address space so that further writes can
+occur without software intervention. When P, arrives at
+the barrier, we now have the modified copy and the
+unmodified twin. A word-by-word comparison creates a
+diff, a run-length encoding of the page modifications.
+Once the diff has been created, the twin is discarded. The
+same sequence of events occurs onP,.
+   Since these events are local to each processor, they do
+not require the message exchanges of a single-writer pro-
+tocol. WhenP, andP, synchronize (through a barrier, for
+instance),P, is informed that P, has modified the page,
+and vice versa, and both invalidate their copies. When they
+later access the page, both take an access fault. The
+TreadMarks software on P, knows that P, has modified the
+page, sends a message top, requesting the diff, and applies
+that diff to the page. The same sequence of events hap-
+pens on P,. Thus, except for initial accesses, pages are
+updated exclusively by applying diffs, and complete new
+copies are never needed.
+   The primary benefit of diffs is that they can be used to
+implement multiple-writer protocols, thereby reducing
+the effects of false sharing. In addition, diffs significantly
+reduce overall bandwidth requirements because they are
+typically much smaller than a page.
+   One might wonder what happens when two processes
+modify overlapping portions of a page. This corresponds
+to a data race; two processes are writing to the same loca-       Figure 7. Diff creation.
+tion without intervening synchronization. Therefore, it is
+almost certainly a program error. Even on a sequentially
+consistent memory, the outcome would be timing-depen-            piled and linked with the TreadMarks library using any
+dent. The same is true in TreadMarks. We could modify            standard compiler for that language. As a result, the sys-
+TreadMarks to check for such occurrences but have not            tem is relatively portable.
+yet done so.
+                                                                 Operation
+TREADMARKS SYSTEM                                                  TreadMarks implements intermachine communication
+   TreadMarks is implemented entirely as a user-level            using UDP/IP through the Berkeley sockets interface.
+library on top of Unix. Kernel modifications are unneces-        Since UDP/IP does not guarantee reliable delivery,
+sary because modern Unix implementations provide all             TreadMarks uses lightweight, operation-specific, user-
+required communication and memory management func-               level protocols to ensure message arrival. Every message
+tions. Programs written in C, C+ +, or Fortran are com-          sent by TreadMarks is a request or a response. Request
+
+                                                                                                                    February 1996
+
+
+
+
+   Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+                 messages are sent as a result of an explicit call to a             To implement the consistency protocol, TreadMarks
+                 TreadMarks library routine or a page fault. Once a               uses the mprotect system call to control access to shared
+                 machine has sent a request message, it blocks until a            pages. Any attempt to gain restricted access to a shared
+                 request message or the expected responsemessage arrives.         page generates a SIGSEGV signal. The SIGSEGV signal
+                 If no response arrives within a certain time, the original       handler examines local data structures to determine page
+                 request is retransmitted. To minimize delay in handling          state and examines the exception stack to determine
+                 incoming requests, TreadMarks uses a SIGIO signal han-           whether the reference is a read or a write. If the local
+                 dler. Message arrival at any socket used to receive request      page is invalid, the handler obtains the necessary diffs
+                 messages generates a SIGIO signal. After receiving a             from the minimal set of remote machines. If the refer-
+                 request message, the handler performs the specified oper-        ence is a read, the page protection is set to read-only. For
+                 ation, sends the response message, and returns to the            a write, the handler creates a twin from the pool of free
+                 interrupted process.                                             pages. It takes the same action in response to a fault
+
+
+
+
+                 Computer
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+caused by a write to a page in read-only mode. Finally,          formance numbers describe eight-processor executions
+the handler upgrades access rights to the original page          on the ATM LAN using the low-leveladaptation layer pro-
+and returns.                                                     tocol AAL3/4.
+                                                                    The minimum roundtrip time using send and receive for
+costs                                                            the smallest possible message is 500 microseconds. Using
+   Our experimental environment consists of eight                a signal handler to receive the message at one processor
+DECstation-5000/240~,with a 4-kilobyte page size, run-           increases the round:rip time to 670 microseconds.
+ning UltrixV4.3. Each machine has a Fore ATM TCA-100                The minimum time to remotely acquire a free lock is 827
+interface connected to a Fore ATM ASX-100 switch. The            microseconds. The minimum time to perform an eight-
+connection between the interface boards and the switch           processor barrier is 2,186 microseconds. A remote access
+operates at 100 Mbps; the switch has an aggregate                miss, to obtain a full page from another processor, takes
+throughput of 1.2 Gbps. Unless otherwise noted, the per-         2,792 microseconds.
+
+
+
+
+                                                                                                             February 1996      1
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+                                                                                  Mixed integer programming
+                                                                                     Mixed integer programming (MIP) is aversion of linear
+                                                                                  programming (LP). In LP, an objective function is opti-
+                                                                                  mized in a region described by a set of linear inequalities.
+                                                                                  In MIP, some or all of the variables are constrained to take
+                                                                                  on only integer values (sometimesjust the values 0 or 1).
+                                                                                  The precise mathematical formulation is
+
+                                                                                     Minimize cTx+ dTy,
+                                                                                                     +
+                                                                                     subject to Ax B y < b,
+                                                                                     wherexc Z p a n d y ~Rq (sometimesxe (0,l)p)
+
+                                                                                      The TreadMarks MIP code takes a branch-and-cut
+                                                                                   approach. The MIP problem is first relaxed to the corre-
+                                                                                   sponding LP problem. The LP solution generallyproduces
+                                                                                   nonintegervalues for somevariablesconstrainedto be inte-
+                  Figure 8. Speedup results for MlPLlB problems. Each              gers. The next step is to pick one of these variables an
+                  line represents a different data set. The numbers in             branch offtwo new MIP problems, one with the added con-
+                  the legend indicate the sequential execution in sec-             straint thatx, < LxA and another thatx, > rxj. Over time, the
+                  onds for the correspondingdata set. Only data sets               algorithm generates a tree of such branches. As soon as the
+                  with sequential running times over 2,000 seconds                 a l g o r i h finds an LP solutionthat satisfiesthe integer con-
+                  are presented.                                                   straints, this solution establishes a bound on the objective
+                                                                                   function’s final value, and nodes for which the LP result is
+                                                                                   inferior are not explored further. To expedite this process,
+                                                                                   the algorithm uses a technique called plunging, essentially
+                                                                                   a depth-first search down the tree to find an integer solu-
+                                                                                   tion and establish a bound as quicklyas possible.
+                                                                                   algorithmic improvementuses cutting planes as a
+                                                                                   constraints to tighten the problem description. Separate
+                                                                                   locks protect the two shared data structures: the current
+                                                                                   best solution and the MIP problem queue.
+                                                                                      We used the code to solve all 51 of the MIPLIB library’s
+                                                                                   problems, which include representative examplesfrom air-
+                                                                                   line crew scheduling,networkflow, plant location,and fleet
+                                                                                   scheduling.Figure 8 shows the speedups obtained for prob-
+                                                                                   lemswith sequentialrunning times over 2,000 seconds.For
+                                                                                   most problems, the speedup is near-linear. One
+                                                                                   exhibits super-linear speedup, because the para
+                                                                                   happens to hit on a solution early in its execution,
+                                                                                   pruning most of the branch-and-bound tree. For
+                  Figure 9. Speedup results for Link. Each line repre-             problem, there is very little speedup, because the
+                  sents a different data set. The numbers in the                   is found shortly after the preprocessing step, which is not
+                  legend indicate the sequential execution time in                 yet parallelized. The code was also used to solve a previ-
+                  seconds for the correspondingdata set.                           ously unsolved multicommodity flow problem. The prob-
+                                                                                   lem took roughly 28 CPU days on an eight-pr
+                                                                                    SP-1 and also exhibited near-linear speedup.
+                     The time to make a twin is 167 microseconds. The time
+                  to make a diff is somewhat data-dependent. If the page is        Genetic linkage analysis
+                  unchanged, it takes 430 microseconds. If the entire page             Genetic linkage analysis is a statistical technique th
+                  is changed, it takes 472 microseconds. For the worst case,       uses family pedigree information to map genes and locate
+                  when every other word in the page is changed, making a           disease genes in the human genome. Recent advances in
+                  diff takes 686 microseconds.                                     biology and genetics have made an enormous amount of
+                                                                                   genetic material available, making
+                  APPLICATIONS                                                     tleneck in further discovery of dise
+                     We have implemented a number of applications in                   In the classical Mendelian the0
+                  TreadMarks and reported some benchmark results ear-              child‘s chromosomes receive one s
+                         Here, we describe our experience with two large,          chromosomes. In reality, inheritan
+                  recently implemented applications, mixed integer pro-            due to recombination, in which the child’s chromo
+                  gramming and genetic linkage analysis. These applica-            receivesa piece of both strands. The goal of linkage an
+                  tions were parallelized, starting from an existing, efficient    is to derivethe probabilitiesthat recombinationhas occurred
+                  sequential code. Modification to arrive at an efficient par-     between the gene we are lookingfor and geneswith known
+                  allel code proved to be relatively minor.                        locations. From these probabilities, we can compute the
+
+                  Comuuter
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+gene’s approximatelocationon the chromosome.                    dependent on the communication-to-computationratio,
+   We parallelized ILink, a widely used genetic linkage         in particular on the number of messages per second. For
+analysisprogram that is part of the Fastlinkpackage.6ILink      the data set with the smallest speedup, ILink exchanged
+takes as input a family tree, called a pedigree, augmented      approximately 1,800 messages per second, while for the
+with some genetic information about family members. It          data set with the best speedup, the number of messages
+computesa maximum-likelihood estimate of 8, the recom-          per second went down to approximately300.
+bination probability. At the top level, ILink consists of a        We found that overhead-that is, time spent not exe-
+loop that optimizes 8. In each iteration of the optimiza-       cuting application code-is dominated by idle time and
+tion loop, the program traverses the entire pedigree, one       Unix overhead. Idle time results from load imbalance and
+nuclear family at a time, computing the likelihood of the       fromwaiting for messages to arrive over the network. Unix
+current 8 given the known genetic information of family         overhead is time spent in executing Unix library code and
+members. For each nuclear family member, the algorithm          system calls. Much of the Unix overhead is related to net-
+updates a large array of conditional probabilities. Each        work communication. Only a small portion of the over-
+represents the probability that the individual has certain      head is spent executing code in the TreadMarks library.
+genetic characteristics,conditioned on 8 and on the part        The largest single overhead stems from network commu-
+of the family tree already traversed.                           nication or related events, which validates our focus on
+   The algorithm is parallelized by splitting the iteration     reducing messages and data exchange. Space overhead
+space per nuclear family to balance the load among the          consists of memory used for twins, diffs, and other
+available processors. Load balancing is essentialand relies     TreadMarks data structures. The current system statically
+on knowledge of the genetic information represented in          allocates 4 megabytes of memory for diffs and 0.5
+the array elements. An alternative approach, splitting the      megabyte for other data structures. A garbage collection
+tree traversal, failed to produce good speedups because         procedure is invoked if these limits are exceeded. Space
+most of the computation occurs in a small part of the tree      for twins is dynamically allocated. For a representative
+(typically, the nodes closest to the root, representing         example of a large ILink run, namely, the data set with a
+deceased individuals about whom little genetic informa-         sequential running time of 4,085 seconds, the maximum
+tion is known).                                                 memoryusage for twins at any point in the executionwas
+   Figure 9 presents speedups for various data sets from        approximately 1megabyte per processor.
+actual disease gene location studies. For the data sets with
+a long running time, good speedups are achieved. For the        OUREXPERIENCE DEMONSTRATES THAT with suitable imple-
+smallestdata sets, speedup is lower because of the greater      mentation techniques, distributed shared memory can
+communication-to-computationratio. Speedup is highly            provide an efficient platform for parallel computing on
+
+
+
+
+                                                           Reader Service Number 5
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+                 networked workstations. We ported large applications to             methodology, andperformance evaluation. She received the
+                 the TreadMarks DSM system with little difficultyand good            3Tech. degree in electrical and electronicsengineeringfrom
+                 performance. We intend to experiment with additional                the Indian Institute of Technoloay, Madras, India, in 1986,
+                 applications, including a seismic modeling code. We are             and the MS and PhD degrees in electrical and computer engi-
+                 also developing various tools to further ease the pro-              neeringfiom Rice Universityin 1989 and 1993.
+                 gramming burden and improve performance. In particu-
+                 lar, we are investigating compiIer support for prefetching          Pete Keleher is an assistant professor in the Department
+                 and performance monitoring tools to eliminate unneces-              of Computer Science at the Universityof Maryland, College
+                 sary synchronization. I                                             Park. His research interests include abstractions of coher-
+                                                                                     ence, distributed shared memorx operating systems, and
+                 Acknowledgments                                                     parallel computer architecture. He received the BS degree in
+                   This research was supported in part by the National               electrical engineering, and the MS and PhD degrees in com-
+                 Science Foundation under Grants CCR-9116343, CCR-                   putersciencefrom Rice Universityin 1986, 1993, and 1995.
+                 9211004, CDA-9222911, BIR-9408503, and CDA-
+                 9502791, and by the TexasAdvanced TechnologyProgram                 HonghuiLuisa PhDstudent in the Electrical and Computer
+                 and Tech-SymInc. under Grant 003604012.                             EngineeringDepartmentatRice University.Her research inter-
+                                                                                     ests includeparallel and distributed systems, parallel compu-
+                 References                                                          tation, and performance evaluation. She received the BS
+                  1. K. Li and P. Hudak, “Memory Coherence in Shared Virtual         degree in computer science and engineeringfromTsinghua
+                     Memory Systems,”ACMTrans. ComputerSystems,Vol. 7,No.            Universi& China,in 1992, and the MS degree in electrical and
+                     4, Nov. 1989, pp. 321-359.                                      computer engineeringfromRice Universityin 1995.
+                  2. L. Lamport, “How to Make a Multiprocessor Computer that
+                     Correctly Executes Multiprocess Programs,”IEEETrans. Com-       Ramakrishnan Rajamony, a PhD student in the
+                     puters, Vol. C-28, No. 9, Sept. 1979,pp. 690-691.               Department of Electrical and ComputerEngineering at Rice
+                  3. P. Keleher, “DistributedShared Memory Using Lazy Release         Universiv, is currently working on performance debugging
+                     Consistency,”PhD dissertation,Rice University, Tech.Report       of shared memory parallelprograms, providingprescriptrve
+                     Rice Comp-TR-240, ftp cs.rice.edu under public/Tread-           feedback to the user. He has also worked on software dis-
+                     Marks/papers, 1994.                                              tributed shared memory systems and compiler schemesfor
+                  4. M. Stumm and S.Zhou, “Algorithms Implementing Distrib-          software cache coherence. He received the BTech degree in
+                     uted Shared Memory,” Computer,Vol. 24, No. 5, May 1990,          electrical engineeringfrom the Indian Institute of Technol-
+                     pp. 54-64.                                                       ogy, Madras, in 1989, and the MS degree in computer en@-
+                  5. J.B. Carter, J.K. Bennett, and W. Zwaenepoel, “Techniques        neeringfiom North Carolina State Universityin 1991.
+                     for Reducing Consistency-RelatedInformationin Distributed
+                     Shared Memory Systems,”ACMTrans. ComputerSystems,Vol.            WeiminYuisaPhDstudentin theDeparimentofComp
+                     13,NO.3, Aug. 1995, pp. 205-243.                                 Science atRice University, working under the directron ofpro-
+                  6. S.K. Gupta et al., “Integrating Parallelization Strategiesfor   fessorAlan Cox. His researchinterests include distributed oper-
+                     Linkage Analysis,” Computers and Biomedical Research, Vol.       ating systems and distributed programming environ
+                     28, June 1995, pp. 116.139.                                     He received the BE degree in computerscience and engine
+                                                                                     from Tsinghua University,China, in 1991, and the MS d
+                 Cristiana Amza is a PhD student in the Department of                 in computer sciencefiom Rice Universityin 1994.
+                 Computer Science at Rice Universiw Her interests are in all
+                 aspects of dzstributed systems and parallel computing, inpar-       Willy Zwaenepoel is a professor in the Department of
+                 ticular, distributed shared memory and the use of new               Computer Science at Rice University.His research interests
+                 advances in network technology to improve distributed
+                 shared memory performance. She received the BS degree in            le1 computation, and
+                 computer science from Bucharest Polytechnic Institute,              3s in electrical engine
+                 Bucharest, Romania, in 1991.                                        g i u q in 1979, the MS
+                                                                                     ford University in 19
+                 Alan L. Cox is an asszstant professor in the Department of           engineeringfrom Sta
+                 Computer Science a t Rice Universiv. His research interests
+                 include cache coherence protocols and data placement for
+                 shared memory multiprocessors and distributed shared                puter Science, Rice University,Houston, 1x77005-1892; e-
+                 memory for workstation networks. He was named an NSF                mail { a m a , alc, sandhya)@cs. rice.edu, keleher@cs.umd.
+                 Young Investigator in 1994. He received the BS degree in            edu, {hhl,rrk,weimin, willy}@cs.rice.edu; http://www.
+                 applied mathematics from Carnegie Mellon University in              cs.rice.edu/-wilZy/Treadillarks/overview. html. For infor-
+                 1986 and MS and PhD degrees in computer sciencefrom the             mation on obtaining the TreadMarkssystem, please send e-
+                 Universityof Rochester in 1988 and 1992.                            mail to treadmarks@ece.rice.edu.
+
+                 Sandhya Dwarkadas is a research scientist in the Depart-            Louise Moser, computer networks area manager for Com-
+                 ment of Computer Science at Rice University. Her research           puter, coordinated the review of this article and recom-
+                 interests include parallel and distributed systems, parallel        mended itforpublication. Her e-mail address is moser@ece.
+                 computer architecture, parallel computation, simulation             ucsb. edu.
+
+                  Computer
+
+
+
+
+Authorized licensed use limited to: University of Wisconsin. Downloaded on March 08,2010 at 11:28:44 EST from IEEE Xplore. Restrictions apply.
+

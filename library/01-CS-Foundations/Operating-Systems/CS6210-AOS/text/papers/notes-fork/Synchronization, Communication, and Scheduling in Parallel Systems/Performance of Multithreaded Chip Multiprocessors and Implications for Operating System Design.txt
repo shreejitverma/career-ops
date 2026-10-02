@@ -1,0 +1,214 @@
+USENIX Association   2005 USENIX Annual Technical Conference   395
+      depending on the experiment. For more details on our                                    1.6                                        0.5
+      simulator and for the explanation of our choices for                                    1.4
+      system configuration parameters, please refer to our                                                                               0.4
+                                                                                              1.2
+
+
+
+
+                                                                                                                                               L2 miss ratio
+      earlier papers [11, 21].
+                                                                                               1
+             To analyze processor sensitivity to the L1 cache
+                                                                                        IPC
+                                                                                                                                         0.3
+      miss ratio, we measured cache miss ratios and                                           0.8
+      instructions per cycle (IPC) for the benchmarks from                                    0.6                                        0.2
+                                                                                                      IPC
+      the SPEC CPU2000 suite, varying the size of the data                                    0.4
+      cache from 8KB to 128KB. In each experiment we ran                                                               L2 miss           0.1
+                                                                                              0.2
+      four copies of the same benchmark on a single-core                                                                 ratio
+      machine – the threads running the workload shared the                                    0                                          0
+                                                                                               48KB    96KB   192KB   384KB   768KB   1.5MB
+      core’s data cache.
+            Figure 1 shows the average miss ratios and IPC                                                    L2 cache size
+      for the benchmarks. The key point of this figure is that                          Figure 2. IPC and L2 miss ratio for the SPEC workload
+      even though the increase of cache miss ratios is
+      significant (from 8% for the 128KB cache to 25% for                               complicated due to limitations of silicon technology.
+      the 8KB cache), the IPC is relatively insensitive to this                         To ensure that our systems run well in the future, it is
+      variation.                                                                        important that the software community develop
+                                                                                        techniques to improve resource utilization of CMT
+               1.0                                     0.3                              processors. In the next section we describe an L2-
+                        IPC
+                                                                                        cache-conscious scheduling algorithm and quantify the
+
+
+
+
+                                                             L1 data cache miss ratio
+               0.8
+                                                                                        potential performance improvement that it can produce.
+                                                       0.2
+         IPC   0.6
+                                                                                        3. BALANCE-SET SCHEDULING
+                                    L1 data cache
+               0.4                  miss ratio                                                Balance-set scheduling was proposed by Denning
+                                                       0.1                              [14] as a way to improve the performance of virtual
+               0.2                                                                      memory. We evaluated the effectiveness of this
+                                                                                        approach for the L2 cache. The idea behind balance-set
+               0.0                                     0.0                              scheduling is as follows. Separate all runnable threads
+                 8KB      32KB         64KB        128KB                                into subsets, or groups, such that the combined working
+                          L1 data cache size                                            set of each group fits in the cache. Then, schedule a
+                                                                                        group at a time for the duration of the scheduling time
+      Figure 1. IPC and L1 data cache miss ratio for the SPEC                           slice. By making sure that the working set of each
+      workload                                                                          scheduled group fits in the cache, this algorithm
+                                                                                        reduces cache miss ratios.
+            Now, consider a similar experiment with the L2                                    However, we found that working set size is not a
+      cache. We configured our simulator to have two cores,                             good indicator of a workload's cache behavior [21]: the
+      and ran the SPEC benchmarks simultaneously, creating                              reuse pattern of memory locations in the working set is
+      a workload of heterogeneous threads.                                              more important than the size of the working set. In
+            Figure 2 shows the processor IPC and the L2                                 order to estimate a cache miss ratio produced by a
+      cache miss ratio for various L2 cache sizes. IPC                                  group of threads we used a cache model for single-
+      degradation is evident as the L2 cache becomes smaller                            threaded workloads developed by Berg and Hagersten
+      – this shows that the processor performance is                                    [13], and adapted it to work for multi-threaded
+      significantly dependent upon the L2 cache.                                        workloads [21].
+            This result is worthy of serious attention. Modern                                Using this model we are able to estimate cache
+      applications exhibit a trend of becoming progressively                            miss ratios of multithreaded workloads to within 17%
+      more memory-intensive. While CMT processors may                                   of their actual values, on average. Such accuracy is
+      be equipped with enough cache for the time being, it is                           satisfactory, because it is sufficient to distinguish
+      likely that in the future it will be more difficult for                           between those workloads that fit in the cache and those
+      CMT processors to satisfy application cache needs.                                that thrash.
+      Equipping these processors with larger L2 caches may                                    Once we are able to estimate the cache miss ratio
+      be difficult: as the microchip technology is moving                               of any group of threads we can decide which threads
+      beyond the 90-nm mark, packing more and more                                      should be scheduled together. By scheduling threads in
+      transistors on a processor becomes increasingly more                              groups that have low cache miss ratios, we ensure that
+
+
+
+396                                        2005 USENIX Annual Technical Conference                                                USENIX Association
+         1.6                                                                    0.45
+                  Default scheduler                                                                            Default scheduler
+         1.4                                                                     0.4
+                  Our scheduler                                                                                Our scheduler
+                                                                                0.35
+         1.2
+                                                                                 0.3
+          1
+
+
+
+                                                               L2 miss ratio
+                                                                                0.25
+   IPC   0.8
+                                                                                 0.2
+         0.6
+                                                                                0.15
+         0.4                                                                     0.1
+         0.2                                                                    0.05
+          0                                                                        0
+               48KB       96KB        192KB       384KB                                  48KB       96KB        192KB       384KB
+                           L2 cache size                                                            L2 cache size
+
+   Figure 3. IPC achieved with the default scheduler and the                   Figure 4. L2 cache miss ratios achieved with the
+   balance-set scheduler.                                                      default scheduler and the balance-set scheduler.
+
+   the miss ratio is always kept low, and the overall IPC is                   estimated miss ratio is below the threshold will be
+   high. We also need to make sure that each runnable                          scheduled. We select the cache-miss ratio threshold
+   thread is included in at least one of the scheduled                         such that each thread is included in at least one of the
+   groups, so that none are starved.                                           groups that satisfies the threshold; of all such possible
+         The steps involved in our algorithm are:                              threshold values, we choose the lowest. This way we
+   1. Estimate cache miss ratios for all possible groups                       ensure that none of the threads are starved.
+        of threads using the Berg-Hagersten-based model.                             In our prototype we enforced scheduling decisions
+   2. Select cache miss ratio threshold                                        at user-level, binding threads to processors using the
+   3. Schedule those thread groups whose estimated                             mechanisms available through a user-level library on
+        cache miss ratio is below the threshold.                               the Solaris operating system.
+                                                                                     We now present performance results achieved
+   Before implementing this algorithm in the operating                         using our algorithm. We use the multi-process SPEC
+   system, we wanted to be sure that it would be worth the                     CPU workload – the same that we used for the analysis
+   effort. Therefore, we quantified the potential for                          of IPC sensitivity in the previous section. We compare
+   performance improvement using a scheduler prototype,                        the IPC and the L2 cache miss ratio of this workload
+   which we implemented partially at user-level and                            achieved using the default Solaris scheduler, and
+   partially inside the simulator. We now briefly describe                     using our balance-set scheduler prototype. Figure 3
+   the prototype implementation of these steps; a more                         presents the IPC for both schedulers, Figure 4 presents
+   detailed description appears in our earlier work [21].                      the L2 cache miss ratio. In all cases, the balance-set
+         Estimating cache miss ratios using the Berg-                          scheduler outperforms the default scheduler. The IPC
+   Hagersten model requires monitoring threads’ memory                         gain from the balance-set scheduler is from 27%
+   re-use patterns. To implement such monitoring it is                         (384KB L2) to 45% (48KB L2). This improvement in
+   necessary to construct a sample of memory locations                         the IPC is due to reduction in cache miss ratios. As
+   that a thread references and then to watch how often                        Figure 4 shows, with balance-set scheduling we were
+   those locations are reused. Using this approach in a                        able to reduce the L2 miss ratios by 25-37%.
+   real system is expensive, because it requires handling                            The performance improvement resulted from
+   frequent processor traps. Although we are working on a                      constructing thread groups so that they would share the
+   low-overhead way to approximate the measurements                            cache amiably, producing a low L2 miss ratio, and
+   produced by the memory-monitoring approach, in this                         achieving high IPC as a result.
+   analysis we use the memory-monitoring approach
+   because it provides the best accuracy. Our hardware                         4. DISCUSSION
+   simulator analyzes memory-reuse patterns of threads,                             The magnitude of the performance improvement
+   and produces the data that we use to estimate cache-                        from balance-set scheduling depends on the properties
+   miss ratios for all groups of threads.                                      of the workload. Since the balance-set scheduler
+         The cache miss ratio threshold guides the                             exploits the disparity in threads’ cache behaviors, if all
+   scheduling decisions. Only the thread groups whose                          threads in the workload behave in a similar manner,
+
+
+
+USENIX Association                       2005 USENIX Annual Technical Conference                                                            397
+      large performance gains cannot be realized.                        instruction-level parallelism via simultaneous
+      Understanding how the characteristics of the workload              multithreading. ACM TOCS 15, 2, August 1997.
+      affect potential performance gains is the subject of          [5] Jonathan Schwartz on Sun’s Niagara processor:
+      future work. We also need to determine how balance-                http://blogs.sun.com/roller/page/jonathan/
+      set scheduling affects fairness: sacrificing fairness for          20040910#the_difference_between_humans_and
+      performance is a canonical trade-off made in                  [6] Intel web site. http://www.intel.com/pressroom/
+      scheduling algorithms.                                             archive/speeches/otellini20030916.htm
+            Implementing cache-miss ratio analysis using            [7] J. Lo et al. An Analysis of Database Workload
+      memory monitoring and examining all possible groups                Performance on Simultaneous Multithreaded
+                                                                         Processors. ISCA, June 1998.
+      of threads to select those that satisfy the miss ratio
+                                                                    [8] N. Tuck, D. Tullsen, Initial Observations of the
+      threshold is expensive. We are working on a novel
+                                                                         Simultaneous      Multithreading     Pentium      4
+      low-overhead way of approximating these operations
+                                                                         Processor. PACT, September 2003.
+      and are now implementing the balance-set scheduler in         [9] D. Tullsen, S. Eggers, H. Levy, Simultaneous
+      Solaris 10.                                                       Multithreading: Maximizing On-Chip Parallelism.
+                                                                         ISCA, June 1995.
+      5. CONCLUSIONS                                                [10] P. Magnusson et al. SimICS/sun4m: A Virtual
+            In this paper we presented results of the first study        Workstation. USENIX, June 1998.
+      evaluating the performance of a CMT processor. We             [11] D. Nussbaum, A. Fedorova, C. Small, The Sam
+      analyzed how contention for L1 and L2 caches affects               CMT Simulator Kit. Sun Microsystems TR 2004-
+      performance. We determined that contention for the L2              133, March 2004.
+      cache has the greatest effect on system performance –         [12] IBM eServer iSeries Announcement. http://www-
+      therefore, this is where system designers should focus             1.ibm.com/servers/eserver/iseries/announce/
+      their optimization efforts.                                   [13] E. Berg, E. Hagersten. Efficient Data-Locality
+            We investigated how to leverage the operating                Analysis of Long-Running Applications. TR
+      system scheduler to reduce the pressure on the L2                  2004-021, University of Uppsala, May 2004
+      cache, using balance-set scheduling.                          [14] P. Denning. Thrashing: Its causes and prevention.
+            We demonstrated that with balance-set scheduling             Proc. AFIPS 1968 Fall Joint Computer
+      it is possible to reduce the L2 cache miss ratio by 25-            Conference, 33, pp. 915-922, 1968.
+      37% and increase performance by 27-45%.                       [15] R. Eickenmeyer et al. Evaluation of multithreaded
+            The implementation of the scheduler is currently             uniprocessors     for   commercial      application
+      under way. In the future, we also plan to investigate              environments. ISCA’96.
+      how workload characteristics affect the potential             [16] J. M. Borkenhagen, R. J Eickemeyer, R. N. Kalla,
+                                                                         S.R. Kunkel. A multithreaded PowerPC processor
+      performance gains from this algorithm and the
+                                                                         for commercial servers. IBM Journal of Research
+      associated fairness tradeoffs.
+                                                                         and Development 44, 6, pp. 885.
+                                                                    [17] A. Ailamaki, D. DeWitt, M. Hill, D. Wood.
+      6. ACKNOWLEDGEMENTS                                                DBMSs on modern processors: Where does time
+           The authors thank Tim Hill, John Davis and James              go? VLDB `99, September 1999.
+      Laudon of Sun Microsystems, and Eric Berg of                  [18] A. Barroso, K. Gharachorloo, E. Bugnion.
+      University of Uppsala for help with preparation of this            Memory System Characterization of Commercial
+      paper.                                                             Workloads. ISCA’98.
+                                                                    [19] K. Keeton, D. Patterson, Y. He, R. Raphael, and
+                                                                         W. Baker. Performance characterization of a Quad
+      7. REFERENCES                                                      Pentium Pro SMP using OLTP Workloads.
+      [1] R. Alverson et al. The Tera Computer System.                   ISCA’98.
+          Proc. 1990 Intl. Conf. on Supercomputing.                 [20] K. Olukotun, B.Nayfeh, L. Hammond, K. Wilson
+      [2] A. Agarwal, B-H. Lim, D. Kranz, J. Kubiatowicz.                and K. Chang. The Case for a Single-Chip
+          APRIL:      A     Processor    Architecture   for              Multiprocessor. ASPLOS 1996.
+          Multiprocessing. ISCA, June 1990.                         [21] A. Fedorova, M. Seltzer, C. Small and D.
+      [3] J. Laudon, A. Gupta, M. Horowitz. Interleaving:                Nussbaum. Throughput-Oriented Scheduling On
+          A      Multithreading     Technique     Targeting              Chip Multithreading Systems. Technical Report
+          Multiprocessors and Workstations. ASPLOS VI,                   TR-17-04, Harvard University, August 2004.
+          October 1994.
+      [4] J. Lo, S. Eggers, J. Emer, H. Levy, R. Stamm, D.          i
+                                                                     We found previously that other shared resources have a
+          Tullsen. Converting thread-level parallelism into         smaller potential of becoming performance bottlenecks [21].
+
+
+
+
+398                                         2005 USENIX Annual Technical Conference                           USENIX Association
+

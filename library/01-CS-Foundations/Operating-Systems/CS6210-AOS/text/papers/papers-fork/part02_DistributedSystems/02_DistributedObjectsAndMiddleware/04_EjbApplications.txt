@@ -1,0 +1,802 @@
+              Performance and scalability of EJB applications
+                             Emmanuel Cecchet, Julie Marguerite and Willy Zwaenepoel
+                                                                Rice University
+                                                      {cecchet, margueri, willy}@rice.edu
+
+
+
+ABSTRACT                                                                     Platform Enterprise Edition (J2EE) specification is Sun’s solution
+We investigate the combined effect of application implementation             to address these issues. J2EE has been primarily targeted at n-tier
+method, container design, and efficiency of communication layers             application development [2]. It defines a set of Java APIs to build
+on the performance scalability of J2EE application servers by                applications, and provides a runtime infrastructure for hosting
+detailed measurement and profiling of an auction site server.                applications.
+We have implemented three versions of the auction site. The first            Four different containers are defined in the J2EE specification to
+version uses stateless session beans with bean-managed                       provide a runtime for application components as depicted in
+persistence, making only minimal use of the services provided by             figure 1. The Enterprise JavaBeans (EJB) server is often the
+the Enterprise JavaBeans (EJB) container. The second version                 bottleneck in J2EE applications [7]. This paper seeks to explain
+makes extensive use of the container services using entity beans             the effect of application implementation methods, container
+with container-managed persistence. The third version applies the            design, and efficiency of communication layers on the
+session façade pattern, using session beans as a façade to access            performance of an EJB server and the overall application. We
+entity beans. We evaluate these different implementations on two             have developed three different EJB implementations of an auction
+popular open- source EJB containers with orthogonal designs.                 site modeled after eBay.com [11]. The semantics are the same for
+JBoss uses dynamic proxies to generate the container classes at              each implementation of the application.
+run time, making an extensive use of reflection. JOnAS pre-                  We use three different implementation methods: stateless session
+complies classes during deployment, minimizing the use of                    beans, entity beans, and entity beans with session façade beans.
+reflection at run time. We also evaluate the communication                   For further comparison, we have also implemented a Java servlet
+optimizations provided by each of these EJB containers.                      version of the application that does not use EJB.
+The most important factor in determining performance is the                  We evaluate two orthogonal container designs that are
+implementation method. EJB applications with session beans                   representative of most EJB containers available at this time. The
+perform as well as a Java servlet implementation and an order-of-            dynamic proxy approach, used in the popular JBoss [13] open-
+magnitude better than most of the implementations based on                   source EJB server, generates the container classes at run time,
+entity beans. Use of session façade beans improves performance               making extensive use of reflection. Most commercial
+for entity beans, but only if local communication is very efficient.         implementations and the JOnAS [15] open source EJB container
+Otherwise, session façade beans degrade performance.                         use pre-compilation: classes are generated during deployment,
+For the implementation using session beans, communication cost               reducing the use of reflection at run time. Reflection is known to
+forms the major component of the execution time on the EJB                   be slow, but it is often claimed that its cost is masked by network
+server. The design of the container has little effect on                     latency or database accesses [1]. We will, however, show that
+performance. For implementations using session façade beans,                 reflection can be an important factor in determining performance.
+local communication cost is critically important. With entity                We also configure the EJB servers with and without
+beans, the design of the container becomes important as well. In             communication optimizations.
+particular, the cost of reflection affects performance.                      We use open-source software in common use for our experiments:
+                                                                             the Apache Web server [5], the Tomcat servlet server [12], the
+Keywords                                                                     JBoss [13] and JOnAS [15] EJB servers and the MySQL [16]
+EJB container design, performance, scalability, communication                relational database. We have posted all software, configuration
+optimization, profiling.                                                     files, and full experiment reports on our web site
+                                                                             http://www.cs.rice.edu/CS/Systems/DynaServer to allow others to
+1. INTRODUCTION                                                              reproduce the results and evaluate the impact of new designs on
+As the popularity of dynamic-content Web sites increases rapidly,            performance and scalability.
+there is a need for maintainable, reliable, available, secure and            Each server runs on a separate node. In all cases except one, the
+above all scalable platforms to host those sites. The Java™ 2                processor on the EJB server is the bottleneck. The memory and
+                                                                             disk are never a limiting resource. The network can reach very
+                                                                             high utilization when few services from the EJB container are
+ Permission to make digital or hard copies of all or part of this work for   used.
+ personal or classroom use is granted without fee provided that copies
+ are not made or distributed for profit or commercial advantage and that     The most important factor in determining performance is the
+ copies bear this notice and the full citation on the first page. To copy    implementation method. EJB applications with session beans
+ otherwise, or republish, to post on servers or to redistribute to lists,    perform as well as a Java servlet implementation and an order-of-
+ requires prior specific permission and/or a fee.                            magnitude better than most of the implementations based on
+                    Application                        Applet
+                      Client                        Applet
+                                                   Applet
+                                                  Applet
+                                                 Applet
+                  JDBC        JMS
+                Application Client             Applet container
+                    container
+                                                                                                                         EJB
+                                                                                     servlet                                       EJB   EJB EJB
+                                                                                                   JSP                           EJB
+                                                                                  servlet                                               EJB
+                                                                                 servlet          JSP                      EJB
+                                                                                servlet          JSP
+                                                                               servlet          JSP                        EJB     EJB EJB
+                                                                  h     h                      JSP                       EJB               EJB
+                                                                  t     t
+                                                                  t     t    RMI /                                      RMI /
+                                                                                   JNDI JDBC JMS JTA                          JNDI JDBC JMS JTA
+                                                                  p ... p    IIOP                                       IIOP
+                                                                  d     d         Web container                                EJB container
+
+
+                                    Internet
+
+       Client
+                                                                                                                               Business logic                  Database server
+                                                                Web server       Presentation logic
+
+
+                                                                                               J2EE Application Server
+
+                                           Figure 1. Enterprise Java Beans integration in the J2EE framework
+
+
+entity beans. Use of session façade beans improves performance,
+but only if local communication is very efficient.
+For the implementation using session beans, communication cost                            code and only uses the database connection pooling and
+forms the major component of the execution time on the EJB                                transaction management services of the container.
+server. The design of the container has little effect on
+performance. For implementations using session façade beans,                              3. DESIGN ALTERNATIVES
+local communication cost is critically important. With entity                             3.1 Implementation Methods
+beans, the design of the container becomes important as well. In
+                                                                                          We implement a servlet version and three EJB versions. The
+particular, the cost of reflection affects performance.
+                                                                                          servlet version implements both the business logic and the
+The outline of the rest of this paper is as follows. Section 2                            presentation logic in the servlets in the usual manner. We next
+provides some background on EJB. Section 3 provides detailed                              describe the three EJB versions.
+description of the alternative implementation methods, container
+designs, and communication optimizations. Section 4 describes                             3.1.1 Session beans with BMP
+the auction site and provides some complexity measures for the                            We use session beans with bean-managed persistence (SB BMP)
+various implementation methods. Section 5 presents our                                    to implement the business logic, leaving only the presentation
+experimental environment and our measurement methodology.                                 logic in the servlets as depicted in figure 2.
+Section 6 discusses the results of our experiments. Related work
+                                                                                                           Servlet
+is presented in Section7. Section 8 concludes the paper.                                                 Presentation
+                                                                                                 Servlet     logic
+
+2. BACKGROUND                                                                                  Presentation
+                                                                                                   logic
+                                                                                                          Business
+
+An EJB server provides a number of services such as database                                                logic
+
+                                                                                                Business
+access (JDBC), transactions (JTA), messaging (JMS), naming                                        logic
+
+(JNDI) and management support (JMX). The EJB server manages                                                                           Database
+
+                                                                                                 Web container
+one or more EJB containers. The container is responsible for
+providing component pooling and lifecycle management, client                                                                                Servlet                 Session bean
+session management, database connection pooling, persistence,                                                                             Presentation               Business
+                                                                                                                                                                       logic
+transaction management, authentication and access control.                                                                                    logic
+
+                                                                                                                                                  Servlet             Session bean
+In this paper, we consider two types of EJB: entity beans that map                                                                              Presentation           Business
+                                                                                                                                                                                     Database
+                                                                                                                                                    logic                logic
+data stored in the database (usually one entity bean instance per
+                                                                                                                                          Web container            EJB container
+database table row), and session beans that are used to perform
+temporary operations (stateless session beans) or represent                                                          Figure 2. Session bean implementation
+temporary objects (stateful session beans).                                               This implementation uses the fewest services from the EJB
+A bean developer can choose to manage the persistence in the                              container. The session beans benefit from the connection pooling
+bean (Bean Managed Persistence or BMP) or let the container                               and the transaction management provided by the EJB server. It
+manage the persistence (Container Managed Persistence or CMP).                            greatly simplifies the servlet code, in which the connection
+In the latter case, a deployment descriptor contains a one-to-one                         pooling has to be implemented by hand.
+mapping between bean instance variables and database columns.
+The container uses the descriptor to generate the necessary SQL                           3.1.2 DAO separation with EB CMP
+statements and ensure concurrency control on the database. With                           In this implementation, we extract the data access code from the
+BMP beans the programmer embeds the SQL queries in the bean                               servlets, and move it into Data Access Objects that we implement
+                                                                                          using entity beans with container-managed persistence (EB
+CMP). The business logic embedded in the servlets directly                          resulting classes have to be available for the client by way of the
+invokes methods on the entity beans that map the data stored in                     classpath or the ejb-jar file. This is the approach used in most
+the database (see top part of figure 3). With CMP, the vast                         commercial EJB containers and in the JOnAS EJB container.
+majority of the SQL queries is generated by the EJB container.                      The container vendor provides a tool to generate the container
+EJB 1.1 CMP, however, requires stateless session beans to                           classes. The tool provided with JOnAS is called GenIC. GenIC
+execute complex queries involving joins on multiple tables. To                      generates the source for the container classes for all the beans
+avoid fine-grain access of getter/setter methods of the beans, we                   defined in the deployment descriptor, and compiles them using
+provide functions that return results populated with the values of                  the Java compiler. Then, it generates stubs and skeletons for those
+the bean instance attributes.                                                       remote objects using the RMI compiler. Finally, it adds the
+The goal of this implementation is to evaluate the cost of the                      resulting classes in the ejb-jar file if needed.
+container’s persistence service and the impact of fine-grain
+accesses between the Web and EJB containers.                                        3.2.2 Dynamic proxy based container
+                                                                                    With this approach, the container uses dynamic proxy technology
+3.1.3 Session façade                                                                [17] to generate the home and component interfaces at run time. A
+The session façade pattern [3] uses stateless session beans as a                    dynamic proxy is an object generated at run time that implements
+façade to abstract the entity components as shown in figure 3. It                   some specified interfaces and is responsible for routing the calls
+reduces the number of business objects that are exposed to the                      using reflection. Using reflection the proxy can map method
+client over the network, thus providing a uniform coarse-grained                    signatures to the corresponding implementations or locate a bean
+service access layer. Calls between façade and entity beans are                     given the name of the class. The client sends its calls to the proxy
+local to the EJB server and can be optimized to reduce the                          that analyzes and forwards them to the bean using reflection.
+overhead of multiple network calls (see Section 3.3).                               In the JBoss container, home and object interfaces are constructed
+This implementation involves a larger number of beans, and thus                     as dynamic proxies. They use four types of proxy classes: one for
+stresses the component pooling of the container. It also exploits                   the home interface and three for the component interface
+the database connection pooling, transaction manager and                            according to the type of the bean (entity, stateless session, stateful
+persistence services.                                                               session)
+   Servlet
+
+                        Entity
+                                                                                    3.3 Communication layer
+  Business
+    logic               Bean                                                        Remote Method Invocation (RMI) is the object request broker
+         Servlet                Entity                                              (ORB) used by EJB. JBoss relies on Sun’s RMI using JRMP
+       Business
+                                Bean
+                                                                                    (Java Remote Method Protocol) on top of TCP/IP, but it uses a
+                     Entity
+         logic
+                     Bean                Database
+                                                                                    specific registry and naming called JNP (Java Naming Provider)
+  Web container    EJB container
+                                                                                    providing hierarchical namespaces. JOnAS can use either Sun’s
+                                                                                    RMI or a modular ORB called Jonathan [10]. Jonathan has an
+                                                                                    RMI personality called Jeremie. Jeremie uses a different protocol,
+                                                                                    GIOP (General Inter-ORB Protocol), and can also optimize local
+                                          Session facade
+
+                        Servlet
+                                                                Entity              communication.
+                                           Business             Bean
+                                             logic
+                                                                Entity
+                                                                                    To reduce the cost of marshalling, JBoss offers an optimization
+                              Servlet
+                                          Session facade        Bean                that passes objects by reference instead of by value. Although not
+                                           Business         Entity       Database   compliant to the specification, this optimization is commonly used
+                                             logic          Bean
+                                                                                    and it is the default setting in JBoss. Jeremie also uses this
+                    Web container
+                                                EJB container                       technique for local calls.
+Figure 3. Refactoring the Entity Beans design with a session                        4. APPLICATION
+façade design pattern                                                               The RUBiS (Rice University Bidding System) models an auction
+3.2 EJB container design                                                            site. Its design aims to reduce as much as possible the load on the
+                                                                                    database server, allowing us to saturate the middle-tier and
+An EJB container is a component that provides the EJB services
+                                                                                    determine its maximum throughput and scalability.
+to a particular EJB. It acts as an interface between the client and
+the bean. In fact, the client only interacts with the home and                      4.1 Description
+component interfaces that are provided by the container and
+                                                                                    Our auction site defines 26 interactions that can be performed
+forward the calls to the bean. So, each bean access is done
+                                                                                    from the client’s Web browser. Among the most important ones
+through container-generated classes. There are two main
+                                                                                    are browsing items by category or region, bidding, buying or
+approaches to design an EJB container, differing in how and when
+                                                                                    selling items, leaving comments on other users and consulting
+it generates those classes. With the pre-compiled approach,
+                                                                                    one’s own user page (known as myEbay on eBay [11]). Browsing
+container classes are compiled at deployment time. The other
+                                                                                    items also includes consulting the bid history and the seller’s
+method uses dynamic proxies to generate the classes at run time.
+                                                                                    information. We define two workload mixes: a browsing mix
+3.2.1 Pre-compiled approach                                                         made up of only read-only interactions and a bidding mix that
+In a precompiled approach, the container generates custom                           includes 15% read-write interactions.
+implementations of the home and component interfaces so that it                     We sized our system according to observations found on the eBay
+can directly call the appropriate method of the bean instance. The                  Web site. We always have about 33,000 items for sale, distributed
+among eBay’s 40 categories and 62 regions. We keep a history of              have verified that in none of the experiments client emulation is
+500,000 past auctions. There is an average of 10 bids per item, or           the bottleneck.
+330,000 entries in the bids table. The users table has 1 million
+entries. We assume that users give feedback (comments) for 95%               5.2 Software Environment
+of the transactions. The new and old comments tables thus contain            We use Apache v.1.3.22 as the Web server. We increase the
+about 31,500 and 475,000 comments, respectively. The total size              maximum number of Apache processes to 512. With that value,
+of the database, including indices, is 1.4GB. More details about             the number of Apache processes is never a limit on performance.
+the database configuration can be found in [4].                              The servlet container is Jakarta Tomcat v3.2.4 [12], running on
+                                                                             Sun JDK 1.3.1. The EJB servers are JOnAS v2.4.4 [15] and JBoss
+4.2 Implementation Complexity                                                v2.4.4 [13]. These are are the latest stable versions of these
+Table 1 summarizes the number of classes and the code size                   products at the time of this writing. JOnAS v2.4.4 embeds
+(including comments) of the presentation logic (the servlets) and            Jonathan 3.0a5 that can be used for optimized communication.
+the business logic (the EJBs) for each implementation.                       Both containers implement the EJB 1.1 specification and run on
+Table 1. Number of classes and code size between presentation                Sun JDK 1.3.1. For each implementation, we only start those
+          and business logic for each implementation                         container services that are necessary to perform the experiment.
+                                                                             We avoid reloading the beans from the database if they were not
+                    Presentation             Business
+                                                                   Total     modified (tuned updates in JBoss, shared flag/isModified in
+                        logic                 logic
+                                                                             JOnAS). For all experiments, the transaction timeout is set to 5
+                              Lines             Lines                Lines   minutes.
+
+                    Classes           Classes            Classes
+                              of                of                   of
+                                                                             We use MySQL v.3.23.43-max [16] as our database server with
+                              code              code                 code
+                                                                             the MM-MySQL v2.07 type 4 JDBC driver and MyISAM non-
+                                                                             transactional tables. This means that transaction commands like
+ Servlets only       25        4590      -         -       25         4590   begin/commit are accepted but have no effect, and a rollback
+ Session beans       24        2650    52         5270     76         7920   generates an exception.. MySQL never becomes the bottleneck in
+                                                                             our experiments
+ DAO (EB CMP)        24        4060    40         7260     64        11320
+                                                                             All machines run the 2.4.12 Linux kernel.
+ Session façade      24        2660    85        10780   109         13440
+                                                                             5.3 Hardware Platform
+                                                                             The Web server, the servlets server, the EJB server and the
+Each bean requires 3 classes: the home interface, the remote                 database server each run on a different machine, a PIII 933MHz
+interface and the bean implementation. We also implement a                   CPU with 1GB SDRAM, and two Quantum Atlas 9GB
+primary key class for each entity bean. This makes the                       10,000rpm Ultra160 SCSI disk drives. A number of PII 450MHz
+implementation of the business logic very verbose, reaching up to            machines run the client emulation software. We use enough client
+80% of the total application code size.                                      emulation machines to make sure that the clients do not become a
+Although EJBs are easy to write, the number of beans can become              bottleneck in any of our experiments. All machines are connected
+quite large, resulting in a larger code base and negatively affecting        through a switched 100Mbps Ethernet LAN.
+development time and maintenance cost. There are also portability
+problems between the two containers, which each have their own               5.4 Measurement Methodology
+limitations and peculiarities, such as naming conventions. Even in           We perform measurements for the three implementations of the
+the common part of the deployment descriptors, both containers               application for each EJB container using non-optimized and
+have slightly different conventions, especially for inter-bean               optimized communication layers.
+references.                                                                  Each experiment is composed of 3 phases. A warm-up phase
+                                                                             initializes the system until it reaches a steady-state throughput
+5. EXPERIMENTAL ENVIRONNEMENT                                                level. We then switch to the steady-state phase during which we
+5.1 Client Emulation                                                         perform all our measurements. Finally, a cool-down phase slows
+We implement a client-browser emulator. A session is a sequence              down the incoming request flow until the end of the experiment.
+of interactions for the same customer. For each customer session,            For all experiments we use the same length of time for each phase.
+the client emulator opens a persistent HTTP connection to the                The auction site uses 2, 15 and 1 minutes. These lengths of time
+Web server and closes it at the end of the session. Each emulated            are chosen by observing when the experiment reaches a steady
+client waits for a certain think time before initiating the next             state and by observing the length of time necessary to obtain
+interaction. The next interaction is determined by a state transition        reproducible results.
+matrix that specifies the probability to go from one interaction to          To measure the load on each machine, we use the Sysstat utility
+another one.                                                                 [20] that collects CPU, memory, network and disk usage from the
+The think time and session time for all benchmarks are generated             Linux kernel every second. The resulting data files are analyzed
+from a negative exponential distribution with a mean of 7 seconds            post-mortem to minimize system perturbation during the
+and 15 minutes, respectively. These numbers are based on clauses             experiments.
+5.3.1.1 and 6.2.1.2 of the TPC-W v1.65 specification [21]. We                We perform separate experiments to profile the containers using
+vary the load on the site by varying the number of clients. We               the OptimizeIt offline profiling. We use the instrumentation
+                                                                             profiling, which is more suitable for profiling a large number of
+threads and small functions than a sampler profiler. Due to the                                        12000
+
+overhead of the profiler, the peak point is reached earlier for a                                                        JBoss
+                                                                                                                         JOnAS - RMI
+given configuration. For each implementation, we choose the                                            10000
+                                                                                                                         JBoss optimized calls
+
+lowest number of clients for which we observe a peak point with                                                          JOnAS - Jeremie
+                                                                                                                         Java Servlets
+any of the container configurations. For each configuration we
+
+
+
+
+                                                                       Throughput in requests/minute
+analyze a snapshot of a 10-minute run with this number of clients.                                      8000
+
+
+
+
+6. EXPERIMENTAL RESULTS                                                                                 6000
+
+We present the experimental results for each implementation in
+the same order they were introduced in section 3.1. For each                                            4000
+implementation, we evaluate up to 5 different configurations
+referred to as follows:
+- Java Servlets: the Java Servlets implementation,                                                      2000
+
+
+- JBoss: the JBoss container using JNP and passing objects by
+value,                                                                                                     0
+                                                                                                               0   100     200    300    400     500   600   700   800   900   1000 1100 1200 1300 1400 1500
+- JOnAS-RMI: the JOnAS container using RMI,                                                                                                              Number of clients
+- JBoss optimized calls: the JBoss container using JNP and
+passing objects by reference,                                                                 Figure 4. SB BMP implementation throughput in interactions
+- JOnAS-Jeremie: the JOnAS container using the Jeremie                                        per minute as a function of number of clients for the browsing
+communication layer.                                                                          mix using JBoss and JOnAS containers compared with a Java
+                                                                                                                 servlets implementation.
+Each point in the graphs represents the best result of three runs of              As shown in figure 5, the throughput for the bidding mix changes
+the experiment for the given number of clients and container                      the ordering of the best performers. JBoss and JOnAS-RMI still
+configuration. The difference between runs is minor. A more                       have the lowest throughput at 6600 interactions per minute with
+complete report of all experimental results, including throughput,                700 clients, JBoss optimized calls offers a significant
+response time and resource usage are available from our Web site                  improvement with a peak at 7500 interactions per minute with
+at http://www.cs.rice.edu/CS/Systems/DynaServer/.                                 800 clients.
+6.1 Sessions beans with BMP                                                       JOnAS-Jeremie gives performance comparable to the Java
+Figure 4 reports the throughput in interactions per minute as a                   Servlets until 1100 clients where it peaks at 9750 interactions per
+function of number of clients for the browsing mix workload, for                  minute. Java Servlets reaches 10440 interactions per minute with
+the 5 configurations previously introduced.                                       1200 clients.
+For both versions of JBoss, the peak point is reached at 800                                           12000
+
+                                                                                                                         JBoss
+clients with nearly 8600 interactions per minute. JOnAS-RMI                                                              JOnAS - RMI
+peaks at about 8900 interactions per minute, for the same number                                       10000             JBoss optimized calls
+                                                                                                                         JOnAS - Jeremie
+of clients. JOnAS-Jeremie scales further, reaching 10150                                                                 Java Servlets
+interactions per minute with 1000 clients. The Java Servlets
+
+
+
+
+                                                                       Throughput in requests/minute
+                                                                                                        8000
+implementation shows even better performance with 12000
+interactions per minute for 1200 clients.
+                                                                                                        6000
+At the peak point, the CPU utilization with JBoss is around 65%
+and the bottleneck appears on the servlet server. The high load on
+the servlet server is due to the JBoss stub used by the servlets to                                     4000
+
+access the JBoss container. For JOnAS-RMI, the CPU on the EJB
+server is the bottleneck at the peak point, and the servlet server                                      2000
+
+CPU utilization is 80%. JOnAS-Jeremie saturates both the EJB,
+the servlet and the database server processor at the peak point.
+                                                                                                           0
+The network bandwidth on the Web server is also very high with                                                 0   100     200    300    400     500   600 700 800 900         1000 1100 1200 1300 1400 1500
+                                                                                                                                                         Number of clients
+80Mb/s exchanged with the clients and 14Mb/s with the servlets.
+Though the bottlenecks are different, we do not observe a                                     Figure 5. SB BMP implementation throughput in interactions
+significant difference in performance between JOnAS-RMI and                                   per minute as a function of number of clients for the bidding
+both versions of JBoss. Due to its more scalable communication                                mix using JBoss and JOnAS containers compared with a Java
+layer JOnAS-Jeremie scales better and offer 33% more throughput                                                 Servlets implementation.
+after the peak point, compared to JBoss optimized calls. The Java                 Figure 6 shows the execution time breakdown resulting from
+Servlets version does not have the RMI overhead, and has direct                   profiling the SB BMP implementation for the bidding mix at 700
+access to the database without going through an EJB container.                    clients (the peak point of the JBoss and JOnAS-RMI
+This explains the better performance of the servlets                              configurations). As expected, communication costs dominate the
+implementation.                                                                   execution time in this implementation where few services from the
+                                                                                  container are involved. It is also interesting to observe that the
+                                                                                  bean code we have written represents less than 1.5 percent of the
+                                                                                  total execution time.
+                           100%                                                                                              are achieved by JOnAS-Jeremie at 1222 interactions per minute
+                           90%
+                                                                                                                             for 200 clients.
+
+                           80%                                                                                                                  1400
+                                                                                         Other
+                                                                                         Garbage Collector                                                                                          JBoss-non optimized
+                           70%                                                                                                                                                                      JOnAS-RMI
+
+
+
+
+Execution time breakdown
+                                                                                         Security                                               1200                                                JBoss-optimized
+                                                                                         Naming                                                                                                     JOnAS-jeremie
+                           60%
+                                                                                         MM-MySQL
+                                                                                                                                                1000
+                                                                                         Connection pooling
+
+
+
+
+                                                                                                                Throughput in requests/minute
+                           50%
+                                                                                         Transaction manager
+                           40%                                                           Container
+                                                                                                                                                          800
+                                                                                         Reflexion
+                           30%
+                                                                                         Beans (edu.rice.*)
+                                                                                         Communication                                                    600
+                           20%
+
+
+
+                           10%                                                                                                                            400
+
+
+                            0%
+                                  JBoss    JOnAS RMI   JBoss optimized   JOnAS Jeremie                                                                    200
+                                                            calls
+
+
+
+                               Figure 6. Execution time breakdown for the SB BMP                                                                                                  0
+                                                                                                                                                                                            0       20        40        60        80        100     120   140   160     180     200     220    240    260    280    300
+                             implementation for the bidding mix at the peak point of the                                                                                                                                                               Number of clients
+
+
+                                      JBoss and JOnAS-RMI configurations.                                                                Figure 7. DAO separation with EB BMP implementation
+                     JBoss spends 14.2% of overall CPU time in the container with an                                                  throughput in interactions per minute as a function of number
+                     extra 4% for reflection. JOnAS-RMI shows a cost of 5% for the                                                       of clients for the browsing mix using JBoss and JOnAS.
+                     container and 2.7% for the database connection pooling. The                               Figure 8 shows the throughput in interactions per minute as a function of
+                     communication layer is definitely the bottleneck with 69.4% of                              number of clients for the bidding mix. The ordering of the different
+                     the overall processing time for JBoss and 87% for JOnAS-RMI.                                configuration in terms of performance is the same as for the browsing
+                     This difference in communication cost between JBoss and JOnAS-                              mix. JBoss reaches a peak of 638 interactions per minute for 100 clients.
+                     RMI is explained by the stub implementation on the client side.                             There is a 37% improvement when passing objects by reference,
+                     JBoss’s stub can handle some calls locally, avoiding calls over the                         resulting in 868 interactions per minute for JBoss optimized calls with
+                     network [14]. The reduction in the time spent in communication is                           120 clients. The improvement is due to the fact that for each write
+                     compensated by the overhead of the container. The throughput                                interaction, there is a call to a bean assigning unique identifiers that can
+                     remains the same as JOnAS-RMI where the extra communication                                 be optimized. This interaction does not occur in the browsing mix, and
+                     cost is compensated by a more efficient container.                                          therefore there is no comparable improvement. JOnAS-RMI achieves
+                     JBoss optimized calls gets a 4.6% improvement in communication                              1130 interactions per minute for 140 clients, and JOnAS-Jeremie
+                     cost compared to JBoss. The container overhead remains                                      achieves 1401 interactions per minute with 180 clients.
+                     proportionally the same (12.1% in the container, 2.1% in                                                                                                     1600
+                     reflection). Due to its more scalable communication layer, JOnAS-                                                                                                                   JBoss
+
+                     Jeremie spends only 43% in communications, but the generated                                                                                                 1400                   JOnAS - RMI
+                                                                                                                                                                                                         JBoss optimized calls
+                     container classes are more expensive than the one generated for                                                                                                                     JOnAS - Jeremie
+
+                     RMI. Therefore, the EJB container takes 12.9% of the overall                                                                                                 1200
+
+
+
+
+                                                                                                                                                Throughtput in requests/minutes
+                     execution time and 5.5% is consumed by the connection pooling.                                                                                               1000
+
+                     In summary, with session beans and bean-managed persistence,
+                     the communication cost dominates the costs associated with the                                                                                                   800
+
+
+                     container. An efficient communication layer leads to better
+                                                                                                                                                                                      600
+                     performance. The container design does not have a significant
+                     impact.                                                                                                                                                          400
+
+
+
+                     6.2 DAO separation with EB CMP                                                                                                                                   200
+
+                     Figure 7 reports the throughput in interactions per minute as a
+                     function of number of clients for the browsing mix workload,                                                                                                       0
+                                                                                                                                                                                                0        20        40        60        80         100   120   140    160      180     200     220    240    260    280    300
+                     using the 4 container configurations described in section 6. The                                                                                                                                                                      Number of clients
+
+                     absolute throughput numbers are between 8 (for JOnAS-Jeremie)
+                                                                                                                                 Figure 8. DAO separation EB BMP throughput in interactions
+                     and 16 times (for JBoss) lower than with the previous SB BMP
+                                                                                                                                  per minute as a function of number of clients for the bidding
+                     implementation. We terminate the experiments for JBoss and
+                                                                                                                                                  mix using JBoss and JOnAS.
+                     JOnAS-RMI after 200 clients, because JBoss becomes unable to
+                     handle the load and transactions abort on timeout (the timeout is                                       Figure 9 shows the execution time breakdown for the EB CMP
+                     set to 5 minutes).                                                                                      implementation for the bidding mix at 80 clients (the peak point
+                                                                                                                             of the JBoss configuration). Compared to the SB BMP
+                     Both JBoss configurations give comparable peak performance,
+                                                                                                                             implementation, the container is more heavily involved in the
+                     with 547 and 579 interactions per minute reached with 80 clients
+                                                                                                                             processing due to the persistence management. The time spent in
+                     for JBoss and JBoss optimized calls, respectively. JOnAS-RMI
+                                                                                                                             the communication layers is significantly reduced. As most of the
+                     peaks at 939 interactions per minute with 100 clients. Best results
+                     code is generated by the container, the overall execution time                                                 JBoss optimized calls shows a significant improvement with a
+                     spent in our bean classes is less than 0.1%.                                                                   peak at 1081 interactions per minute with 120 clients. The
+                     The time spent in the JBoss container is more than 40% of which                                                optimization improves the throughput by a factor of 2.86
+                     one fourth is due to reflection. In comparison, the JOnAS                                                      compared to JBoss without optimized calls. JOnAS-Jeremie peaks
+                     container takes less than 11% of the processing time (and 0.3% in                                              at 3970 interactions per minute with 440 clients providing a
+                     reflection). Of that 11%, 3.8% is due to the connection pooling                                                speedup of 5.3 compared to JBoss optimized calls. The ability of
+                     and 1% to the transaction manager. The JBoss’s client stub                                                     Jeremie to optimize the local calls clearly shows its benefits here.
+                     optimization does not seem to work with entity beans and the                                                                    4000
+
+                     respective communication time are 54% for JBoss and 47.4% for                                                                                                JBoss
+
+                     JOnAS-RMI.                                                                                                                      3500                         JOnAS - RMI
+                                                                                                                                                                                  JBoss optimized calls
+                           100%                                                                                                                                                   JOnAS - Jeremie
+                                                                                                                                                     3000
+
+
+
+
+                                                                                                               Throughput in requests/minute
+                           90%
+                                                                                                                                                     2500
+
+                           80%
+                                                                                         Other
+                                                                                         Garbage Collector                                           2000
+                           70%
+
+
+
+
+Execution time breakdown
+                                                                                         Security
+
+                           60%
+                                                                                         Naming                                                      1500
+
+                                                                                         MM-MySQL
+                           50%                                                           Connection pooling                                          1000
+                                                                                         Transaction manager
+                           40%
+                                                                                         Container
+                                                                                                                                                      500
+                                                                                         Reflexion
+                           30%
+                                                                                         Beans (edu.rice.*)
+                                                                                                                                                        0
+                                                                                         Communication
+                           20%                                                                                                                                  0       20   40    60   80 100 120 140 160 180 200 220 240 260 280 300 320 340 360 380 400 420 440 460 480 500
+                                                                                                                                                                                                                 Number of clients
+                           10%
+
+                                                                                                                                                        Figure 10. Session façade implementation throughput in
+                            0%
+
+                                  JBoss    JOnAS RMI   JBoss optimized   JOnAS Jeremie                                                               interactions per minute as a function of number of clients for
+                                                            calls
+                                                                                                                                                               the browsing mix using JBoss and JOnAS.
+                              Figure 9. Execution time breakdown for the entity beans                                               Figure 11 reports the throughput in interactions per minute as a
+                             implementation for the bidding mix at the peak point of the                                            function of number of clients for the bidding mix. The scenario is
+                                                JBoss configuration.                                                                the same for JBoss and JOnAS-RMI. They peak at 448 and 777
+                                                                                                                                    interactions per minute, with 60 and 140 clients respectively.
+                     JBoss optimized calls reduces the time spent in communication to
+                                                                                                                                    Inter-bean communication adds to the overall communication
+                     41.8% of the overall execution time. However, 21.1% is spent in
+                                                                                                                                    overhead and pulls performance down giving the worst
+                     the container and an additional 7.4% in reflection. Performance is
+                                                                                                                                    throughput of all implementations.
+                     improved compared to JBoss, but still below what is obtained
+                     with JOnAS, even without communication optimizations. JOnAS-                                                                    4000
+
+                     Jeremie shows a significant improvement with only 23.9% of the                                                                                                JBoss
+                                                                                                                                                                                   JOnAS - RMI
+                     CPU used for communication and 15% for the container. Jeremie                                                                   3500
+                                                                                                                                                                                   JBoss optimized calls
+                     offers again more scalable performance than RMI. Like for the SB                                                                                              JOnAS - Jeremie
+                                                                                                                                                     3000
+                     BMP implementation, the container classes for Jeremie are more
+
+
+
+
+                                                                                                                     Throughput in requests/minute
+                     expensive than the container classes for RMI, but the                                                                           2500
+                     container/communication combination is more efficient and
+                     results in better performance.                                                                                                  2000
+
+
+                     In summary, unlike for the SB BMP version, the container design                                                                 1500
+                     has the largest impact on performance for EB CMP. Optimized
+                     communications still improve performance but to a lesser extent.                                                                1000
+
+
+
+                     6.3 Session façade implementation                                                                                                500
+
+                     Figure 10 presents the throughput in interactions per minute as a
+                                                                                                                                                            0
+                     function of number of clients for the browsing mix using the 4                                                                                 0    20 40 60 80 100 120 140 160 180 200 220 240 260 280 300 320 340 360 380 400 420 440 460 480 500
+
+                     containers configuration described in section 6.                                                                                                                                              Number of clients
+
+
+                      Due to the communication overhead between the façade session                                                                      Figure 11. Session façade implementation throughput in
+                     beans and the entity beans, both JBoss and JOnAS-RMI perform                                                                    interactions per minute as a function of number of clients for
+                     worse than with the EB CMP implementation. JBoss peaks at 378                                                                             the bidding mix using JBoss and JOnAS.
+                     interactions per minute with 60 clients, while JOnAS-RMI                                                       JBoss optimized calls offers a better performance with a peak at
+                     achieves 689 interactions per minute with 100 clients. This                                                    1507 interactions per minute with 180 clients. However, response
+                     represents almost a 30% drop in performance for both                                                           time dramatically increases under saturation till 340 clients where
+                     configurations. As for the previous experiment we do not report                                                the transactions take more than 5 minutes to be performed and are
+                     throughput for more than 200 clients due to transaction timeouts.                                              timed out by the transaction manager. Then, the number of
+                                                                                                                                    completed interactions drops around 600 per minute.
+                     JOnAS-Jeremie has more scalable behavior and sustains up to                                                           layer is the bottleneck and hides most of the cost of the container.
+                     3565 interactions per minute between 380 and 420 clients. This                                                        Therefore, container design has little impact on performance for
+                     leads up to a 6.2 factor of improvement compared to JBoss                                                             this implementation.
+                     optimized calls with the same number of clients.
+                                                                                                                                                               12000
+                     Figure 12 presents the execution time breakdown for the session                                                                                                                                                JB oss
+                     façade implementation for the bidding mix at 60 clients (the peak                                                                                                                                              JO nA S - R M I
+
+                     throughput of the JBoss configuration). Once again our bean code                                                                          10000                                                                JB oss optim ized calls
+                                                                                                                                                                                                                                    JO nA S - Jerem ie
+                     represents less than 1% of the overall execution time.
+
+
+
+
+                                                                                                               Maximum throughput in requests/minute
+                                                                                                                                                                                      8000
+                           100%
+
+
+
+                           90%
+                                                                                                                                                                                      6000
+                           80%
+                                                                                         Other
+                                                                                         Garbage Collector
+                           70%
+                                                                                                                                                                                      4000
+
+
+
+
+Execution time breakdown
+                                                                                         Security
+
+                           60%
+                                                                                         Naming
+                                                                                         MM-MySQL
+                           50%                                                           Connection pooling                                                                           2000
+
+                                                                                         Transaction manager
+                           40%
+                                                                                         Container
+                                                                                         Reflexion                                                                                              0
+                           30%                                                                                                                                                                          SB-BMP          EB-CMP               Session façade
+                                                                                         Beans (edu.rice.*)
+                                                                                         Communication
+                           20%
+                                                                                                                                                                                               Figure 13. EJB implementations maximum throughput in
+                           10%
+                                                                                                                                                                                                    interactions per minute for the browsing mix.
+                                                                                                                                                                                               10000
+                            0%
+
+                                  JBoss    JOnAS RMI   JBoss optimized   JOnAS Jeremie
+                                                            calls                                                                                                                               9000                                     JB oss
+                                                                                                                                                                                                                                         JO nA S - R M I
+                                                                                                                                                                                                                                         JB oss optim ized calls
+                             Figure 12. Execution time breakdown for the session façade                                                                                                         8000
+                                                                                                                                                                                                                                         JO nA S - Jerem ie
+                             implementation for the bidding mix at the peak point of the
+
+
+
+
+                                                                                                                                                       Maximum throughput in requests/minute
+                                                                                                                                                                                                7000
+                                                JBoss configuration.
+                                                                                                                                                                                                6000
+                     There is little difference with the EB BMP implementation for
+                     both JBoss and JOnAS-RMI. As communications were already                                                                                                                   5000
+
+                     the bottleneck, they increase by less than 1% and remain the
+                                                                                                                                                                                                4000
+                     bottleneck.
+                                                                                                                                                                                                3000
+                     As the number of beans and interactions between beans increase,
+                     the time spent in reflection with the JBoss optimized calls                                                                                                                2000
+
+                     configuration reaches 7% of the overall execution time. The
+                                                                                                                                                                                                1000
+                     container itself takes 7.3% of the total time. The call optimization
+                     is visible in the reduction of the CPU utilization dedicated to                                                                                                                0
+                                                                                                                                                                                                          SB-BMP          EB-CMP                Session façade
+                     communication that drops to 13.1%. For the first time, we observe
+                     than more time is spent in the container than in communications.                                                                                                          Figure 14. EJB implementations maximum throughput in
+                     JOnAS-Jeremie cuts the communication time by almost a half to                                                                                                                   interactions per minute for the bidding mix.
+                     only 7%. The container CPU utilization then represents only 1.8%                                                      The DAO separation with entity beans and container-managed
+                     of total execution time whereas connection pooling takes 2%. The                                                      persistence (EB CMP) implementation gives the least scalable
+                     larger number of lookups on beans affects 0.35% of the overall                                                        results. This is due to the excessively fine-grain access exposed by
+                     time to the naming directory.                                                                                         the entity beans to the servlets. This implementation, however,
+                     In summary, with session façade beans both the container and                                                          shows that container design has a significant impact on the
+                     communication layer designs have a significant impact on                                                              performance of EB CMP. The pre-compiled approach of JOnAS
+                     performance. With a larger number of beans, reflection proves to                                                      shows better scalability than the dynamic proxy based approach
+                     be a significant limitation to scalability. The pre-compiled                                                          used by JBoss.
+                     approach reduces the time spent in reflection and offers scalable                                                     The overhead of reflection is also noticeable in the session façade
+                     performance when coupled with an optimized communication                                                              implementation. The optimized calls improve throughput for
+                     layer such as the one implemented in Jeremie.                                                                         JBoss at lower loads, but performance does not scale and response
+                                                                                                                                           time quickly rises after the peak point. The call optimization is not
+                     6.4 Summary                                                                                                           sufficient to mask the overhead of reflection in the container.
+                     Figure 13 and figure 14 summarize the peak throughput obtained                                                        Only the combination of pre-compiled container classes and an
+                     for the different implementations and container configurations for                                                    optimized communication layer such as Jeremie allows for
+                     the browsing mix and the bidding mix respectively.                                                                    scalable performance.
+                     The session beans with bean-managed persistence (SB BMP)                                                              The bean code written by the programmer represents at most two
+                     implementation gives the best throughput. The communication                                                           percent of the overall execution time. This confirms that
+application implementation method and the middleware design           performance comparable to Java Servlets. Entity beans impose a
+have the biggest impact on performances. The two have to be           row-level access to the database resulting in a finer grain access
+considered in combination, as evidenced by the poor performance       and significantly lower performance.
+of session façade beans without optimized inter-bean                  Container design has no significant influence on SB BMP,
+communication.                                                        because communication costs dominate, but we have shown that it
+                                                                      has a direct impact on performance with entity beans. The
+7. RELATED WORK                                                       dynamic proxy approach has a large overhead that limits
+Performance and scalability of J2EE application servers is a very
+                                                                      scalability. Pre-compiled approaches reduce the use of reflection
+hot topic in the e-business community. Sun has released the
+                                                                      at run time, thus providing better scalability.
+ECperf specification [18] as a first attempt to standardize the
+evaluation of EJB servers. This benchmark is aimed at evaluating      Communication layers are the determining factor for the
+a particular J2EE application server with a single application,       scalability of the session façade implementation. Only the
+while we target the evaluation of different EJB containers with       container with pre-compiled classes combined with an optimized
+various implementations of the same application. Other                communication layer offer scalable performance. Reflection cost
+benchmarks such as TPCW [21] overload the database tier [4]           increases with the number of beans, quickly resulting in a
+preventing evaluation of middle-tier performance under                bottleneck.
+saturation.
+To the best of our knowledge, ours is the first study of EJB          9. ACKNOWLEDGMENTS
+applications scalability analyzing the container and                  We are grateful for the people of the JBoss and JOnAS
+communication layers designs. [9] gives guidelines for EJB server     communities for the useful help and information they provided us.
+comparison, but they use the EJB 1.0 specification and do not
+propose an application to perform the comparison. We have made        10. REFERENCES
+available the application, container configurations and experiment    [1] Rahim Adatia et al. – Professionnal EJB – Wrox Press, ISBN
+results           on             our            Web            site       1-861005-08-3, 2001.
+http://www.cs.rice.edu/CS/Systems/DynaServer to allow further
+evaluation of other containers.                                       [2] Subrahmanyam Allamaraju et al. – Professional Java Server
+                                                                          Programming J2EE Edition - Wrox Press, ISBN 1-861004-
+UrbanCode provides a performance benchmark of design idioms               65-6, 2000.
+(design patterns applied to a specific programming language)
+[22]. Their conclusions about relative performance between            [3] Deepak Alur, John Crupi and Dan Malks – Core J2EE
+session beans and entity beans confirm our results. They do not,          Patterns – Sun Microsystem Press, ISBN 0-13-064884-1,
+however, evaluate the impact of container design or the                   2001.
+communication layer optimization. Allamaraju et al. [2] discuss       [4] Cristiana Amza, Emmanuel Cecchet, Anupam Chanda, Alan
+container design but conclude that reflection is never an issue,          L. Cox, Sameh Elnikety, Romer Gil, Julie Marguerite,
+because its cost is insignificant compared to network latency or          Karthick Rajamani and Willy Zwaenepoel – Bottleneck
+roundtrips to the database. We have shown that reflection can             Characterization of Dynamic Web Server Benchmarks –
+become a real issue for scalability when container-managed                Technical Report TR02-388, Rice University, 2001.
+persistence is used.                                                  [5] The Apache Software Foundation – http://www.apache.org/.
+To address the issue of inter-bean communications, the EJB CMP        [6] BEA Systems, Inc – Achieving Scalability and High
+2.0 specification [19] introduces the notion of local and remote          Availability for E-Business – BEA white paper,
+interfaces. As this feature was not implemented in the containers         http://www.bea.com, 2001.
+we have tested, this evaluation will be part of our future work
+when the implementation becomes available.                            [7] Emmanuel Cecchet, Anupam Chanda, Sameh Elnikety, Julie
+                                                                          Marguerite and Willy Zwaenepoel – A Comparison of
+Another solution to achieve scalability is to use a cluster. Major        Software Architecture for E-business Applications –
+J2EE vendors implement such as BEA [6] or IBM [8] use                     Technical Report TR02-389, Rice University, 2001.
+clustering to achieve scalability and high availability. We also
+plan to evaluate those features, but they are still under             [8] Willy Chiu – Design for Scalability – IBM white paper,
+development in the open source containers we used for this                http://ibm.com/websphere/developer/zones/hvws, 2001.
+evaluation.                                                           [9] Distributed Systems Research Group, Charles University –
+                                                                          EJB Comparison Project – http://nenya.ms.mff.cuni.cz, 2000.
+8. CONCLUSIONS
+                                                                      [10] Bruno Dumant, François Horn, Frédéric Dang Tran and Jean-
+We have experimented with several implementations of the same
+                                                                           Bernard Stefani – Jonathan : an Open Distributed Processing
+e-commerce      application,   using    different    application
+                                                                           Environment in Java – Distributed Systems Engineering
+implementation methods, container designs and communication
+                                                                           Journal, vol. 6, 3-12, 1999.
+layers. The source code, container configurations, database
+contents and experiment reports are all available for download        [11] eBay – http://www.ebay.com/.
+from             our           Web             site            at     [12] Jakarta         Tomcat        servlet      container       –
+http://www.cs.rice.edu/CS/Systems/DynaServer/.                             http://jakarta.apache.org/tomcat/.
+We have shown that stateless session beans with bean-managed          [13] JBoss EJB server – http://jboss.org.
+persistence coupled with an efficient communication layer offer
+[14] Vladimir Blagojevic and Rickard Oberg – Container                [18] Sun      Microsystems      –     ECperf      specification   –
+     architecture - design notes – http://www.jboss.org/online-            http://java.sun.com/j2ee/ecperf/, 2001.
+     manual/HTML/ch12.html.                                           [19]      Sun Microsystems – EJB 2.0 specification                –
+[15] JOnAS:      Java    Open       Application       Server     –           http://java.sun.com/products/ejb/docs.html, 2001.
+     http://www.objectweb.org/jonas.                                  [20] Sysstat package – http://freshmeat.net/projects/sysstat/.
+[16] MySQL        Reference     Manual            v3.23.36       –    [21] Transaction        Processing    Performance      Council    –
+     http://www.mysql.com/documentation/.                             http://www.tpc.org/.
+[17] Sun Microsystems – Dynamic Proxy Classes –                       [22]       UrbanCode,     Inc.   –      EJB     Benchmark         –
+     http://java.sun.com/j2se/1.3/docs/guide/reflection/proxy.html,          http://www.urbancode.com/projects/ejbbenchmark, 2001.
+     2001.
+

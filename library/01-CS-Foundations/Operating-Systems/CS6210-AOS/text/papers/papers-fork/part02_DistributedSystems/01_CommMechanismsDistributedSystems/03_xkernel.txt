@@ -1,0 +1,856 @@
+                                                                     IEEE TRANSACTIONS   ON SOFTWARE   ENGINEERING,   VOL.   17, NO. 1, JANIJARY   1991
+
+
+
+
+                        The x-Kernel: An Architecture for
+                         Implementing Network Protocols
+                                   Norman C. Hutchinson, Member, IEEE, and Larry L. Peterson
+
+
+
+   A!Nract-This    paper describes a new operating system kernel, called      socket/application. As another example, System V added mul-
+the x-kernel, that provides an explicit architecture for constructing         tiplexors to streams to accommodate the complexity of network
+and composing network protocols. Our experience implementing and              protocols.
+evaluating several protocols in the x-kernel shows that this architecture
+is both general enough to accommodate a wide range of protocols, yet             Not all operating systems provide explicit support for imple-
+efficient enough to perform competitively with less structured operating      menting network protocols. At one extreme, systems like the
+systems.                                                                      V-kernel [8] mandate a particular protocol or protocol suite.
+  ZndexTerms-Communication,        distributed   systems, networks, operat-   Because such operating systems support only a fixed set of
+ing systems.                                                                  protocols that are known a priori, the protocols can be embedded
+                                                                              in the kernel without being encapsulatedwithin a general protocol
+                                                                              abstraction. At the other extreme, systems such as Mach [l] move
+                           I.   INTRODUC~~N
+                                                                              responsibility for implementing protocols out of the kernel. Such
+     ETWORK software is at the heart of any distributed system.               systems view each protocol as an application that is implemented
+N     It manages the communication hardware that connects the
+processors in the system and it defines abstractions through
+                                                                              on top of the kernel; i.e., they provide no protocol-specific
+                                                                              infrastructure.
+which processesrunning on those processorsexchange messages.                     In addition to defining the abstract objects that make up an
+Network software is extremely complex: it must hide the details               operating system, one must organize those objects into a coherent
+of the underlying hardware, recover from transmission failures,               system that supports the necessary interaction between objects.
+ensure that messages are delivered to the application processes               More concretely, one must map the abstractions onto processes
+in the appropriate order, and manage the encoding and decoding                and procedures. One well-established design technique is to
+of data. To help manage this complexity, network software is                  arrange the objects in a functional hierarchy [ 111.Such a structure
+divided into multiple layers-commonly called protocols-each                   extends nicely to communication objects because protocols are
+of which is responsible for some aspect of the communication.                 already defined in terms of multiple layers. It has been observed,
+Typically, a system’s protocols are implemented in the operating              however, that the cost of communication between levels in the
+system kernel on each processor.                                              hierarchy strongly influences the performance of the system [13].
+   This paper describes a new operating system kernel-called                  It is therefore argued that while the design of an operating system
+the x-kernel-that is designed to facilitate the implementation                may be hierarchical, performance concerns often dictate that the
+of efficient communication protocols. The x-kernel runs on Sun3               implementation is not.
+workstations, is configurable, supports multiple address spaces                   More recent studies have focused on how the structure of
+and light-weight processes, and provides an architecture for im-              operating systems influences the implementation of protocols [9],
+plementing and composing network protocols. W e have used the                 [lo]. These studies point out that encapsulating each protocol
+x-kernel as a vehicle for experimenting with the decomposition                layer in a process leads to an inefficient implementation because
+of large protocols into primitive building block pieces [15], as a            of the large overhead involved in communication and syn-
+workbench for designing and evaluating new protocols [22], and                chronization between layers. They also suggest an organization
+as a platform for accessing heterogeneouscollections of network               that groups modules into vertical and horizontal tasks, where
+services [23].                                                                modules within a vertical task interact by procedure call and
+   Many operating systems support abstractions for encapsu-                   modules within a horizontal task interact using some process
+lating protocols; examples include Berkeley Unix sockets [17]                 synchronization mechanism. Moreover, allowing modules within
+and System V Unix streams [28]. Such abstractions are useful                  a vertical task to call both lower-level and higher-level modules is
+because they provide a common interface to a collection of                    well-suited to the bidirectional nature of network communication.
+dissimilar protocols, thereby simplifying the task of composing                   While the way protocol modules are mapped onto proce-
+protocols. Defining truly general abstractions is difficult because           dures and processesclearly impacts the performance of protocol
+protocols range from connection-oriented to connection-less, syn-             implementations, studies also show that protocol performance
+chronous to asynchronous, reliable to unreliable, stream-oriented             is influenced by several additional factors, including the size
+to message-oriented, and so on. For example, to accommodate
+                                                                              of each protocol’s packet, the flow control algorithm used by
+differences in different protocol layers, Berkeley Unix defines
+                                                                              the protocol, the underlying buffer management scheme, the
+three different interfaces: driver/protocol, protocol/socket, and
+                                                                              overhead involved in parsing headers, and various hardware
+   Manuscript received June 28, 1989; revised July 29, 1990. Recommended      limitations [36], [16], [5]. In addition to suggesting guidelines
+by A. N. Habermann. This work was supported in part by the National Science   for designing new protocols and proposing hardware designs
+Foundation under Grant CCR-8811423.
+   The authors are with the Department of Computer Science, University of
+                                                                              that support efficient implementations, these studies also make
+Arizona, Tucson, AZ 85721.                                                     the point that providing the right primitives in the operating
+   IEEE Log Number 9040269.                                                    system plays a major role in being able to implement protocols
+                                                      0098-5589/91/0100-0064$01.00   0   1991 IEEE
+HUTCHINSONAND       PETJZRSON:THEx-KERNEL
+
+
+
+
+                                                    IP
+
+
+                                                    I
+                                                   ETH
+
+
+
+                                                          Fig. 1.   Example x-kernel configuration.
+
+
+efficiently. An important example of such operating system                       data contained in a message object corresponds to one or more
+support is a buffer management scheme that allows protocol                       protocol headers and user data.
+implementations to avoid unnecessary data copying. In general,                      Fig. l(a) illustrates a suite of protocols that might be con-
+it is desirable to recognize tasks common to many protocols, and                 figured into a given instance of the x-kernel. Fig. l(b) gives
+to provide efficient support routines that can be applied to those               a schematic overview of the x-kernel objects corresponding to
+tasks.                                                                           the suite of protocols in (a); protocol objects are depicted as
+    The novel aspect of the x-kernel is that it fully integrates these           rectangles, the session objects associated with each protocol
+three ingredients: it defines a uniform set of abstractions for                  objects are depicted as circles, and a message is depicted as
+encapsulating protocols, it structures the abstractions in a way                 a “thread” that visits a sequence of protocol and session objects
+that makes the most common patterns of interaction efficient, and                as it moves through the kernel.
+it supports primitive routines that are applied to common protocol                  The rest of this section sketches the x-kernel’s underlying
+tasks. In doing so, the architecture is able to accommodate a                    process and memory management facilities and describes pro-
+wide variety of protocols while performing competitively with ad                 tocol, session, and message objects in more detail. W e describe
+hoc implementations in less structured environments. This paper                  the x-kernel’s architecture only in sufficient detail to understand
+describes the x-kernel’s architecture, evaluates its performance,                how the abstractions and the implementation influence each
+and reports our experiences using the x-kernel to implement a                    other. Toward this end, we only define the key operations on
+large body of protocols.                                                         protocols, sessionsand messages.Also, we give both an intuitive
+                                                                                 specification for the objects and an overview of how the objects
+                                                                                 are implemented in the underlying system.
+                        II. ARCH~~RE
+   The x-kernel views a protocol as a specification of a commu-                  A. Underlying Facilities
+nication abstraction through which a collection of participants                     At the lowest level, the x-kernel supports multiple address
+exchange a set of messages. Beyond this simple model, the                        spaces, each of which contains one or more light-weight pro-
+x-kernel makes few assumptions about the semantics of protocols.                 cesses.An address space contains a user area, a kernel area, and
+In particular, a given instance of a communication abstraction                   a stack area. All the processes running in a given address space
+may be implicitly or explicitly established; the communication                   share the same user and kernel areas; each process has a private
+abstraction may or may not make guarantees about the reliable                    stack in the stack area. All address spaces share the same kernel
+delivery of messages;the exchange of messagesthrough the com-                    area. The user and kernel areas of each address space contain
+munication abstraction may be synchronous or asynchronous;                       code, static data, and dynamic data (heap). Each process’private
+an arbitrary number of participants may be involved in the                       stack is divided into a user stack and a kernel stack. Processes
+communication; and messages may range from fixed sized data                      within an address space synchronize using kernel semaphores.
+blocks to streams of bytes.                                                      Processes in different address spaces communicate in the same
+   The x-kernel provide three primitive communication objects                    way as do processes on different machines-by exchanging
+to support this model: protocols, sessions, and messages. W e                    messagesthrough one or more of the kernel’s protocol objects.
+classify these objects as to whether they are static or dynamic,                    A process may execute in either user or kernel mode. W h e n
+and passive or active. Protocol objects are both static and                      a process executes in user mode, it is called a user process and
+passive. Each protocol object corresponds to a conventional                      it uses the code and data in the user area and its user stack.
+network protocol-e.g., IP [27], UDP [25], TCP [34], Psync                        Likewise, when a process executes in kernel mode, it is called a
+[22]-where the relationships between protocols are defined at                    kernel process and it uses the code and data in the kernel area and
+the time a kernel is configured.’ Session objects are also passive,              its kernel stack. A kernel process has access to both the kernel
+but they are dynamically created. Intuitively, a session object                  and user areas, while a user process has access to only the user
+is an instance of a protocol object that contains a “protocol                    area; the kernel area is protected by the memory management
+interpreter” and the data structures that represent the local state              hardware.
+of some “network connection.” Messages are active objects that                      The x-kernel is symmetric in the sense that a process executing
+move through the session and protocol objects in the kernel. The                 in user mode is allowed to change to kernel mode (this corre-
+                                                                                 sponds to a system call) and a process executing in kernel mode is
+   ‘W h e n the distinction is important to the discussion, we use the term      allowed to invoke a user-level procedure (this is an upcall [lo]).
+“protocol object” to refer to the specific x-kernel entity and we use the term   W h e n a user process invokes a kernel system call, a hardware
+“network protocol” to refer to the general concept.                              trap occurs, causing the process to start executing in the kernel
+ 66                                                               IEEE TRANSACTIONS     ON SOFTWARE    ENGINEERING,   VOL.   17, NO. 1, JANUARY   1991
+
+
+
+  area and using its kernel stack. W h e n a kernel process invokes required to masquerade as protocol objects; i.e., the user must
+  a user-level procedure, it first executes a preamble routine that export those operations that a protocol or session may invoke on a
+  sets up an initial activation record in the user stack, pushes the protocol located above it in the graph. A create protocol opera-
+  arguments to the procedure onto the user stack, and starts using tion allows a user process to create a protocol object representing
+  the user stack; i.e., changes its stack pointer. Because there is a the user process; the function pointers in this protocol object refer
+  danger of the user procedure not returning (e.g., an infinite loop), to procedures implemented in the user’s address space. The user
+  the kernel limits the number of outstanding upcalls to each user process uses the protocol object returned by create-protocol to
+  address space.                                                        identify itself in subsequent calls to the kernel protocols.
+     On top of this foundation, the x-kernel provides a set of support     The x-kernel infrastructure also provides interface operations
+ routines that are used to implement protocols. These routines are that simplify the invocation of operations on protocol and
+ described in more detail in a companion paper [14]. First, a set session objects. Specifically, for each operation invocation
+ of buffer manager routines provide for allocating buffer space, op(arg,, arg,, . . . , arg,) defined in the rest of this section, the
+ concatenating two buffers, breaking a buffer into two separate infrastructure uses arg, as a capability for an object, uses the
+ buffers, and truncating the left or right end of a buffer. The operation name as an index to find a pointer to the procedure
+ buffer routines use the heap storage area and are implemented that implements the op for that object, and calls that procedure
+ in way that allows multiple references to arbitrary pieces of with the arguments arg,, . . . , argn . In certain cases,or-g, is also
+ a given buffer without incurring any data copying. The buffer passed to the procedure. This is necessary when the procedure
+ routines are used to manipulate messages; i.e., add and strip needs to know what object it is currently operating on.
+ headers, fragment and reassemble messages. Second, a set of
+ map manager routines provide a facility for maintaining a set of B. Protocol Objects
+ bindings of one identifier to another. The map routines support
+ adding new bindings to the set, removing bindings from the                Protocol objects serve two major functions: they create session
+ set, and mapping one identifier into another relative to a set of objects and they demultiplex messagesreceived from the network
+ bindings. Protocol implementations use these routines to translate to one of their session objects. A protocol object supports three
+ identifiers extracted from messages headers-e.g., addresses, operations for creating session objects:
+ port numbers-into capabilities for kernel objects. Third, a set           session = open(protoco1, invokingprotocol,
+ of event manager routines provides an alarm clock facility. The              participant-set)
+ event manager lets a protocol specify a timer event as a procedure        open-enabIe(protocol,        invokingprotocol,participant-set)
+ that is to be called at some future time. By registering a procedure      session = open-done(protoco1, invokingprotocol,
+ with the event manager, protocols are able to timeout and act on             participant-set)
+ messages that have not been acknowledged.                             Intuitively, a high-level protocol invokes a low-level protocol’s
+    Finally, the x-kernel provides an infrastructure that supports open operation to create a session; that session is said to be in
+ communication objects. Although the x-kernel is written in C, the low-level protocol’s class and created on behalf of the high-
+ the infrastructure enforces a minimal object-oriented style on level protocol.’ Each protocol object is given a capability for
+ protocol and session objects, that is, each object supports a the low-level protocols upon which it depends at configuration
+uniform set of operations. The relationships between communica- time. The capability for the invoking protocol passed to the open
+tion objects-i.e., which protocols depend on which others-are          operation serves as the newly created session’s handle on that
+defined using either a simple textual graph description language protocol. In the case of open-enable, the high-level protocol
+or an X-windows based graph editor. A composition tool reads passes a capability for itself to a low-level protocol. At some
+this graph and generates C code that creates and initializes the future time, the latter protocol invokes the former protocol’s
+protocols in a “bottom-up” order.                                      open-done operation to inform the high-level protocol that it has
+    Each x-kernel protocol is implemented as a collection of C created a session on its behalf. Thus, the first operation supports
+source files. These files implement both the operations on the session creation triggered by a user process (an active open),
+protocol object that represents the protocol, and the operations while the second and third operations, taken together, support
+on its associated session objects. Each operation is implemented sessioncreation triggered by a messagearriving from the network
+as a C function.                                                       (a passive open).
+    Both protocols and sessions are represented using heap al-            The participant-set argument to all three operations identifies
+located data structures that contain state (data) specific to the the set of participants that are to communicate via the created
+object and an array of pointers to the functions that implement session. By convention, the first element of that set is the local
+the operations on the object. Protocol objects are created and participant. In the case of open and open-done, all members of
+initialized at kernel boot time. W h e n a protocol is initialized, the participant set must be given. In contrast, not all the partici-
+it is given a capability for each protocol on which it depends, pants need be specified when open-enable is invoked, although
+as defined by the graph. Data global to the protocol-e.g.,             an identifier for the local participant must be present. Participants
+unused port numbers, the local host address, capabilities for identify themselves and their peers with host addresses, port
+other protocols on which this one depends-is contained in numbers, protocol numbers, and so on; these identifiers are
+the protocol state. Because sessions represent connections, they called external ids. Each protocol object’s open and open-enable
+are created and destroyed when connections are established and operations use the map routines to save bindings of these external
+terminated. The session-specific state includes capabilities for ids to capabilities for session objects (in the case of open) and
+other session and protocol objects as well as whatever state protocol objects (in the case of open-enable). Such capabilities
+is necessary to implement the state machine associated with a for operating system objects are known as internal ids.
+connection.
+    So that the top-most kernel protocols need not be aware that         2 W e use the Smalltalk notion of classes: a protocol corresponds to a class
+they lie adjacent to the user/kernel boundary, user processesare and a session corresponds to an instance of that class 1121.
+HUTCHINSON AND PETERSON: THE x-KERNEL                                                                                                             6-l
+
+
+   Consider, for example, a high-level protocol object p that                                         oneormoreSessMns
+                                                                                                      in p’s class
+depends on a low-level protocol object q. Suppose p invokes
+q’s open operation with the participant set {local-port, re-
+mote port}. p might do this because some higher-level protocol
+had invoked its open operation. The implementation of q’s
+open would initialize a new session s and save the binding
+(local-port, remote-port) --+ s in a map. Similarly, should p
+invoke q’s open-enable operation with the singleton participant
+set {local-port}, q’s implementation of open-enable would save
+the binding local-port + p in a map.3
+   In addition to creating sessions, each protocol also “switches”
+messagesreceived from the network to one of its sessions with a
+  demux( protocol,     message)
+operation. demux takes a message as an argument, and either
+passes the message to one of its sessions, or creates a new
+                                                                                      Fig. 2. Relationships between protocols and sessions.
+session-using the open-done operation-and then passes the
+message to it. In the case of a protocol like IP, demux might
+also “route” the message to some other lower-level session.                 a user process down to a network device and solid edges mark
+Each protocol object’s demux operation makes the decision as                the path a message travels from a network device up to a user
+to which session should receive the message by first extracting             process.
+the appropriate external id(s) from the message’s header. It then
+uses a map routine to translate the external id(s) into either an
+internal id for one of its sessions (in which case demux passes                    D. Message Objects
+the message to that session) or into an internal id for some high-                    Conceptually, messages are active objects. They either arrive
+level protocol (in which case demux invokes that protocol’s                        at the bottom of the kernel (i.e., at a device) and flow upward
+open-done operation and passes the message to the resulting                        to a user process, or they arrive at the top of the kernel
+session).                                                                          (i.e., a user process generates them) and flow downward to a
+   For example, given the invocations of open and open-enable                      device. While flowing downward, a message visits a series of
+outlined above, q’s demux operation would first extract the                        sessions via their push operations. While flowing upward, a
+local-port and remote-port fields from the message header                          message alternatively visits a protocol via its demux operation
+and attempt to map the pair (local port, remote-port) into                         and then a session in that protocol’s class via its pop operation.
+some session object s. If successful,-it would pass the mes-                       As a message visits a session on its way down, headers are
+sage on to session s. If unsuccessful, q’s demux would next                        added, the message may fragment into multiple message objects,
+try to map local-port into some protocol object p. If the                          or the message may suspend itself while waiting for a reply
+map manager supports such a binding, q’s demux would then                          message. As a message visits a session on the way up, headers
+invoke p’s open-done operation with the participant set {lo-                       are stripped, the message may suspend itself while waiting to
+cal-port, remote-port}-yielding       some session s’-and then                     reassemble into a larger message, or the message may serialize
+pass the message on to s’.                                                         itself with sibling messages. The data portion of a message
+                                                                                   is manipulated-e.g., headers attached or stripped, fragments
+C. Session Objects                                                                 created or reassembled-using the buffer management routines
+                                                                                   mentioned in Section II-A.
+    A session is an instance of a protocol created at runtime as
+a result of an open or an open:done operation. Intuitively, a                         When an incoming message arrives at the network/kernel
+                                                                                   boundary (i.e., the network device interrupts), a kernel process
+session corresponds to the end-point of a network connection; i.e.,
+it interprets messages and maintains state information associated is dispatched to shepherd it through a series of protocol and
+with a connection. For example, TCP session objects implement session objects; this process begins by invoking the lowest-
+                                                                                   level protocol’s demux operation. Should the message eventually
+the sliding window algorithm and associated message buffers, IP
+session objects fragment and reassemble datagrams, and Psync reach the user/kernel boundary, the shepherd process does an
+session objects maintain context graphs. UDP session objects are upcall and continues executing as a user process. The kernel
+trivial; they only add and strip UDP headers.                                      process is returned to a pool and made available for reuse
+    Sessions support two primary operations:                                       whenever the initial protocol’s demux operation returns or the
+                                                                                   message suspends itself in some session object. In the case of
+    push(session, message)                                                         outgoing messages, the user process does a system call and
+    pop(session, message)                                                          becomes a kernel process. This process then shepherds the
+The first is invoked by a high-level session to pass a message message through the kernel. Thus, when the message does not
+down to some low-level session. The second is invoked by the encounter contention for resources, it is possible to send or
+demux operation of a protocol to pass a message up to one of receive a message with no process switches. Finally, messages
+its sessions. Fig. 2 schematically depicts a session, denoted s:, that are suspended within some session object can later be
+that is in protocol q’s class and was created-either directly reactivated by a process created as the result of a timer event.
+via open or indirectly via open-enable and open-done-by
+protocol p. Dotted edges mark the path a message travels from
+                                                                                                            III. EXAMPLES
+   3 For simplicity, we use p both to refer to a particular protocol and to denote
+a capability for that protocol. Similarly, we use s both to refer to a particular     A composition of protocol and session objects form a path
+session and to denote a capability for that session.                               through the kernel that messages follow. For example, consider
+                                                           IEEE TRANSAmIONS    ON SOFTWARE     ENGINEERING,    VOL.   17, NO. 1, JANUARY   1991
+
+
+
+                             Emerald-RTS
+
+                                   I
+                                 UDP
+
+                                   I
+                                  IP
+
+
+                                 ETH
+                Fig. 3.   Example suite of protocols.
+
+
+an x-kernel configured with the suite of protocol objects given in
+Fig. 3, where Emerald-RTS is a protocol object that implements
+the run time support system for the Emerald programming
+language [4] and ETH is a protocol object that corresponds to the
+ethernet driver. In this scenario, one high-level participant-an
+Emerald object-sends a message to another Emerald object
+identified with Emerald-ID eid. This identifier is only meaningful
+in the context of protocol Emerald-RTS. Likewise, Emerald-RTS
+is known as port2005 in the context of UDP, which is in turn
+known as protocol17 in the context of IP, and so on. A set of                   Fig. 4.   Example, protocol and session objects.
+protocols on a particular host are known in the context of that
+host.
+   As a session at one level opens a session at the next lower       In contrast, suppose sE$r” is a UDP session indirectly created by
+level, it identifies itself and the peer(s) with which it wants      a server process that waits for communication. In this case, s$’
+to communicate. Emerald-RTS, for example, opens a UDP                is created by pi, invoking pUdp’s open-done operation, when
+session with a participant set identifying itself with the rela-
+                                                                     a message arrives at p,, ‘s demux operation. Session s$ then
+tive address port2005, and its peer with the absolute address
+                                                                     invokes &&,‘s demux operation, which in turn creates safe”.
+(port2005, host192.12.69.5). Thus, a message sent to a peer
+participant is pushed down through several session objects on            Once established, either by a client as in the case of sf: and
+the source host, each of which attaches header information that      syz;“‘, or by a server and a message arriving from the network
+facilitates the message being popped up through the appropriate      as in the case of s,updand s$r3, the flow of messages through
+set of sessions and protocols on the destination host. In other      the protocols and sessions is identical. For example, whenever
+words, the headers attached to the outgoing message specify the      srztrl has a message to send, it invokes si:‘s, push operation,
+path the message should follow when it reaches the destination       which attaches an IP header and pushes the message to some
+node. In this example, the path would be denoted by the “path        lower-level session. Messages that arrive from the network are
+name”                                                                eventually passed up to pzpr which examines the header and
+                                                                     pops the message to s!F if the protocol number is “6” and the
+                eid@portd005@protocol IX@. . .                (1)    source host address matches hl. Messages popped to IP session
+                                                                     Sj;   are held there for reassembly into IP datagrams. Complete
+Intuitively, the session’s push operation constructs this path       datagrams are then passed up to ptcp’s demux, which in turn
+name by pushing participant identifiers onto the message, and        pops the message into the appropriate TCP session based on the
+the session’s pop operation consumes pieces of the path name         source/destination ports contained in the message.Finally, when
+by popping participant identifiers off the message.                  syzirl is eventually closed, it in turn closes s~E,~,and so on.
+   As a second example, consider the collection of protocols
+and sessions depicted in Fig. 4. The example consists of three
+protocols, denoted ptcp, pu,+, and pi,; IP sessions s$ and s~~dp;
+TCP sessions sy’,sperl  and ~y$~‘; and UDP session sE;y3. Each                              IV. PERFORMANCE
+edge in the figure denotes a capability one object possess for          This section reports on three sets of experiments designed
+another, where the edge labels denote participant identifiers that to evaluate the performance of the x-kernel. The first measures
+have been bound to the capability.                                    the overhead of various components of the x-kernel, the second
+   Initially, note that p;, possessesa capability (labeled “6”) for compares the performance of the x-kernel to that of a production
+p,,, and a capability (labeled “17”) for pudp, each the result of the operating system (Berkeley Unix) [17], and the third compares
+higher-level protocol invoking pip’s open-enable operation with the x-kernel to an experimental network operating system (Sprite)
+the participant set consisting of the invoking object’s protocol [21]. The purpose of the latter two experiments is to quantify
+number. In practice, such invocations occur at boot time as a the impact the architecture has on protocol performance by .
+result of initialization code within each protocol object.            comparing protocols implemented in the x-kernel with protocols
+   Next, consider how the sessions were created. Suppose s&Trl implemented in two less structured environments.
+is a TCP session created by a client process that initiates             The experiments were conducted on a pair of Sun 317% con-
+communication. Session stucsperl  directly opens IP session s:F by nected by an isolated 10 Mbs ethernet. The numbers presented
+invoking pip’s open operation, specifying both the source and were derived through two levels of aggregation. Each experiment
+destination IP addresses.Session s$, in turn, creates a template involved executing some mechanism 10 000 times, and recording
+header for all messages sent via that session and saves it in its the elapsed time every 1000 executions. The average of these ten
+internal state; it may also open one or more lower-level sessions. elapsed times is reported. Although we do not report the standard
+HUTCHINSON   AND PETERSON: THE X-KERNEL                                                                                            69
+
+
+                              TABLE    I                                                         TABLE   II
+               COST OF VARIOUS    SYSTEM COMP~NEIWS                            PERCENTAGE OF TIME SPENT IN EACH COMPONENT
+
+
+                    Component              Time (ps)                                                          Percentage
+
+                     Context Switch            38                                     Buffer Manager             21.8
+                    Dispath Process           135                                         Id Manager              1.8
+                 Open/Close Session           260                                            Ethernet            43.7
+                   Enter/Exit Kernel           20                                                  IP             9.8
+                     Enter/Exit User          254                                               UDP               2.8
+                   Copy 1024 Bytes            250                                  Interface Overhead             5.3
+                                                                                   Boundary Crossing              5.9
+                                                                                 Process Management               8.6
+deviation of the various experiments, they were observed to be                                 Other              0.3
+on the order of the clock granularity.
+   W h e n interpreting the results presented in this section, it is
+important to keep in mind that we are interested in quantifying         As one would expect, given the simplicity of IP and UDP, the
+how operating systems influence protocol performance, not in         performance is dominated by the time spent in the ethernet driver
+raw protocol performance, per se. There are many implementa-         manipulating the controller. In addition, we make the following
+tion strategies that can be employed independent of the operating    four observations. First, the time spent in the buffer manager is
+system in which a given protocol is implemented. It is also          significant: over one fifth of the total. Because 1 byte messages
+possible that coding techniques differ from one implementation to    were being exchanged, this percentage is independent of the
+another. W e attempt to control for these strategies and techniques, cost of copying messages across the user/kernel boundary; it
+commenting on variations in protocol implementations when            includes only those operations necessaryto add and strip headers.
+appropriate.                                                         Second, the 5.3% reported for the interface overhead corresponds
+                                                                     to the object infrastructure imposed on top of the C procedures
+A. Overhead                                                          that implement protocols and sessions. This percentage is both
+                                                                     small and greatly over stated. In practice, this infrastructure
+   An initial set of experiments measure the overhead in per- is implemented by macros, but for the sake of profiling, this
+forming several performance-critical operations; the results are functionality had to be temporarily elevated to procedure status.
+presented in Table I.                                                Third, the percentage of time spent crossing the user/kernel
+   Three factors are of particular importance. First, the overhead boundary is also fairly insignificant, but as the message size
+to dispatch a light-weight process to shepherd a messagethrough increases, so does this penalty. Finally, the process management
+the x-kernel is 135 ps. Dispatching a shepherd process costs component (8.6%) indicates that while the cost of dispatching
+two context switches and about 50 hs in additional overhead. a process to shepherd each message through the kernel is not
+This overhead is small enough, relative to the rate at which negligible, neither does it dominate performance.
+packets are delivered by the ethernet, that the x-kernel drops
+less than 1 in a million packets when configured with the ethernet
+controller in promiscuous mode. Second, crossing the user/kernel B. Comparisons to Unix
+boundary costs 20 ps in the user-to-kernel direction and 254 ps         The second set of experiments involve comparing the
+in the kernel-to-user direction. The latter is an order of magnitude x-kernel to Berkeley Unix. For the purpose of this comparison,
+more expensive because there is no hardware analog of a system we measured the performance of the DARPA Internet protocol
+trap that can be used to implement upcalls. Thus, for a pair suite-IP, UDP, and TCP-along with Sun RPC [32]. W e used
+of user processes to exchange two messages involves crossing SunOS Release 4.0.3, a variant of 4.3 Berkeley Unix that has
+the user/kernel boundary twice in the downward direction and been tuned for Sun Microsystem workstations. SunOS release
+twice in the upward direction, for a total boundary penalty 4.0.3 also includes System V streams, but streams are not used
+of 2 x 20 hs + 254 ~CLS   = 548 KS. Third, the cost of coercing by the implementation of IP, UDP, or TCP. They do, however,
+protocols into our connection-based model is nominal: it costs provide an interface for directly accessing the ethernet protocol.
+260 /JSto open and close a null session. Moreover, this cost can The Unix timings were all made while executing in single user
+usually be avoided by caching open sessions.                         mode; i.e., no other jobs were running.
+   W e next quantify the relative time spent in each part of the        Our objective in comparing the x-kernel to Unix is to quantify
+kernel by collecting profile data on a test run that involved the impact the x-kernel architecture has on protocol performance.
+sending and receiving 10000 l-byte messages using the UDP- Toward this end, it is important to keep two things in mind. First,
+IP-ETH protocol stack. Table II summarizes the percentage of although the Berkeley Unix socket abstraction provides a uniform
+time spent in each component. The percentageswere computed interface to a variety of protocols, this interface is only used
+by dividing the estimated time spent in the procedures that make between user processesand kernel protocols: 1) protocols within
+up each component by the difference between the total elapsed the kernel are not rigidly structured, and 2) the socket interface
+time and the measured idle time. That is, the 21.8% associated is easily separated from the underlying protocols. Thus, once
+with the buffer manager means that 21.8% of the time the kernel the cost of the socket abstraction is accounted for, comparing
+was doing real work-i.e., not running the idle process-it            the implementation of a protocol in Unix and the same protocol
+was executing one of the buffer manager routines. The times in the x-kernel provides a fair measure of the penalty imposed
+reported for each of the protocols-ethernet, IP, and UDP-do          on protocols by the x-kernel’s architecture. Second, so as to
+not include time spent in the buffer or id managers on behalf of eliminate the peculiarities of any given protocol, we consider
+those protocols.                                                     three different end-to-end protocols: UDP, TCP, and RPC. W e
+                                                                         IEEE TRANSACTIONS     ON SOFTWARE      ENGINEERING,    VOL.     17, NO. 1, JANUARY   1991
+
+
+                                TABLE III                                                                           TABLE IV
+                           USER-TO-USERLATENCY                                                                 INCREMENTALCosTs
+
+             ProtocolStack          x-Kernel (ms)       Unix (ms)                                Component x-kernel (ms)                Unix (ms)
+                     ETH                 1.68              4.87                                      UDP              0.11                 0.25
+                  IP-ETH                 1.89              5.62                                      TCP              1.41                 1.30
+               UDP-IP-ETH                2.00              5.36                                      RCP              2.00                  3.84
+               TCP-IP-ETH                3.30              6.10                                    Interface          0.61             1.9Ol2.25l2.75
+            RPC-UDP-IP-ETH               4.00              9.20
+
+                                                                                   using the socket abstraction; i.e., we measured kernel-to-kernel
+believe these protocols provide a representative sample because                    latency rather than user-to-user latency. The kernel-to-kernel
+they range from the extremely trivial UDP protocol to the                          latency is 2.90 ms for IP, 3.15 ms for UDP, and 4.20 ms for
+extremely complex TCP protocol.                                                    TCP. These numbers are in turn used to compute the incremental
+   1) User-to-User Latency: Initially, we measured latency be-                     cost of UDP and TCP; e.g., TCP latency in Unix is given by
+tween a pair of user processesexchanging 1 byte messagesusing                      4.20 ms - 2.90 ms = 1.30 ms. W e compute the incremental cost
+different protocol stacks. The results are presented in Table III.                 of RPC in Unix by subtracting the UDP user-to-user latency from
+Each row in the table is labeled with the protocol stack being                     the user-to-user RPC latency.
+measured. In the x-kernel, all the protocols are implemented in                       Finally, by subtracting the kernel-to-kernel latency from the
+the kernel; only the user processes execute in user space. In                      user-to-user latency for IP, UDP, and TCP, we are able to
+Unix, all the protocols are implemented in the kernel except RPC.                  determine the cost of the network interface to each of these
+Thus, in the case of the RPC-UDP-IP-ETH protocol stack, the                        protocols. In the case of Unix, the cost of the socket interface
+user/kernel boundary is crossed between the user and RPC in the                    to TCP is given by 6.10 ms - 4.20 ms = 1.90 ms. This time
+x-kernel and between RPC and UDP in Unix.                                          includes the cost of crossing the user/kernel boundary and the
+   Although these measurements provide only a course-grain                         overhead imposed by sockets themselves. In the case of the
+comparison of the two systems, they are meaningful in as                           x-kernel, the difference between kernel-to-kernel latency and
+much as we are interested in evaluating each system’s overall,                     user-to-user latency yields a uniform 0.61 ms overhead for all
+integrated architecture. Furthermore, the measurementshighlight                    protocol stacks.
+an interesting anomaly in Unix: it costs more to send a message                       UDP is a trivial protocol: it only adds and strips an 8 byte
+using the IP-ETH protocol stack than it does using the UDP-                        header and demultiplexes incoming messagesto the appropriate
+IP-ETH protocol stack. W e refer to this as the cost of changing                   port. There is no room for variation in the implementation
+abstractions. That is, the socket abstraction is tailored to provide               strategy adopted by the x-kernel and Unix implementations. As a
+an interface to transport protocols like UDP and TCP; there is                     consequence,the incremental cost of UDP is a fair representation
+an added cost for using sockets as an interface to a network                       of the minimal cost of a base protocol in the two systems.’
+protocol like IP.4 Our experience with Unix also suggests that                     While it is possible that the 140 ps difference between the
+the 4.87 ms round trip delay for ETH is inflated by a significant                  two implementations can be attributed to coding techniques,
+abstraction changing penalty. In particular, because we had to                     the protocol is simple enough and the Unix implementation
+use the System V streams mechanism available in SunOS to                           mature enough that we attribute the difference to the underlying
+directly accessthe ethernet-but SunOS uses the Berkeley Unix                       architecture.
+representation for messages internally-each message had to                            TCP is a complex protocol whose implementation can vary
+be translated between its Berkeley Unix representation and its                     significantly from system to system. To control for this, we
+System V Unix representation. Note that 4.87 ms is not a fair                      directly ported the Unix implementation to the x-kernel. Thus,
+measure of ETH when it is incorporated in the other protocol                       the difference between the incremental cost of TCP in the two
+stacks we measured-e.g., UDP-IP-ETH-because the stream                             systems quantifies the penalty for coercing a complex protocol
+abstraction is not used in those cases.                                            into the x-kernel’s architecture. Our experiments quantify this
+   The limitation of the preceding experiments is that they are not                penalty to be 110 ps, or less than 10%. W e attribute this
+fine-grained enough to indicate where each kernel is spending its                  difference to TCP’s dependency on the IP header. Specifi-
+time. To correct for this, we measured the incremental cost for                    cally, TCP uses IP’s length field and it computes a checksum
+the three end-to-end protocols: UDP, TCP, and RPC. The results                     over both the TCP message and the IP header. Whereas the
+are presented in Table IV.                                                         x-kernel maintains a strong separation between protocols by
+   In the case of the x-kernel, the incremental cost for each                      forcing TCP to query IP for the necessary information using a
+protocol is computed by subtracting the measured latency for                       control operation, the Unix implementation gains some efficiency
+appropriate pairs of protocol stacks; e.g., TCP latency in the                     by directly accessing the IP header; i.e., it violates the boundary
+x-kernel is given by 3.30 ms - 1.89 ms = 1.41 ms. That is,                         between the two protocols. While one could argue that the rigid
+crossing the TCP protocol four times-twice outgoing and twice                      separation of protocols enforced by the x-kernel’s architecture
+incoming-takes 1.41 ms. In the case of Unix, we modified                           is overly restrictive, we believe the more accurate conclusion to
+the Unix kernel so that each protocol would “reflect” incoming                     draw from this experiment is that protocol specifications should
+messagesback to their source rather than pass them up to the                       eliminate unnecessary dependencies on other protocols. In this
+appropriate higher level protocol. In doing this, we effectively                   particular case, having TCP depend on information in the IP
+eliminate the overhead for entering and exiting the kernel and                     header does not contribute to the efficiency of TCP; it is only
+                                                                                     5 By “base” protocol, we mean the simplest protocol that does any real work.
+   41tis possiblethat this costis not intrinsic,but that the IP/socket interface   One could imagine a simpler “null” protocol that passes messages through
+is lessoptimizedbecauseit is usedlessoften.                                        unchanged.
+HUTCHINSON   AND   PETERSON:   THE x-KERNEL                                                                                          71
+
+
+                                                                                                  TABLE V
+an artifact of TCP and IP being designed in conjunction with                                     THROUGHPUT
+each other.
+   RPC is also a complex protocol, but instead of porting the                                  x-Kernel
+Unix implementation into the x-kernel, we implemented RPC                           Protocol (kilobytes/s) (kil~$rt&)
+in the x-kernel from scratch. Thus, comparing the incremental
+cost of RPC in the two systems provides a handle on the                              UDP          528            391
+                                                                                     TCP          417            303
+potential advantages of implementing a complex protocol in a
+highly structured system. Because this experiment was much
+less controlled than the other two, we are only able to draw          sending host and once on the receiving host. W e have also
+the following weaker conclusions. First, because the x-kernel         experimented with an implementation of the x-kernel that uses
+implementation is in the kernel rather than user space, it is able    page remapping instead of data copying. Remapping is fairly
+to take advantage of kernel support not available to user-based       simple on the sending host, but difficult on the receiving host
+implementations. For example, the kernel-based implementation         because the data contained in the incoming fragments must be
+is able to avoid unnecessary data copying by using the kernel’s       caught in consecutive buffers that begin on a page boundary. A
+buffer manager. While this makes the comparison somewhat              companion paper describes how this is done in the x-kernel [20].
+unfair, it is important to note it is the structure provided by          3) Support Routines: In addition to evaluating the perfor-
+the x-kernel that makes it possible to implement a new protocol       mance of the architecture as a whole, we also quantify the impact
+like RPC to the kernel. In contrast, implementing RPC in the          the underlying support routines have on protocol performance.
+Unix kernel would be a much more difficult task. Second, the          Specifically, we are interested in seeing the relative difference
+x-kernel implementation is dramatically cleaner than the Unix         between the way messages and identifiers are managed in the
+implementation. Although difficult to quantify, our experience        x-kernel and Unix.
+suggests that the additional structure provided by the x-kernel          First, Fig. 5 shows the performance of UDP in the x-kernel and
+led to this more efficient implementation. W e do not believe,        Unix for message sizes ranging from 1 byte to 1400 bytes; i.e.,
+however, that our experience with RPC is universally applicable.      the UDP message fits in a single IP datagram. It is interesting
+For example, it is doubtful that a “from scratch” implementation      to note that the incremental cost of sending 100 bytes in the
+of TCP in the x-kernel would be significantly more efficient than     x-kernel is consistently 0.25 ms, while the incremental cost in
+the Unix implementation.                                              Unix varies significantly. In particular, the Unix curve can be
+   Finally, it is clear that the Unix socket abstraction is both      divided into four distinct parts: 1) the incremental cost of going
+expensive and nonuniform. Sockets were initially designed as an       from 200 bytes to 500 bytes is 0.57 ms per 100 bytes; 2) the
+interface to TCP; coercing UDP and IP into the socket abstraction     cost of sending 600 bytes is over 1 ms less than the cost of
+involves additional cost. Furthermore, independent measurements       sending 500 bytes; 3) the incremental cost of sending 600 to
+of the time it takes to enter and exit the Unix kernel and the time    1000 bytes is 0.25 ms per 100 bytes (same as the x-kernel); and
+it takes to do a context switch in Unix indicate that roughly         4) the incremental cost of sending between 1100 and 1400 bytes
+213 of the Unix interface time can be attributed to the overhead      is again 0.57 ms per 100 bytes.
+of sockets themselves. In contrast, 0.55 ms of the 0.61 ms of            The reason for this wide difference of behavior is that Unix
+the interface cost for the x-kernel is associated with the cost of    does not provide a uniform message/buffer management system.
+crossing the user/kernel boundary; it costs only 50 ps to create      Instead, it is the responsibility of each protocol to represent a
+an initial message buffer that holds the message. Note that this      message as a linked list of two different storage units; mbufs
+50 ps cost is not repeated between protocols within the kernel.       which hold up to 118 bytes of data and pages which hold up to
+   2) User-to-User Throughput: W e also measured user-to-user          1024 bytes of data [18]. Thus, the difference between the four
+throughput of UDP and TCP. Table V summarizes the results. In         parts of the Unix curve can be explained as follows: 1) a new
+the case of UDP, we sent a 16 kilobyte message from the source        mbuf is allocated for each 118 bytes (i.e., 0.57 ms/2 = 0.28 ms
+process to the destination process and a 1 byte message in reply.     is the cost of using an mbuf); 2) a page is allocated when the
+This test was run using the UDP-IP-ETH protocol stack. To make        message size reaches 512 bytes (half a page); 3) the rest of the
+the experiment fair, the x-kernel adopts the Unix IP fragmentation    page is filled without the need to allocate additional memory; and
+strategy of breaking large messages into 1 kilobyte datagrams;        4) additional mbufs are used. Thus, the difference in the cost of
+e.g., sending a 16 kilobyte user message involves transmitting        sending 500 bytes and 600 bytes in Unix concretely demonstrates
+sixteen ethernet packets. by sending the maximum number of            the performance penalty involved in using the “wrong” buffer
+bytes (1500) in each ethernet packet, we are able to improve the      management strategy; in this case, the penalty is 14%. Perhaps
+x-kernel user-to-user throughput to 604 kilobytes/s.                  just as important as this quantitative impact is the “qualitative”
+   In the case of TCP, we measured the time necessary to send         difference between the buffer management scheme offered by
+1 megabyte from a source process to a destination process. The        the two systems: someone had to think about and write the data
+source process sends the 1 megabyte by writing 1024 1 kilobyte        buffering code that results in the Unix performance curve.
+messages to TCP. Similarly, the destination process reads                Second, Fig. 6 gives the performance of the x-kernel and Unix
+1 kilobyte blocks. In both cases TCP was configured with              as a function of the number of open connections. Up to this point
+a 4 kilobyte sending and receiving window size, effectively           all of the experiments have been run with a single UDP port
+resulting in stop-and-wait behavior. This explains why the TCP        open at each host. (The same is true for the TCP experiments.)
+throughput for both systems is less than the UDP throughput,          Thus, UDP’s demux operation (and the corresponding code in
+which effectively uses the blast algorithm. Finally, as in the        Unix) had a trivial decision to make: there was only one session
+UDP experiment, the data is actually transmitted in 1 kilobyte        (socket) to pass the message to. As illustrated by the graph, the
+IP packets.                                                           x-kernel exhibits constant performance as the number of ports
+   In the case of both Unix and the x-kernel, the user data           increases, while Unix exhibits linear performance. The reason
+is copied across the user/kernel boundary twice-once on the           for this is simple: the x-kernel’s map manager implements a hash
+72                                                                                        IEEE TRANSACTIONS                     ON SOFTWARE                 ENGINEERING,           VOL.   17, NO. 1, JANUARY   1991
+
+
+
+
+                                       9-
+
+                                       s-
+
+
+
+
+                                       o-
+                                                I              I                 I            I              I             I             I               I_             m
+                                                0             2m                400          &lo            so0          lax,          1x0             1400
+
+                                                                                 Fig. 5.       Message manager.
+
+
+
+
+                                 3-
+
+                                 2 -        c -..... . . . ...-..*        .II.._.._____   .., .-.....- - --.......--..          . . . ..~....--.---...--~           -
+
+
+                                 l-
+
+
+                                 o-
+                                                                      I                    I                       I                    I                      I
+                                                                                                                                                                            Parr
+                                        0                            2n                   40                      60                   So                     100
+
+                                                                                      Fig. 6. Map manager.
+
+
+table, while Unix UDP maintains a linear list of open ports. The                                            Sun RPC. Finally, the x-kernel’s underlying support routines
+important point is that under typical loads (approximately 40                                               perform better than their Unix counterparts under increased load.
+open ports) Unix incurs a 1 0 % performance penalty for using
+the “wrong” mechanism for managing identifiers.                                                             C. Comparisons to Sprite
+  4) Summary: In summary, this set of experiments supports
+the following conclusions. First, the x-kernel is significantly                                                The third set of experiments involve comparing the x-kernel to
+faster than Unix when measured at a course-grain level. Second,                                             the Sprite operating system. Comparing the x-kernel to Sprite is
+the cost of the Unix socket interface is the leading reason                                                 interesting because, like other recent experimental systems [7],
+why user-to-user performance is significantly worse in Unix                                                 [35], Sprite is optimized to support a particular RPC protocol.
+than it is in the x-kernel. Third, the performance of individual                                            Specifically, Sprite implements an RPC protocol that supports at
+protocols in the two systems-when controlling for differences                                               most once semantics [37]. W e compared an implementation of
+in implementation techniques-are comparable. This supports                                                  Sprite RPC in the x-kernel with a native implementation whose
+our claim that the x-kernels’ architecture does not negatively                                              performance was also measured on a Sun 3/75.6 Both versions
+impact protocol performance. Fourth, the additional structure
+                                                                                                               6The 2.6 ms latency reported for Sprite is computed by subtracting 0.2 ms
+provided by the x-kernel has the potential to drastically improve                                           from the reported time of 2.8 ms. The reported time included a crash/recover
+protocol performance, as illustrated by our implementation of                                               monitor not implemented in the x-kernel version.
+HUTCHINSON   AND   PETERSON:   THEx-KERNEL                                                                                               73
+
+
+                               TABLE VI
+                      LATENCY AND THROUGHPUT
+                                                                        Section IV correspond to protocol implementations that have not
+                                                                        been heavily optimized. It was not necessary to do fine-grained
+                                                                        optimizations of each protocol because the architecture itself is
+                                                                        so highly tuned. Instead, one only applies a small collection of
+                                                                        high-level “efficiency rules,” such as always to cache open ses-
+                                                                        sions, not touch the header any more than necessary,preallocate
+                                                                        headers,optimize for the common case, and never copy data. Our
+                                                                        experience is that these rules apply uniformly across all protocols.
+                                                                        Of course, no amount of operating system optimizations can
+were compiled using the standard Sun C compiler. The latency compensate for poor implementation strategies; e.g., a poorly
+and throughput results are presented in Table VI.                       tuned timeout strategy.
+   The key observation is that Sprite RPC performs just as well in         Second, by making the structure explicit, we have been able to
+the x-kernel as it does in the Sprite kernel, and this performance make the interface to protocols uniform. This has the desirable
+is competitive with other fast RPC implementations [29]. Being effect of making performance predictable, which is a necessary
+able to implement a protocol in the x-kernel that is as efficient feature when one is designing new protocols. For example, by
+as an implementation in a kernel that was designed around knowing the cost of individual protocol layers, one is able to
+the protocol further substantiates our claim that the x-kernel’s predict the cost of composing those protocols. As illustrated by
+architecture does not negatively impact protocol performance.           Berkeley Unix, “predictability” is not a universal characteristic.
+                                                                           The potential down side of this additional structure is that it
+                                                                        degrades protocol performance. Our experience is that the most
+                            V. EXPERIENCE                               critical factor is the extent to which the x-kernel’s architecture
+   To date, we have implemented a large body of protocols in limits a given protocol’s ability to accessinformation about other
+the x-kernel, including:                                                protocols that it needs to make decisions. For example, in order
+   l   Application-level protocols: Sun NFS [31], TFTP [30], DNS to avoid refragmentation of the packets it sends via IP, TCP
+                                                                        needs to know the maximum transmission unit of the underlying
+       [19], the run time support system for the Emerald program-
+       ming language, the run time support system for the SR            network   protocol, in our case, the ethernet. Whereas an ad hoc
+       programming language [2].                                        implementation of TCP might learn this information by looking
+                                                                        in some global data structure, the x-kernel implementation is able
+   l   Interprocess communication protocols: UDP, TCP, Psync,
+                                                                        to learn the same information by invoking a control operation
+       VMTP [6], Sun RPC, Sprite RPC;
+                                                                        on IP. While one might guess that an unwieldy number of
+   l   Network protocols: IP;
+   l   Auxiliary protocols: ARP [24], ICMP [26];                        different control operations would be necessary to access all the
+   l   Device protocols: ethernet drivers, display drivers, serial line information protocols need, our experience is that a relatively
+                                                                        small number of control operations is sufficient; i.e., on the
+       drivers.
+                                                                        order of a dozen. By using these control operations, protocols
+   Generally speaking, our experience implementing protocols in implemented in the x-kernel are able to gain the same advantage
+the x-kernel has been very positive. By taking over much of the available to ad hoc implementations.
+“bookkeeping” responsibility, the kernel frees the programmer              Also, it is worth noting that TCP is the worst protocol
+to concentrate on the communication function being provided by we’ve encountered at depending on information from other
+the protocol. This section reports our experience implementing protocols-not only does it depend on information from other
+protocols in the x-kernel in more detail. Note that because protocols, but it also depends on their headers-and even it
+System V streams are similar to the x-kernel in many ways, this suffers at most a 1 0 % performance penalty for using control
+section also draws direct comparisons between the two systems. operations rather than directly reading shared memory. Further-
+                                                                        more, this 1 0 % penalty is inflated by the fact that we retrofitted
+A. Explicit Structure                                                   the Unix implementation of TCP into the x-kernel. W e believe a
+   One of the most important features of the x-kernel is that it “from scratch” implementation of TCP in the x-kernel would be
+defines an explicit structure for protocols. Consider two specific as efficient as the Unix implementation.
+aspects of this structure. First, the x-kernel partitions each net-
+work protocol into two disjoint components: the protocol object
+switches messages to the right session and the session object B. Protocol Composition
+implements the protocol’s interpreter. While this separation im-           A second issue involves how the kernel’s communication
+plicitly exists in less structured systems, explicitly embedding the objects are composed to form paths through the kernel. Protocol
+partition into the system makes protocol code easier to write and and session objects are composed at three different times. Ini-
+understand. This is because it forces the protocol implementor tially, protocol objects are statically composed when the kernel
+to distinguish between protocol-wide issues and connection- is configured. For example, TCP is given a capability for IP at
+dependent issues. Second, the x-kernel supports buffer, map, and configuration time. At the time the kernel is booted, each protocol
+event managers that are used by all protocols. Similar support runs some initialization code that invokes open-enable on each
+in other systems is often ad hoc. For example, each protocol is low-level protocol from which it is willing to receive messages.
+responsible for providing its own mechanism for managing ids For example, IP and ARP invoke the ethernet’s openenable,
+in Unix.                                                                TCP and UDP invoke IP’s open-enable, and so on. Finally, at
+   Our experience is that the explicit structure provided by the nmtime, an active entity such as an application program invokes
+x-kernel has two advantages. First, efficient protocol imple- the open operation on some protocol object. The open operation,
+mentations can be achieved without a significant optimization in turn, uses the given participant set to determine which lower-
+effort. For example, the performance numbers presented in level protocol it should open. For example, when an application
+74                                                              IEEE TRANSACTIONS     ON SOFIWARE    ENGINEERING,   VOL.   17, NO. l,JANUARY   1991
+
+
+
+process opens a TCP session, it is the TCP protocol object                     representedin the two paradigms. To illustrate the point, consider
+that decides to open an IP session. In other words, protocol                   the guaranteeseach of the following three protocols make about
+and session objects are recursively composed at run time in the                the order in which messages are delivered: UDP makes no
+x-kernel.                                                                      guarantees,TCP ensuresa total (linear) ordering of messages,and
+   This scheme has two advantages. First, a kernel can be                      Psync preserves only a partial ordering among messages.In the
+configured with only those protocols needed by the application.                case of the process per protocol paradigm, the queue of messages
+For example, we have built an “Emerald-kernel” that contains                   from which each protocol retrieves its next message implicitly
+only those protocols needed to support Emerald programs. In                    enforces a linear ordering on messages.It is therefore well suited
+contrast, many kernels are implemented in a way that makes                     for TCP, but overly restrictive for protocols like UDP and Psync.
+it very difficult to configure in (out) individual protocols. Such             In contrast, because arbitrarily many processes(messages)might
+systems often implement “optional” protocols outside the kernel,               call a protocol object’s demux operation or a session object’s
+and as illustrated by Sun RPC, these protocols are less efficient              pop operation, the process per message paradigm enforces no
+than if they had been implemented in the kernel. Second,                       order on the receipt of messages,and as a consequence,does not
+protocols are not statically bound to each other at configuration              restrict the behavior of protocols like UDP.
+time. As demonstrated elsewhere, the architecture makes it                        It is, of course, possible to enforce any ordering policy by
+possible to dynamically compose protocols [ 151.                               using other synchronization mechanisms such as semaphores.For
+                                                                               example, the x-kernel implementation of TCP treats the adjacent
+C. Process per Message                                                         high-level protocol object as a critical section; i.e., it protects
+                                                                               the demux operation with a mutual exclusion semaphore. This
+   A key aspect of the x-kernel’s design is that processes are enforces a total ordering on the messagesit passesto the adjacent
+associated with messagesrather than protocols. The process per high-level protocol object. As a second example, the implementa-
+message paradigm has the advantage of making it possible to tion of Psync in the x-kernel permits multiple-but not arbitrarily
+deliver a message from a user process to a network device (and many-outstanding calls to the adjacent high-level protocol’s
+vice versa) with no context switches. This paradigm seems well demux operation. In general, our experience suggests that the
+suited for a multiprocessor architecture. In contrast, the process process per message paradigm permits more parallelism, and as
+per protocol paradigm inserts a message queue between each a consequence,is better suited for a multiprocessor architecture.
+protocol and requires a context switch at each level. While it
+has been demonstrated by System V Unix that it is possible to
+implement the process per protocol paradigm efficiently on a D. Kernel Implementation
+uniprocessor,’ it seems likely that a multiprocessor would have                   An important design choice of the x-kernel is that the entire
+to implement a real context switch between each protocol level. communication system is embedded in the kernel. In contrast,
+   Furthermore, there is the issue of whether the process per operating systems with minimal kernels-e.g., Mach [l] and
+message or process per protocol paradigm is more convenient Taos [33]-put the communication system in a user address
+for programming protocols [3]. While the two paradigms are space. One argument often made in favor of minimalist kernels
+duals of each other-each can be simulated in the other-our                     is that they lead to a clean modular design, thereby making it
+experience illustrates two, somewhat subtle, advantageswith the easier to modify and change subsystems. Clearly, the x-kernel is
+process per message paradigm.                                                  able to gain the same advantage. In effect, the x-kernel’s object-
+    First, consider a synchronous send in which the sender is oriented infrastructure forms the “kernel” of the system, with
+blocked until an acknowledgment or reply message is received individual protocols configured in as needed. The entire system
+from the receiver. The process per message paradigm facilitates just happens to run in privileged mode, with the very significant
+synchronous sends in a straightforward manner: after calling a advantage of being more efficient.
+session object’s push operation, the sender’s thread of control                   One could also argue that user code is easier to debug than
+blocks on a semaphore. W h e n the session object eventually is kernel code, and this would be true. To get around this
+receives an acknowledgment or reply message via its pop op- problem, we have built an x-kernel simulator that runs on top
+eration, the process associated with the reply message signals of Unix. Protocol implementors are able to code and debug their
+the sender’s process, thereby allowing it to return. In contrast, protocols in the simulator, and then move them, unchanged, to
+the process per protocol paradigm does not directly support the stand-alone kernel.
+synchronous sends. Instead, the sending process asynchronously                    The key shortcoming of our approach is that because all
+sends the message and then explicitly blocks itself. While a user protocols run in the kernel address space, there is no protection
+process can afford to block itself, a process that implements a between protocols. It is not our intent, however, that arbitrary
+protocol cannot; it has to process the other messages sent to protocols be allowed to execute inside the kernel. There must be
+the protocol. The protocol process must spawn another process a policy by which protocols are tested and approved for inclusion
+to wait for the reply, but this means a synchronous protocol in the kernel. It is also the case that the x-kernel was designed
+must simulate the process per message paradigm. Thus, the for use on personal workstations. In such an environment, it is
+programmer is forced to “step outside” the stream model to not unreasonable to let users run new protocols in the kernel at
+implement an RPC protocol.                                                     their own risk.
+    Second, consider the extent to which the two paradigms restrict
+the receipt of messages;that is, how easily can various disciplines
+                                                                                                       VI. CONCLUSIONS
+for managing the order in which messages are received be
+                                                                                  The major conclusion of this work is that it is possible to build
+   ‘System V multiplexes a single Unix process over a set of stream modules.   an operating system architecture for implementing protocols that
+Sending a message from one module to another via a message queue requires
+two procedure calls in the best case: one to see if the message queue is empty is both general and efficient. Specifically, we have demonstrated
+and one to invoke the next module.                                             that the communication abstractions provided by the x-kernel are
+                                                                               general enough to accommodate a wide range of protocols, yet
+HUTCHINSON   AND   PETERSON:THEx-KERNEL                                                                                                           75
+
+
+
+protocols implemented using those abstractions perform as well             [91 D. D. Clark, “Modularity and efficiency in protocol implementa-
+as, and sometimes better than, their counterpart implementations               tion,” MIT Lab. Comput. Sci., Comput. Syst. Commun. Group,
+                                                                               Request for Comments 817, July 1982.
+in less structured environments.
+   Our experience suggests that the explicit structure provided by
+                                                                         W I D. D. Clark, “The structuring of systems using upcalls,” in
+                                                                               Proc. Tenth ACM Symp, Operating System Principles, Dec. 1985,
+the x-kernel has the following advantages.First, the architecture              pp. 171-180.
+simplifies the process of implementing protocols in the kernel.          1111E. W . Dijkstra, “Hierarchical ordering of sequential processes,”
+                                                                               Actu Inform.. vol. 1. DO. 115-138, 1968.
+This makes it easier to build and test new protocols. It also makes
+                                                                         W I A. Goldberg’and D: Robson, Smalltulk80: The Language and Its
+it possible to implement a variety of RPC protocols in the kernel,             Implementution. Reading, MA: Addison-Wesley, May 1983.
+thereby providing users with efficient accessto a wider collection       1131 A. Habermann, L. Flon, and L. Cooprider, “Modularization and
+of resources. Second, the uniformity of the interface between                  hierarchv in a familv of ooerating svstems,” Commun. ACM,
+                                                                               vol. 19, ‘no. 5, pp. 266-272,‘May 1%78.
+protocols avoids the significant cost of changing abstractions and       P41 N. C. Hutchinson. S. Mishra. L. L. Peterson, and V.T. Thomas,
+makes protocol performance predictable. This feature makes the                 “Tools for implementing network protocols,” Sojbvure-Pructice
+x-kernel conducive to experimenting with new protocols. It also                and Experience, vol. 19, no. 9, pp. 895-916, Sept. 1989.
+makes it possible to build complex protocols by composing a              W I N. C. Hutchinson, L.L. Peterson, M. Abbott, and S. O ’Malley,
+                                                                               “RPC in the x-kernel: Evaluating new design techniques,” in
+collection of single-function protocols. Third, it is possible to              Proc. Twel’h ACM Symp. Operuting SystemPrinciples, Dec. 1989,
+write efficient protocols by tuning the underlying architecture                pp. 91-101.
+rather than heavily optimizing protocols themselves. Again,              W I K.A. Lantz, W . I. Nowicki, and M. M. Theimer, “An empirical
+                                                                               studv of distributed application performance,” IEEE Trans. Soft-
+this facilitates the implementation of both experimental and                   ware Eng., vol. SE-11,no. 10, pp. 1162-1174, Oct. 1985.
+established protocols.                                                   1171 S. J. Leffler. W . N. Jov, and R. S. Fabrv, “4.2BSD networking
+   In addition to using the x-kernel as a vehicle for doing protocol           implementation notes,” in Unix Programmer’s Manual, vol. 26,
+research and as a foundation for building distributed systems,                 Univ. California. Berkelev. Julv 1983.
+we plan to extend the architecture to accommodate alternative            PI S. J. Leffler, M. K. McKu&k, k. J. Karels, and J. S. Quarterman,
+                                                                               The Desipn and Imolementation of the 4.3BSD UNIX Ooerutina
+interfaces to objects. Specifically, we have observed a large class            System. “Reading, MA: Addison-Wesley, 1989.                  *       -
+of objects that appear to be protocols “on the bottom” but provide       [I91 P. Mockapetris, “Domain names-implementation and specifica-
+a completely different interface to their clients. For example,                tion.” USC Inform. Sci. Inst., Marina de1 Rav, CA, Request For
+                                                                               Comments 1035, Nov. 1987..
+a network file system such as Sun’s NFS uses the services                W I S. W . O ’Mallev, M. B. Abbott. N.C. Hutchinson, and L.L. Peter-
+of multiple protocols such as RPC and UDP, but provides the                    son, “A transparent blast facility,” J. Internetworking, vol. 1, no. 2,
+traditional file system interface-e.g., open, close, read, write,              Dec. 1990.
+seek-to its clients. Our extensions take the form of a type              VI J. K. Ousterhout, A. R. Cherenson, F. Douglis, M. N. Nelson, and
+                                                                               B. B. Welch, “The Sprite network operating system,” Computer,
+system for objects that may be configured into the kernel and                  vol. 21, pp. 23-36, Feb. 1988.
+additional tools to support entities other than communication            PA L. L. Peterson,N. Buchholz, and R. D. Schlichting, “Preserving and
+protocols. Finally, we are in the process of porting the x-kernel              usine context information in interurocess communication,” ACM
+to new hardware platforms.                                                     Tra& Comput. Syst., vol. 7, no. 3,pp. 217-246, Aug. 1989.
+                                                                         1231 L. L. Peterson. N. C. Hutchinson. S. W . O ’Mallev, and H. C. Rao,
+                                                                               “The x-kernel; A platform for accessinginternet ;esources,” Com-
+                         ACKNOWLEDGMENT                                        puter, vol. 23, no. 5, May 1990.           -
+                                                                         [241 D. Plummer, “An ethernet address resolution protocol,” USC In-
+   S. O ’Malley, M. Abbott, C. Jeffery, S. Mishra, H. Rao, and                 form. Sci. lust., Marina de1 Ray, CA, Request For Comments 826,
+V. Thomas have contributed to the implementation of protocols                  Nov. 1982.
+in the x-kernel. Also, G. Andrews, R. Schlichting, P. Downey,            v51   J. Postel, “User datagram protocol,” USC Inform. Sci. Inst., Marina
+                                                                               de1 Rav. CA. Reauest For Comments 768. Aue. 1980.
+and the referees made valuable comments on earlier versions of           PI            %ternet niessagecontrol protocol,” US? Inform. Sci. Inst.,
+this paper.                                                                    Marina de1 Ray, CA, Request For Comments 792, Sept. 1981.
+                                                                         [271          “Internet protocol,” USC Inform. Sci. Inst., Marina de1 Ray,
+                             REFERENCES
+                                                                               ZRequest       For Comments 791, Sept. 1981.
+                                                                         PI D. M. Ritchie, “A stream input-output system,” AT&T Bell Lab.
+                                                                               Tech.J., vol. 63, no. 8, pp. 311-324, Oct. 1984.
+ PI M. Accetta, R. Baron, W . Bolosky, D. Golub, R. Rashid,              [291 M. D. Schroeder and M. Burrows, “Performance of Firefly RPC,”
+     A. Tevanian, and M. Young, “Mach: A new kernel foundation for             in Proc. Twelfth ACM Symp. Operating System Principles, Dec.
+     Unix development,” in Proc. Summer Usenix, July 1986.                     1989, pp. 83-90.
+ PI G. R. Andrews and R. A. O&on, “An overview of the SR language        [301 K. Sollins, “The TFTP protocol (revision 2),” USC Inform. Sci.
+     and implementation,” ACM Trans. Program. Lung. Syst., vol. 10,            Inst., Marina de1Ray, CA, Request For Comments 783, June 1981.
+     no. 1, pp. 51-86, Jan. 1988.
+                                                                         [311 Sun Microsystems, Inc., Mountain View, CA, Network File System,
+ I31 M.S. Atkins, “Experiments in SR with different upcall program             Feb. 1986.
+     structures,”ACM Trans. Comput. Syst., vol. 6, no. 4, pp. 365-392,   [321 Sun Microsystem, Inc., Mountain View, CA, Remote Procedure
+     Nov. 1988.                                                                Cull Programming Guide, Feb. 1986.
+ [41 A. Black, N. C. Hutchinson, E. Jul, H. M. Levy, and L. Carter,      [331 C. P. Thacker, L.C. Stewart, and E. H. Satterthwaite, “Firefly: A
+     “Distribution and abstract types in Emerald,”IEEE Trans. Sojiwure         multiprocessor workstation,” IEEE Trans. Comput., vol. 37, no. 8,
+     Eng., vol. SE-13, no. 1, pp. 65-76, Jan. 1987.                            pp. 909-920, Aug. 1988.
+ PI L.-F. Cabrera, E. Hunter, M. Karels, and D. Mosher, “User-process    I341 Univ. Southern California, “Transmission control protocol,” USC
+     communication performance in networks of computers,” IEEE                 Inform. Sci. Inst., Marina de1Ray, CA, Request For Comments 793,
+     Trans. Software Eng., vol. 14, no. 1, pp. 38-53, Jan. 1988.               Sept. 1981.
+ I61 D. R. Cheriton, “VMTP: A transport protocol for the next genera-    [351 R. van Renesse,H. van Staveren, and A. S. Tannenbaum, “Perfor-
+     tion of communications svstems,”in Proc. SIGCOMM ‘86 ,     Svmo..
+                                                                    xI         mance of the world’s fastest distributed operating system,”Operut.
+     Aug. 1987, pp. 406-415:                                                   Syst. Rev., vol. 2, no. 4, pp. 25-34, Oct. 1988.
+ 171 -.     “The V distributed svstem.” Commun. ACM. vol. 31., no. 3.,   [361 R. W . Watson and S. A. Mamrak, “Gaining efficiency in transport
+     pp. 314-333, Mar. 1988. ’                                                 services by appropriate design and implementation choices,”ACM
+ PI D. R. Cheriton and W . Zwaenepoel, “Distributed process groups in          Trans. Comput. Syst., vol. 5, no. 2, pp. 97-120, May 1987.
+     the V kemel,“ACM Trans. Comput. Syst.,vol. 3, no. 2, pp. 77-107,    [371 B.B. Welch, “The Sprite remote procedure call system,” Univ.
+     May 1985.                                                                 California, Berkeley, Tech. Rep. UCB/CSD 86/302, June 1988.
+76                                                                IEEE TRANSACtIONS    ON SOFTWARE    ENGINEERING,   VOL.   17, NO. 1, JANUARY   1991
+
+
+                        Norman C. Hutchinson (S’86-M’86)        received                           Larry  L. Peterson received the B.S. degree in
+                        the B.Sc. degree in computer science from the                              computer science from Keamey State College,
+                        University of Calgary in 1982 and the M.Sc.                                Kearney, NE, and the M.S. and Ph.D. degrees in
+                        and Ph.D. degrees in computer science from the                             computer science from Purdue University, West
+                        University of Washington, Seattle, in 1985 and                             Lafayette, IN.
+                        1987, respectively.                                                           He is currently an Assistant Professor in the
+                           He is currently an Assistant Professor in the                           Department of Computer Science at the Univer-
+                        Department of Computer Science at the Univer-                              sity of Arizona, Tucson. His research focuses
+                        sity of Arizona, Tucson, where he has taught                               on communications in distributed systems. In
+                        courses in programming methodology, operating                              addition to the x-kernel, he has designed and im-
+                        systems, programming languages, and object-                                plemented the Dragonmail conversation-based
+oriented programming. His research interests include programming lan-       messagesystem, the Profile and Univers naming services, and the Psync
+guages and operating systems, specifically those intended for distributed   communication protocol. He participates in various Internet task forces
+environments. In addition to the x-kernel, he has worked on the Emerald     and working groups.
+programming language.                                                         Dr. Peterson is a member of the Association for Computing Machin-
+   Dr. Hutchinson is a member of both the Association for Computing         ery. He is an Associate Editor of the ACM Transactions on Computing
+Machinery and the IEEE Computer Society.                                    Systems.
+

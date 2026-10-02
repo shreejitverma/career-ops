@@ -1,0 +1,37 @@
+Advanced OS                                L05a. Definitions                  Mohamed Ameen Amer
+
+
+
+
+L05a. Definitions
+
+What is a Distributed System?
+•   A Distributed System is a collection of nodes connected by a LAN/WAN.
+•   No physical memory is shared between nodes on a Distributed System. Nodes
+    communicate by sending messages on the network.
+•   The Messaging Time (the time consumed for message communication) is much larger than the Event
+    Computation Time (the time a node takes to complete a process).
+•   Formal definition: A system is distributable if the message transmission time 𝑇𝑚 is not negligible to
+    the time between events in a single process 𝑇𝑒 .
+
+
+Distributed System Events Ordering:
+•   Beliefs:
+    - Processes are sequential.
+    - Send happens before Receive.
+•   Relationships between events:
+    - Happened Before: If 𝑎 happened before 𝑏 (𝑎 → 𝑏), then it’s either:
+        1. 𝑎 is located textually before 𝑏 in the same process.
+        2. 𝑎 and 𝑏 are in different processes, and there’s a communication event that connects 𝑎 and
+             𝑏.
+        Transitivity: if 𝑎 → 𝑏 and 𝑏 → 𝑐 then 𝑎 → 𝑐
+    - Concurrent events: If 𝑎 and 𝑏 are in two different processes and no communication event
+        connects them, then we say that they’re concurrent 𝑎‖𝑏.
+        This is why the “Happened Before” relationship cannot give a complete picture of the system
+        events.
+
+
+
+
+Page | 1
+

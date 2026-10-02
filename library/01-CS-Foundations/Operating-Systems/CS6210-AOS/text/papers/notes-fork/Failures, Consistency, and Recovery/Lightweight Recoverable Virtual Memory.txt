@@ -1,0 +1,1220 @@
+                                         Lightweight                               Recoverable                               Virtual                   Memory
+
+                     M. Satyanarayanan,                        Henry          H. Mashburn,                 Puneet     Kumar,          David       C. Steere, James J. Kistler
+
+                                                                                    School          of Computer            Science
+                                                                                    Carnegie          Mellon         University
+
+
+
+
+                                              Abstract                                                             This      combination           of circumstances             is most likely            to be
+
+        Recoverable virtual memory rekrs to regions                                of a virtual
+                                                                                                                   found       in     situations       involving       the meta-data             of storage
+        address space on which                        transactional guarantees are                                 repositories.            Thus RVM            can benefit             a wide        range     of
+        offered. This paper deseribes RVM, an efficient, Pofiable,                                                 applications         from distributed           file systems and databases, to
+        and easily used implementation of recoverable virtual                                                      object-oriented           repositories,       CAD          tools, and CASE             tools.
+        memory for Unix environments. A unique characteristic                                                      RVM         can also        provide         mntime          support     for        persistent
+        of RVM is that it allows independent control over the                                                      programming             languages.          Since RVM          allows     independent
+        trensactionaJ properties of atotnicity, permanence, and                                                    control over the basic transactional                       properties     of atomicity,
+        serializability. This leads to considerable flexibility in the                                             permanence,              and         serializability,          applications             have
+        use of RVM, potentially          enlarging the range of
+                                                                                                                   considerable          flexibility     in how they use transactions.
+        applications than can benefh from transactions. It also
+        simplifies the layering of functionality such as nesting and                                               It may often be tempting,                   and sometimes              unavoidable,          to
+        distribution. The paper shows that RVM performs well                                                       use a mechanism                 that is richer        in functionality             or better
+        over its intended rattge of usage even though it does not                                                  integrated         with the operating            system.       But our experience
+        benefit from specialized operating system support. It also                                                 has been that such sophistication                           comes at the cost of
+        demonstrates the importance                             of      intra-      end     inter-                 portability,        ease of use and more onerous                         programming
+        transaction optitnizations.
+                                                                                                                   constraints,          Thus RVM           represents a batance between the
+                                                                                                                    system-level           concerns       of functionality          and performance,
+1. Introduction                                                                                                     and the software               engineering         concerns         of usability           and
+How simple can a transactional                              facility     be, while remaining                       mm”ntenance.              Alternatively,          one can view            RVM          as an
+a potent tool for fault-tolerance?                            Our answer, as elaborated                            exercise in minimalism.                   Our design challenge                 lay not in
+in       this     paper,          is      a      user-level         library       with        minimal               conjuring       up features to add, but in determining                       what could
+programming                constraints,            implemented            in about 10K lines                       be omitted without              crippling     RVM.
+of mainline              code and no more                       intrusive         than a typical
+                                                                                                                    We begin           this paper by describing                  our experience             with
+rurttime library             for input-output.                This transactional              facility,
+                                                                                                                    Camelot         [10], a predecessor of RVM.                  This experience, and
+called RVkl,             is implemented                   without       specialized         operating
+                                                                                                                    our understanding              of the fault-tolerance                requirements           of
+system support, and has been in use for over two years on a
+                                                                                                                    Coda [16, 30]           and        Venari [24, 37],          were      the        dominant
+wide range of hardware from laptops to servers.
+                                                                                                                    influences        on our design.           The description           of RVM         follows
+RVM         is intended for Unix applications                            with persistent data                       in three parts: rationale,              architecture,        and implementation.
+structures that must be updated in a fault-tolerant                                           manner.               Wherever          appropriate,       we point out ways in which                       usage
+The total size of those data structures                                    should be a small                        experience         influenced        our design.            We conclude             with    an
+fraction         of disk capacity,                 and their working                set size must                   evaluation        of RVM,          a discussion           of its use as a building
+easily fit within             main memory.                                                                          block, and a summary of related work.
+
+
+This work was sponsored by the Avinmcs Laboratory,        Wright Research                                           2. Lessons             from        Camelot
+and Development      Center, Aeronautical Systems Division (AFSC), U.S.
+Air Force, Wright-Patterscm      AFB, Ohio, 45433-6543     under Contract
+                                                                                                                    2.1. Overview
+F33615-90-C-1465,      ARPA    Order No. 7597.    James KistIer is now
+affiliated with the DEC Systems Research Center, Palo Alto, CA.                                                     Camelot         is a transactional             facility     built     to validate          the
+
+Permission          to     copy        without      fee    all or part     of    this    material     IS
+                                                                                                                    thesis     that     general-purpose            transactional          support         would
+granted         provided     that       the copies        are not made          or distributed       for            simplify         and      encourage         the     construction             of     reliable
+direct     commercial         advantage,             the ACM        copyright      notice     and the               distributed        systems [33].           It supports local and distributed
+title    of the     publication           and Its date        appear,     and     notice    IS given
+that     copying       is by permission              of the Association            for Computing
+                                                                                                                    nested transactions,            and provides considerable                flexibility        in
+Machinery.             To copy          otherwise,        or to republish,         requires      a fee              the choice          of logging,         synchronization,             and transaction
+and/or      specific       permission.
+SIGOPS           ‘93/12 /93/N. C., USA
+B 1993          ACM 0-89791-632-81931001                        2... $1 .~~
+
+
+                                                                                                             146
+commitment           strategies.            Camelot          relies     heavily       on the            Camelot        would       be something            of an overkill.              Yet     we
+external           page           management                    and           interprocess              persisted, because it would give us first-hand                         experience in
+communication             facilities    of the Mach operating                  system [2],              the use of transactions,              and because it would                contribute
+which       is    binary        compatible            with      the     4.3BSD           Unix           towards the validation             of the Camelot thesis.
+operating system [20].                 Figure 1 shows the overall structure
+                                                                                                        We placed data structures pertaining                      to Coda meta-data in
+of a Camelot          node.          Each module              is implemented              as a
+                                                                                                        recoverable       memoryl          on servers.          The meta-data included
+Mach       task and communication                     between           modules        is via
+                                                                                                        Coda      directories       as well        as persistent         data for        replica
+Mach’s inteqxocess               communication               facilihy(IPC).
+                                                                                                        control    and internal       housekeeping.               The contents of each
+                                                                                                        Coda file was kept in a Unix                   fite on a server’s           local file
+
+                      m                     9“”        m                                                system.
+                                                                                                        recoverable
+                                                                                                                       Server recovery
+                                                                                                                          memory
+                                                                                                                                                consisted
+                                                                                                                                       to the last committed
+                                                                                                                                                                  of Camelot        restoring
+                                                                                                                                                                             state, followed
+                                                                                                        by a Coda salvager                 which     ensured        mutual      consistency
+                                                                               . Recoverable            between meta-data and data.
+                                                                                 Processes
+
+
+                                                                                                        2.3. Experience
+                                                                                                        The most valuable lesson we learned by using Camelot was
+                                                                                                        that recoverable         virtual     memory        was indeed a convenient
+                                                                                  Camelot               and practically        useful programming                abstraction    for systems
+                                                                                  system
+                                                                                  Co.pon.nt   .         like   Coda.       Crash recovery            was simplified            because data
+                                                                                                        structures      were restored          in situ by Camelot.                 Directory
+                                                                                                        operations       were merely         manipulations           of in-memory             data
+                      I                 Mach K@r.el
+                                                                                                        structures.        The Coda salvager                   was simple       because the
+                                                                                                        range of error states it had to handle was small.                               Overall,
+                                                                                                        the encamulation
+                                                                                                                .                    of messv. crash              recoverv.     details       into
+    This figure shows the intemaf structure of Camelot as welt as its
+    relatim-ship to application code. Camelot is composed of several                                    Camelot considerably            simplified         Coda server code.
+    Mach tasks: Master Control, Camelot, and Node Server, as welt
+    as the Recovery, Transaction, and Disk Managers.     Camelot                                        Unfortunately,         these benefits         came at a high price.                   The
+    provides recoverable vittuaf memory for Data Servers; that is,                                      problems        we encountered          manifested          themselves          as poor
+    transactional operations am supported cm portions of the virtual
+    address space of each Data Server. Application  code can be split
+                                                                                                        scalability,      programming              constraints,         and    d.ijjjcul~        of
+    between Data Server and Application  tasks (as in this figure), or                                  maintenance.           In spite of considerable             effort,    we were not
+    may be entirely linked into a Data Server’s address space. The
+                                                                                                        able to circumvent          these problems.              Since they were ditect
+    latter approach was used in Coda. Camelot facilities are accessed
+    via a library linked with application code.                                                         consequences         of the design of CameloL                    we elaborate           on
+                                                                                                        these problems in the following                 paragraphs.
+                 Figure 1: Structure of a Camelot Node
+                                                                                                        A key design goal of Coda was to preserve the scalability
+2.2. Usage
+                                                                                                        of AFS.          But a set of carefully                 controlled      experiments
+Our interest        in Camelot             arose in the context               of the two-
+                                                                                                        (described       in an earlier paper [30]) showed that Coda was
+phase optimistic           replication       protocol        used by the Coda File
+                                                                                                        less scalable than AFS.                These experiments               also showed
+System.           Although           the    protocol          does      not     require           a
+                                                                                                        that the primary            contributor        to loss of         scalability         was
+distributed       commit,       it does require each server to ensure the
+                                                                                                        increased       server CPU          utilization,        and that Camelot              was
+atomicity        and permanence             of locat updates to meta-dafa in
+                                                                                                        responsible       for over a third of this increase.                   Examination
+the first phase.           The simplest            strategy for us would                 have
+                                                                                                        of Coda servers in operation                 showed considerable                 paging
+been to implement              an ad hoc fault tolerance mechanism for
+                                                                                                        and context switching              overheads due to the fact that each
+meta-data        using some form                 of shadowing.              But we were
+                                                                                                        Camelot        operation    involved        interactions        between many of
+curious to see what Camelot could do for us.
+                                                                                                        the component          processes shown in Figure 1. There was no
+The aspect of Camelot                   that we found             most useful           is its          obvious way to reduce this overhead, since it was inherent
+support     for recoverable             virtual     memory [9].               This unique               in the implementation           structure of Camelot.
+feature of Camelot               enables regions              of a process’           virtual
+address       space       to    be      endowed         with          the   transactional
+properties       of atomicity,          isolation      and permanence.                  Since
+we did not find                a need for features               such as nested or
+distributed        transactions,            we     realized       that      our      use of               lFor    brevity,  we often omit          “virtual”     from    “recoverable       virtuaf
+                                                                                                        memo#      in the rest of this paper.
+
+
+
+
+                                                                                                  147
+A         second     obstacle         to      using      Camelot          was        the    set of          count on the clean failure                          semantics           of RVM,       while     the
+programming                 constraints         it imposed.             These constraints                   latter is only responsible                   for local, non-nested transactions.
+came in a variety of guises. For example, Camelot required
+                                                                                                            A      second       area          where        we      have            simplified      RVM        is
+all       processes         using      it     to be descendants                 of     the Disk
+                                                                                                            concurrency          control.             Rather than having RVM                      insist on a
+Manager          task shown in Figure                    1. This meant that starting
+                                                                                                            specific       technique,           we decided           to factor          out concurrency
+Coda servers required                       a rather convoluted               procedure        that
+                                                                                                            control.        This allows               applications         to use a policy           of their
+made our system administration                             scripts        complicated          and
+                                                                                                            choice,        and to perform                 synchronization               at a granularity
+fragile.         It also made debugging                        more difficult              because
+                                                                                                            appropriate          to the abstmctions                      they       are supporting.          If
+starting        a Coda server under                      a debugger           was complex.
+                                                                                                            serializability          is required,               a layer            above    RVM         has to
+Another          example        of a programming                      constraint       was that
+                                                                                                            enforce it.         That layer is also responsible                             for coping     with
+Camelot          required        us to use Mach                  kernel        threads,       even
+                                                                                                            deadlocks,          starvation             and other          unpleasant            concurrency
+though         Coda         was capable            of using            user-level          threads.
+                                                                                                            control problems.
+Since kernel                thread     context          switches        were     much         more
+expensive,          we ended up paying                     a hefty performance cost                         Internally,        RVM        is implemented                 to be multi-threaded              and
+with little to show for it.                                                                                 to function         correctly             in the presence of true parallelism.
+                                                                                                            But it does not depend on kernel thread support, and can be
+A     third      limitation          of Camelot            was that           its code        size,
+                                                                                                            used         with            no          changes             on         user-level          thread
+complexity               and        tight       dependence              on      rarely        used
+                                                                                                            implementations.                  We have, in fact, used RVM                          with three
+combinations                of Mach           features      made         maintenance           and
+                                                                                                            different      threading            mechanisms:              Mach kernel threads [8],
+porting        difficult.      Since Coda was the sternest test case for
+                                                                                                            coroutine       C threads, and coroutine                      LWP [29].
+recoverable           memory,          we were usually                 the first to expose
+new bugs in Camelot.                         But it was often                hard to decide                 Our     fiml       simplification             was to factor                out resiliency        to
+whether a particular                 problem       lay in Camelot or Mach.                                  media failure.               Standard techniques                  such as mirroring            can
+                                                                                                            be used to achieve such resiliency.                               Our expectation           is that
+As the cumulative                    toll     of these problems                mounted,         we
+                                                                                                            this functionality                will     most likely          be implemented              in the
+looked        for ways to preserve the virtues of Camelot                                    while
+                                                                                                            device driver of a mirrored                    disk.
+avoiding         its drawbacks.               Since recoverable              virtual       memory
+was the only aspect of Camelot                           we relied on, we sought to                         RVM         thus     adopts          a layered          approach             to transactional
+distill the essence of this functionality                            into a realization        that         support, as shown in Figure 2. This approach is simple and
+was cheap, easy-to-use and had few strings attached.                                          That          enhances flexibility:                    an application             does not have to buy
+quest led to RVM.                                                                                           into    those aspects of the transactional                                 concept      that are
+                                                                                                            irrelevant      to it.
+
+3. Design            Rationale
+The central principle                 we adopted in designing RVM                           was to
+                                                                                                                                                     Application         Code
+value simplicity             over generality.             In building          a tool that did
+one thing well, we were heeding Lampson’s                                      sound advice
+on interface design [19].                     We were also being faithful                    to the
+                                                                                                                                          Nastkg \ Distribution
+                                                                                                                                                                                            I
+long Unix tradition              of keeping building                  blocks simple.           The                                   I                                    / SanalizabWy
+
+
+change in focus from generality                          to simplicity         allowed        us to
+take radically            different         positions     from Camelot in the areas
+of        functionality,          operating             system          dependence,            and
+structure.
+                                                                                                                                                 Operating         System
+                                                                                                                                                 Permananca.’    media    faihre
+3.1. Functionality
+Our first simplification   was to eliminate support for nesting
+and distribution.      A cost-benefit analysis showed us that
+                                                                                                                       Figure 2: Layering                  of Functionality                in RVM
+each could be better provided                           as an independent               layer on
+top of RVM2.                While a layered implementation                        maybe        less         3.2. Operating                System          Dependence
+efficient         than       a monolithic               one,    it     has the         attractive           To make RVM                   portable,        we decided                to rely     only     on a
+property         of keeping           each layer simple.                 Upper layers can                   small, widely            supported,          Unix      subset of the Mach system
+                                                                                                            call interface.          A consequence of this decision was that we
+                                                                                                            could not count on tight coupling                              between          RVM     and the
+     Zh     ~plemenwtia         sketch is provided        in Section 8                                      VM     subsystem.             The Camelot              Disk Manager                 module runs
+
+
+
+
+                                                                                                      148
+as an external pager [39] and takes full responsibility                                     for       3.3. Structure
+managing          the backing         store for recoverable                   regions     of a        The       ability         to    communicate            efficiently             across          address
+process.      The use of advisory                  VM calls (pin              and unpin)              spaces        allows            robustness         to        be     enhanced                   without
+in   the     Mach        interface         lets     Camelot         ensure       that     dirty       sactilcing            good         performance.                   Camelot’s                    modular
+recoverable         regions       of a process’             address space are not                     decomposition,                 shown earlier in Figure               1, is predicated                 on
+paged out until               transaction         commit.         This close alliance                 fast PC.            Although           it has been shown that IPC can be
+with   Mach’s           VM        subsystem          allows        Camelot        to avoid            fast [4],           its         performance             in         commercial                      Unix
+double paging,             and to support recoverable                     regions whose               implementations                  lags      far    behind            that           of      the      best
+size   approaches               backing           store     or     addressing           limits.       experimental              implementations.               Even        on Mach                   2.5, the
+Efficient    handling          of large recoverable               regions is critical         to      measurements reported by Stout et al [34] indicate that IPC
+Camelot’s         goals.                                                                              is about 600 times more expensive                                 than local procedwe
+                                                                                                      ca113. To make matters worse, Ousterhout                                      [26] reports that
+Our goals in building               RVM           were more modest.               We were
+                                                                                                      the context switching                  performance           of opemting                  systems is
+not trying to replace traditional                    forms of persistent storage,
+                                                                                                      not improving              linearly     with raw hardware performance.
+such as file systems and databases.                          Rather, we saw RVM
+as a building        block for meta-data in those systems, and in                                     Given       our desire to make RVM                           portable,             we were not
+higher-level         compositions             of     them.         Consequently,            we        willing      to make its design critically                    dependent on fast IPC.
+could assume that the recoverable                         memory requirements                on       Instead, we have structured RVM                          as a library               that is linked
+a machine         would only be a small fraction                         of its total disk            in with an application.                  No external communication                                of any
+storage.     This in turn meant that it was acceptable to waste                                       kind      is involved             in the servicing                of RVM                 calls.      An
+some disk          space by          duplicating            the backing           store for           implication          of this is, of course,                   that we have to trust
+recoverable         regions.        Hence RVM’S                   backing       store for a           applications          not to damage RVM                   data structures                   and vice
+recoverable         region,       called      its external             data    segment,        is     versa.
+completely         independent           of the region’s               VM     swap space.
+                                                                                                      A less obvious implication                   is that applications                       cannot share
+Crash recovery relies only on the state of the external data
+                                                                                                      a single write-ahead                log on a dedicated disk.                        Such sharing
+segment.           Since        a VM        pageout         does not           modify       the
+                                                                                                      is common             in transactional            systems           because disk                   head
+external     data segmen~ an uncommitted                            dirty page can be
+                                                                                                      movement            is a strong          determinant              of performance,                   and
+reclaimed          by      the     VM         subsystem             without        loss      of
+                                                                                                      because        the use of a separate                      disk      per application                    is
+correctness.            Of course, good performance                           also requires
+                                                                                                      economically               infeasible       at    present.               In        Camelot,          for
+that such pageouts be rare.
+                                                                                                      example,          the Disk            Manager         serves as the multiplexing
+One way to characterize                     our strategy           is to view          it as a        agent for the log.                The inability          to share one log is not a
+complexity         versus        resource          usage     tradeoff.           By     being         significant         limitation         for Coda, because we run only one
+generous with memory                 and disk space, we have been able                                file    server       process          on a machine.                 But            it    may       be a
+to keep RVM simple and portable.                           Our design supports the                    legitimate          concern for other applications                        that wish to use
+optional       use       of      external         pagers,        but     we      have       not       RVM.          Fortunately,              there are two             potential              alleviating
+implemented             support      for     this     feature          yet.      The     most         factors on the horizon.
+apparent impact on Coda has been slower startup because a
+                                                                                                      First, independent               of transaction         processing considerations,
+process’     recoverable           memory           must be read in en masse
+                                                                                                      there        is       considerable               interest           in             log-structured
+rather than being paged in on demand.
+                                                                                                      implementations                 of the Unix file system [28].                           If one were
+Insulating        RVM         from the VM subsystem also hinders the                                  to place the RVM                 log for each application                 in a separate file
+sharing      of    recoverable           virtual          memory         across       address         on such a system, one would                           benefit       from           minimal          disk
+spaces.      But this is not a serious limitation.                            After all, the          head movement.                    No log multiplexer                 would               be needed,
+primary      reason           to use a separate                  address      space is to             because that role would be played by the file system.
+increase      robustness            by      avoiding             memory         corruption.
+                                                                                                      Second, there is a trend toward using disks of small form
+Sharing recoverable               memory          across address spaces defeats
+                                                                                                      factor,       partly           motivated         by      interest             in        disk       array
+this purpose.            In fact, it is worse than sharing                        (volatile)
+                                                                                                      technology          [27].       It has been predicted                that the large disk
+virtual memory because damage may be persistent!                                      Hence,
+                                                                                                      capacity in the future will be achieved by using many small
+our view          is that processes willing                   to share recoverable
+memory       already trust each other enough to run as threads
+in a single address space.
+                                                                                                          3430 ficros~nds             versus 0.7 microseconds           for a nutt c~           on a WPi~
+                                                                                                      contemporary        machine, rhe DECStarion           5000200
+
+
+
+
+                                                                                                    149
+disks.     If this turns out to be true, there will be considerably                            startup latency, as mentioned                    in Section 3.2. In the future,
+less economic        incentive      to avoiding          a dedicated      disk per             we plan to provide an optional                     Mach external pager to copy
+process.                                                                                   data on demand.
+
+In summary,        each process using RVM                  has a separate log.             Restrictions             on segment mapping                    are minimal.              The most
+The log cart be placed              in a Unix       file   or on a raw disk                    important        restriction     is that no region of a segment may lx
+partition.     When the log is on a file, RVM                 uses the fs ync                  mapped        more       than     once by            the same process.                      Also,
+system call to synchronously              flush modifications          onto disk.              mappings          cannot        overlap       in     virtual        memory.              These
+RVM’S         permanence           guarantees       rely     on     the     correct        resmictions              eliminate         the need for              RVM       to cope           with
+implementation         of this system call.          For best performance,                     aliasing.      Mapping          must be done in multiples                      of page size,
+the log should either be in a raw partition                      on a dedicated                and regions must be page-aligned.
+disk o; in a fide on a log-structured             Unix file system.
+                                                                                           Regions can be unmapped at any time, as long as they have
+                                                                                               no uncommitted             transactions        outstanding.             RVM          retains no
+4. Architecture                                                                                information          about a segment’s               mappings           after its regions
+The design of RVM               follows    logically       from     the rationale              are unmapped.             A segment loader package, built on top of
+presented earlier.        In the description        below, we first present                RVM,            allows      the creation        and maintenance                of a load map
+the major program-visible              abstractions,        and then describe                  for   recoverable          storage         and      takes        care     of     mapping         a
+the operations       supported on them.                                                        segment       into      the same base address                       each time.               This
+                                                                                               simplifies        the use of absolute                pointers        in segments.                A
+4.1. Segments            and Regions
+                                                                                               recoverable           memory           allocator,        also      layered           on RVM,
+Recoverable        memory       is managed         in segments, which            are
+                                                                                               supports heap management                    of storage within             a segment.
+loosely      analogous     to Mukics           segments.      RVM         has been
+designed      to accommodate segments               up to 2 64 bytes long,                     4.2. RVM           Primitives
+although       current     hardware       and     file     system     limitations              The       operations        provided          by      RVM           for        initialization,
+restrict     segment      length     to 232 bytes.           The     number       of           termination          and segment            mapping              are shown           in Figure
+segments       on a machine           is only      limited       by its storage            4(a).         The log to be used by a process is specified                                at RVM
+resources.       The backing store for a segment may be a file or                              initialization       via the opt i on.s_des                  c argument.              The map
+a raw disk partition.            Since the distinction            is invisible      to         operation        is called once for each region to be mapped.                                The
+programs,        we use the term          “external        data segment”            to         external      data segment              and the range of virtual                      memory
+refer to either.                                                                               addresses         for    the     mapping           are     identified           in    the    first
+                                                                                               argument.          The unmap              operation         can be invoked              at any
+                                                                                               time that a region is quiescent.                      Once unmapped,                  a region
+                                                                                               can be remapped to some other part of the process’ address
+                                                                                               space.
+
+                                                                                               After a region has been mapped, memory                                  addresses within
+                                                                                               it may be used in the transactional                              operations          shown in
+                                                                                               Figure       4(b).         The      begin_transaction                                operation
+                                                                                               returns      a transaction          identifier,          t id,     that is used in all
+    .Ssgment-2
+                                                                                               further     operations          associated          with     that transaction.               The
+    Each shaded area represents a region. The contents of a region                             set       range         operation       lets RVM           know that a certain area
+    art physically copied from its external data segment to the virtuat                        of a;egion         is about to be modified.                      This allows RVM                 to
+    memoty     address range specified    during mapping.
+                                                                                               record      the current         value of the area so that it can undo
+             Figure 3: Mapping            Regions of Segments                                  changes in case of an abort.                   The rest            ore_mode             flag to
+                                                                                               begin_t          rans     act    ion      lets an application             indicate that it
+As shown in Figure             3, applications      explicitly      map regions
+                                                                                               will never explicitly            abort a transaction.               Such a no-resrore
+of segments into their virtual                 memory.       RVM      guarantees
+                                                                                               transaction       is more efficient,             since RVM              does not have to
+that newly mapped data represents the committed                           image of
+                                                                                               copy data on a set -range.                          Read operations               on mapped
+the region.        A region        typically     corresponds        to a related
+                                                                                               regions require no RVM                   intervention.
+collection       of objeets,     and may be as large as the entire
+segment.         In the current       implementation,            the copying      of
+data from external         data segment to virtual            memory        occurs
+when a region is mapped.               The limitation        of this method is
+
+
+
+
+                                                                                         150
+           initialize             (version,              options_desc);
+
+           map(region_desc,                      options_desc);
+
+           unmap(region             —desc);                                                                      ~end_transaction                    (tid,            commit_mode)             ;
+
+           terminate;                                                                                              abort_transaction                         (tid)      ;
+
+                  (a) Imtialization           & Mapping           Operations                                                        (b) Transactional                Operations
+
+                                                                                                                   query       (options_desc,                        region_desc);
+
+
+
+                             EzJ
+                            (c)LogControlOperations
+                                                                                                                 ~ create           log(options,                     log_len,         mode);
+
+
+                                                                                                                                    (d) Miscellaneous                 Operations
+                                                                                 Figure 4: RVM Primitives
+
+Atmnsaction               is committedly               end_transacti.on                      and           5. Implementation
+aborted         via      abort_transaction.                                By     default,       a         Since       RVM           draws         upon        well-known             techniques          for
+successful            commit       guarantees            permanence             of    changes              building         transactional          systems, we restrict                our discussion
+madeina            transaction.          But an application               can indicate        its          here to two important                   aspects of its implementation:                        log
+willingness             to accept a weaker permanence                       guarantee via                  management               and optimization.                    The RVM            manual [22]
+the commi–t_mode                   paratneter          of end_transaction.                                 offers many further details, and a comprehensive                                        treatment
+Such ano-@shor                   “lazy’’transaction               has reduced commit                       of transactional           implementation                 techniques can be found in
+latency since a log force is avoided.                            To ensure persistence                     Gray and Reuter’s text [14].
+ofits      no-flush        transactions        the application             must explicitly
+flush RVM’S               write-ahead         log tim            time to time.             When            5.1. Log Management
+
+used in this manner, RVM                        provides         bounded persistence,                      5.1.1. Log Format
+where the boundis                 the period between log flushes.                           Note           RVM         is    able      to    use      a no-undo/redo                   value        logging
+thatatomicityisguaranteed                      independentofpermanence.                                    strategy [3] because it never reflects uncommitkd                                        changes
+                                                                                                           to an external data segment.                        The implementation                   assumes
+Figure4(c)shows                 thetwooperations                 providedbyRVM               for
+                                                                                                           that adequate buffer               space is available                  in virtual        memory
+controlling             the use of the write-ahead                       log.        The    first
+                                                                                                           for   the old-value              records          of      uncommitted           transactions.
+operation,         flush,          blocks        until     all    committed           no-flush
+                                                                                                           Consequently,             only    the new-value                  records       of committed
+transactions             have     been        forced      to     disk.          The    second
+                                                                                                           transactions        have to be written                 to the log.         The format of a
+operation,        truncate,              blocks until all committed                   changes
+                                                                                                           typical log record is shown in Figure 5.
+in the write-ahead               log have been reflected                  to external data
+segments.                 Log       truncation            is      usually        performed                 The bounds and contents of old-value                                 records are known to
+transparently            in the background             by RVM.            But since this is                RVM        from      the set-range                     operations         issued during            a
+a       potentially             long-running              and       resource-intensive                     transaction.         Upon commit,                 old-value          records are replaced
+operation,        we have provided               a mechanism              for applications                 by new-value             records that reflect the current contents of the
+to control its timing.                                                                                     corresponding            ranges of memory.                    Note that each modified
+                                                                                                           range results in only                   one new-value                 record    even if that
+The final set of primitives,                  shown in Figure 4(d), perform                      a
+                                                                                                           range has been updated many times in a transaction.                                          The
+variety      of functions.             The query                 operation        allows      an
+                                                                                                           final step of transaction commitment                             consists of forcing the
+application           to obtain information               such as the number and
+                                                                                                           new-value          records       to the log and writing                        out a commit
+identity        of uncommitted             transactions            in a region.             The
+                                                                                                           record.
+set_opt          i ons       operation         sets a variety            of tuning         knobs
+such as the threshold               for triggering             log truncation         and the              No-restore         and no-flush            transactions               are more efficient.
+sizes      of     internal        buffers.          Using         c reate_log,                an           The former result in both time and space spacings since the
+application           can dynamically            create a write-ahead                 log and              contents of old-value                records do not have to be copied or
+then use it in an initialize                        operation.                                             buffered.         The latter result in considerably                            lower commit
+                                                                                                           latency,         since     new-value           and         commit         records        can be
+                                                                                                           spooled rather than forced to the log.
+
+
+
+
+                                                                                                     151
+                                                                                             RaveraeD!splacemerrts
+
+
+                                    Tram           Ranw
+                                     Hdr           Hdr 1
+                                                   1                                 !1                                      *I
+                                   1
+                                                                                             FoIwwd       Dkplacements
+      ‘this log record has three medifimtimr                  ranges.   The bidirectional         displacements      records aUow the log to be read either way.
+
+                                                                        Figure 5: Format of a Typical Log Record
+                                                                                  Tail Displacements
+                                              I
+
+
+
+                                              l}
+                                                               Head Dlsplacenrents
+
+
+      ‘rttis figure shows the organization of a log during epoch truncation.    The current tail of the log is to the right of the area marked “current epoch.
+      The log wraps around logically,      and irmemal synchronization     in RVM allows forward processing in the current epoch white truncation is in
+      progress. When truncation     is ccmplete, the area marked “truncation epoch” wilt be freed for new log records.
+
+                                                                                  Figure          6: Epoch Truncation
+
+5.1.2. Crash Recovery and Log Truncation                                                                       undo/redo           property                 of       the       log,    pages          that      have    been
+Crash recovery            consists of RVM                  first reading the log from                          modified           by uncommitted                        transactions            cannot be written
+tail to head, then constructing                          an in-memory                 tree of the              out to the recoverable                                data segment.                    RVM         maintains
+latest      committed            changes                for       each        data         segment             internal     locks         to ensure that incremental                                   truncation       does
+encountered          in the log.              The         trees are then traversed,                            not violate          this propwty.                       Certain            situations,          such as the
+applying       modifications             in        them          to     the    corresponding                   presence           of long-running                      transactions             or sustained            high
+external     data segment.             Finally,           the head and tail location                           concurrency,            may result                     in incremental                  truncation       being
+information        in the log status block is updated to reflect an                                            blocked for so long that log space becomes critical.                                                    Under
+empty log.          The idempotency                     of recovery            is achieved by                  those circumstances,                     RVM reverts to epoch truncation.
+delaying      this     step until         all          other      recovery         actions         are
+                                                                                                                                                                     Page Vector
+complete.
+                                                                                                                                  Unumm-med
+                                                                                                                                     R8fCni
+Truncation         is the process of reclaiming                          space allocated             to                           B*
+                                                                                                                                  Resewed
+                                                                                                                                                        P
+log entries by applying                the changes contained                          in them to                                                        1        :                     :                :
+
+the recoverable            data     segment.                    Periodic         truncation           is                                                             PagaQueua
+                                                                                                                                                head                                           tail
+necessary       because log            space is finite,                     and is triggered
+whenever       current      log size exceeds a preset fraction                                   of its
+                                                                                                                                         ,..    -----
+total size.     In our experience,                     log truncation            has proved to                                        ,. ----                                                   ●.,
+                                                                                                                                     ,,-                                   :
+be the hardest part of RVM                         to implement                correctly.           To
+                                                                                                                                                                                      &jR4~
+minimize      implementation             effort, we initially                  chose to reuse
+                                                                                                                                    IOghead                          Log Records                      kg tail
+crash recovery            code     for     truncation.                  In this           approach,
+referred      to     as    epoch         truncation,                  the     crash        recovery                  This figure     shows the key data structures involved in incremental
+                                                                                                                     truncation.      RI through R5 are log entries. The reserved bit in
+procedure      described         above is applied                     to an initial         part of
+                                                                                                                     page vector entries is used as an intemaf leek. Since page P1 is
+the log while         concurrent         forward              processing         occurs in the                       at the head of the page queue and has an tmcornrrdtted reference
+rest of the log. Figure 6 depicts the layout of a log while an                                                       count of zero, it is the first page to be written                           to the recoverable
+                                                                                                                     data segment.   The log head dces not move, since P2 has the
+epoch truncation           is in progress.
+                                                                                                                     same log offset as PI.   P2 is written next, and the log head is
+                                                                                                                     moved to P3’s log offset. Incremental truncation is now blocked
+Although       exclusive  reliance on epoch truncation    is a                                                       until P3’s uncommitted reference count drops tn zero.
+logically     correct strategy, it substantially increases log
+                                                                                                                                    Figure          7: Incremental                         Truncation
+traffic,    degrades forward             processing               more than necessary,
+and results in bursty system performance.                                     Now that RVM                     Figure 7 shows the two data structures used in incremental
+is stable and robust, we are implementing                                   a mechanism            for         truncation.         The first data structure is a page vector for each
+incremental          truncation        during            normal             operation.           This          mapped       region          that maintains                       the modification                 status of
+mechanism           periodically         renders               the      oldest     log       entries           that region’s         pages.             The page vector is loosely analogous
+obsolete by writing           out relevant pages directly                         from VM to                   to a VM page table:                      the entry for a page contains a dirty bit
+the      recoverable        data    segment.                    To      preserve           the     no-         and an uncommitted                       reference                count.        A page is marked
+
+
+
+
+                                                                                                            152
+dirty when it has committed                          changes.            The uncommitted                        6. Status and Experience
+reference       count        is     incremented              as      set        — ranges          are       RVM           has been in daily use for over two years on hardware
+executed,          and       decremented               when              the     changes          are       platforms         such as IBM RTs, DEC MIPS workstations,                                 Sun
+committed       or aborted,              On commit,            the affected pages are                           Spare workstations,             and a variety            of Intel    386/486-based
+marked dirty.         The second data structure is a FIFO queue of                                              laptops     and     workstations.           Memory              capacity       on these
+page modification               descriptors           that specifies               the order in                 machines       ranges         from      12MB        to     64     MB,       while     disk
+which dirty pages should be written                              out in order to move                       capacity         ranges      from        60MB      to 2.5GB.                Our    personal
+the log head. Each descriptor                        specifies the log offset of the                        experience         with RVM           has only been on Mach 2.5 and 3.0.
+first record referencing                 that page.          The queue contains no                          But RVM has been ported to SunOS and SGI IRIX at MIT,
+duplicate      page references:                a page is mentioned                     only in the          and we are confident                that ports to other Unix platforms                    will
+earliest     descriptor        in which          it could           appear.            A step in            be stmightforward.                   Most    applications            using RVM            have
+incremental          truncation            consists         of      selecting            the    first       been written           in C or C++, but a few have been written                             in
+descriptor     in the queue, writing                   out the pages specified                     by           Standard      ML.           A    version       of        the     system       that    uses
+it, deleting    the descriptor,                and moving            the log head to the                    incremental           truncation      is being debugged.
+offset     specified       by       the next           descriptor.               This      step is
+                                                                                                            Our original          intent was just to replace Camelot by RVM on
+repeated until           the desired amount                  of log space has been
+                                                                                                            servers, in the role described in Section 2.2.                                 But positive
+reclaimed,
+                                                                                                            experience with RVM                   has encouraged               us to expand its use.
+5.2.     Optimizations                                                                                      For example,             transparent        resolution         of directory         updates
+Early       experience            with         RVM          indicated            two       distinct         made to partitioned                 server replicas            is done using a log-
+opportunities        for substantially               reducing        the volume of data                     based strategy [17]. The logs for resolution                             are maintained
+written     to the log.           We refer to these as intra-transaction                                    in RVM.               Clients       also use RVM              now,      particularly       for
+and inter-transaction              optimization             respectively.                                   supporting         alsconnected          operation       [16].       The persistence of
+                                                                                                            changes made while                   disconnected            is achieved        by storing
+Intra-transaction            optimization              arise when                set     -range
+                                                                                                            replay logs in RVM,                  and user advice for long-term                       cache
+calls specifying          identical,       overlapping,             or adjacent memory
+                                                                                                            management             is stored in a hoard database in RVM.
+addresses are issued within                       a single           transaction.              Such
+situations      typically          occur         because            of     modularity             and       An unexpected              use of RVM           has been in debugging                    Coda
+defensive programming                    in applications.                Forgetting        to issue         servers and clients [31].                   As Coda matured,                   we ran into
+a set      –range         call is an insidious                   bug, while             issuing       a     hard-to-reproduce               bugs involving          corrupted        persistent data
+duplicate      call is harmless.                Hence applications                      are often           structures.        We realized that the information                       in RVM’S         log
+written     to err on the side of caution.                           This is particularly                   offered        excellent     clues to the source of these corruptions.
+common         when        one          part    of     an      application              begins      a       All     we had to do was to save a copy of the log &fore
+tmnsaction,         and      then        invokes        procedures               elsewhere         to       truncation,        and to build          a post-mortem               tool to search and
+perform      actions       within         that transaction.                    Each of those                display the history of modifications                         recorded by the log.
+procedures may perform                    set    - range            calls for the areas of
+                                                                                                            The most common                     source of programming                    problems       in
+recoverable         memory        it modifies,          even if the caller or some
+                                                                                                            using RVM              has been in forgetting                 to do a set-range
+other      procedure         is supposed              to have done                 so already.
+                                                                                                            catl prior        to modifying           an area of recoverable                    memory.
+Optimization         code in RVM                causes duplicate                 set-range
+                                                                                                            The result is disastrous,                 because RVM                does not create a
+calls     to be ignored,            and overlapping                      and adjacent             log
+                                                                                                            new-value          record       for this area upon transaction                     commit.
+records to be coalesced.
+                                                                                                            Hence the restored state after a crash or shutdown                                  will not
+Inter-transaction         optimization               occur only in the context of                           reflect        modifications         by the transaction                 to that area of
+no-flush      transactions.              Temporal           locality           of reference        in       memory.          The current solution,             as described in Section 5.2,
+input requests to an application                      often translates into locality                        is to program             defensive y.          A better            solution      would     be
+of modifications          to recoverable              memory.             For example, the                  language-based,            as discussed in Section 8.
+command        “cp       dl / *         d2” on a Coda client will cause as
+many no-flush            transactions           updating         the data structure                in       7.     Evaluation
+RVM       for d2 as there are children                   of dl.                Only the last of             A fair         assessment         of RVM        must          consider       two    distinct
+these updates needs to be forced                            to the log on a future                          issues.        From a software engineering                     perspective,        we need
+flush.       The     check        for      inter-transaction                optimization           is       to ask whether               RVM’S          code     size and complexity                   are
+performed       at commit               time.        If the modifications                      being        commensurate               with     its functionality.                From      a systems
+committed           subsume             those    from          an        earlier       unflushed            perspective,          we need to know              whether           RVM’S         focus on
+transaction,       the older log records are discarded.                                                     simplicity        has resulted in unacceptable                     loss of performance.
+
+
+
+                                                                                                          153
+To address the first issue, we compared the source code of                                 paging     performance           occurs when accesses are sequential.
+RVM         and       Camelot.              RVM’S        mainline        code       is     The      worst       case      occurs        when         accesses         are     uniformly
+approximately         10K lines of C, while utilities,              test programs          distributed        across all accounts.                To represent               the average
+and other auxiliary           code contribute           a further      10K lines.          case, the benchmark                  uses an access pattern                     that exhibits
+Camelot has a mainline                code size of about 60K lines of C,                   considerable          temporal           locality.         In     this     access pattern,
+and auxiliary       code of about 10K lines.                 These numbers do              referred      to as localized,             70% of the transactions                      update
+not include        code in Mach             for features     like PC         and the       accounts      on 5’%0 of the pages, 259i0 of the transactions
+external pager that are critical             to Camelot.                                   update accounts on a different                        1590 of the pages, and the
+                                                                                           remaining         5’70 of the transactions                 update accounts on the
+Thus      the total     size of code that has to be understood,
+                                                                                           remaining         80?Z0of the pages.              Within        each set, accesses are
+debugged,         and tuned      is considerably            smaller    for RVM.
+                                                                                           uniformly         distributed.
+This translates into a corresponding                   reduction      of effort     in
+maintenance        and porting.         What is being given up in return                   7.1.2. Results
+is support for nesting and distribution,                 as well as flexibility            Our primary          goal in these experiments                      was to understand
+in areas such as choice of logging                  strategies — a fair trade              the throughput            of RVM          over its intended               domain        of use.
+by our reckoning.                                                                          This corresponds             to situations           where paging rates are low,
+                                                                                           as discussed          in Section           3.2.       A secondary               goal was to
+To evaluate the performance                  of RVM        we used controlled
+                                                                                           observe performance                  degradation           relative        to Camelot         as
+experimentation          as well         as measurements              from       Coda
+                                                                                           paging      becomes          more significant.                  We expected             this to
+servers and clients in actual use. The specific questions of
+                                                                                           shed light on the importance                   of RVM-VM                 integration.
+interest to us were
+  ●   How serious is the lack of integration                    between                    To meet these goals, we conducted experiments                                     for account
+      RVM and VM?                                                                          arrays ranging            from      32K entries            to about 450K                entries.
+                                                                                           This roughly         corresponds to ratios of 10% to 175% of total
+  . What is RVM’S           impact on scalability?
+                                                                                           recoverable         memory size to total physical memory size. At
+  . How effective            are intra-        and inter-transaction                       each account array size, we performed                              the experiment            for
+    optimizations?                                                                         sequential,        random,       and localized            account access patterns.
+                                                                                           Table      1 and Figure          8 present our results.                     Hardware        and
+7.1. Lack of RVM-VM                     Integration
+                                                                                           other    relevant         experimental            conditions         are described             in
+As discussed in Section 3.2, the separation                      of RVM          from
+                                                                                           Table 1.
+the VM         component       of an operating              system    could       hurt
+performance.        To quantify        this effect, we designed a variant                  For sequential account access, Figure 8(a) shows that RVM
+of the industry-standard          TPC-A        benchmzuk [32] and used it                  and Camelot            offer     virtually        identical         throughput.            This
+in a series of carefully         conwolled       experiments.                              throughput          hardly       changes          as the        size      of      recoverable
+
+7.1.1. The Benchmark                                                                       memory        increases.            The average            time      to perform           a log
+
+The TFC-A          benchmark      is stated in terms of a hypothetical                     force on the disks used in our experiments                                     is about 17.4
+
+bank    witk       one or more           branches,      multiple       tellers    per      milliseconds.                This        yields       a     theoretical            maximum
+
+branch,      and    many      customer         accounts       per branch.           A      throughput         of 57.4 transactions per second, which is within
+
+transaction       updates a randomly             chosen account,             updates       15% of the observed best-case throughput                                    for RVM         and
+
+branch and teller balances, and appends a history record to                                Camelot.
+
+an audit trail.                                                                            When       account        access is random,               Figure          8(a) shows that
+
+In our variant of this benchmark,                 we represent all the data                RVM’S        throughput             is   initially        close      to     its    value     for
+
+structures        accessed       by     a     transaction      in     recoverable          sequential        access.      As recoverable              memory          size increases,
+
+memory.         The number        of accounts is a parameter                  of our       the     effects      of     paging         become          more          significant,       and
+
+benchmark.            The     accounb           and    the    audit      trail    are      throughput         drops.      But the drop does not become serious
+represented        as arrays      of    128-byte       and 64-byte           records       until    recoverable           memory          size       exceeds         about      70%      of
+respectively.       Each of these data structures occupies close                           physical memory size. The random access case is precisely
+
+to half the total recoverable            memory.        The sizes of the data              where one would              expect Camelot’s               integration           with Mach
+
+structures for teller and branch balances are insignificant.                               to be most valuable.                Indeed, the convexities                    of the curves
+                                                                                           in Figure         8(a) show that Camelot’s                      degradation          is more
+Access to the audit trail is always                   sequential,     with wrap-           graceful      than RVM’S.                But even at the highest                     ratio of
+around.      The pattern of accesses to the account array is a                             recoverable        to physical memory                 size, RVM’S              throughput      is
+second parameter           of our benchmark.                The best case for              better than Camelot’s.
+
+
+
+
+                                                                                         154
+                                                        No. of                 Rmem                                     RVM         (Trarts/See)                                       Camelot           (Tkans/See)
+                                                   Accounts                    Pmem              Sequential                    Random              Localized             Sequential                Random                  L&sstized
+
+
+                                                          32768                 12.5%            48.6 (0.0)                    47.9 (0.0)          47.5 (0.0)            48.1 (0.0)                41.6 (0.4)              44.5 (0.2)
+                                                          65536                25.0%             48.5 (0.2)                    46.4 (0.1)          46.6 (0.0)            48.2 (0.0)                 34.2 (0.3)             43.1 (0.6)
+                                                          98304                 37.5%            48.6 (0.0)                    45.5 (0.0)          46.2 (0.0)            48.9 (0.1)                 30.1 (0.2)             41.2 (0.2)
+                                                         131072                50.0% 48.2 (0.0)                                44.7 (0.2)          45.1 (0.0)            48.1 (0.0)                29.2 (0.0)              41.3 (0.1)
+                                                         163840                62.5%             48.1 (0.0)                    43.9 (0.0)          44.2 (0.1)            48.1 (0.0)                27.1 (0.2)              40.3 (0.2)
+                                                         196608                 75.0%            47.7 (0.0)                    43.2 (0.0)          43.4 (0.0)            48.1 (0.4)                2S.8 (1.2)              39.5 (0.8)
+                                                         229376                 87.5%            47.2 (0.1)                    42.5 (0.0)          43.8 (0.1)            48.2 (0.2)                23.9 (0.1)              37.9 (0.2)
+                                                         262144                100.0%            46.9 (0.0)                    41.6 (0.0)          41.1 (0.0)            48.0 (0.0)                21.7 (0.0)              35.9 (0.2)
+                                                         294912                112.5%            46.3 (0.6)                    40.8 (0.5)          39.0 (0.6)            48.0 (0.0)                20.8 (0.2)              35.2 (0.1)
+                                                         327680                125.0%            46.9 (0.7)                    39.7 (0.0)          39.0 (0.5)            48.1 (0.1)                19.1 (0.0)              33.7 (0.0)
+                                                         360448                137.5%            48.6 (0.0)                    33.8 (0.9)          40.0 (0.0)            48.3 (0.0)                18.6 (0.0)              33.3 (0.1)
+                                                         393216                150.0%            46.9 (0.2)                    33.3 (1.4)          39.4 (0.4)            48.9 (0.0)                18.7 (0.1)              32.4 (0.2)
+                                                         425984                162.5%            46.5 (0.4)                    30.9 (0.3)          38.7 (0.2)            48.0 (0.0)                18.2 (0.0)              32.3 (02)
+                                                         458752                175.0%            46.4 (0.4)                    27.4 (0.2)          35.4 (1.0)            47.7 (0.0)                17.9 (0.1)              31.6 (0.0)
+
+
+
+      ‘M     table presents the measured steady-state throughput, in transactions per second, of RVM and Camelot on the benchmark described in Section
+      ‘7.1. 1. The cohmm labekd      “Rmem/Pmem”      ~ivw the ratio of recoverable to physi~   m~ow  si=  Ea* dam -t      t$ves tie mea SSId StSSSda~
+      deviatiar (in parenthesis) of the three trials {ith most consistent results, chosen from a set of five to eight. ‘Dse experiments were conducted on a
+      DEC 50W200       with 64MB of main memory and separate disks for the log, external data segment, and paging file. Only one thread was used to
+      nm the benchmark. Only processes relevant to the benchmark mrr on the machine during the experiments.   Transactions were required to be fully
+      atomic and permanent. Inter- and intra-transaction optirnizations were enabled in the case of RVM, but not effective for this benchmark.  This
+      version of RVM                       only supported epoeh truncation;                                  we expect incremental                 truncation         to improve performance                         significantly.
+
+                                                                                                             Table 1: Transactional                              Throughput
+
+g 5P                                                                                                                                               ~ 50-
+                                                                                                                                                                  ● -.. .
+q                      --                                                                                                                          q                        ●. . ..m
+                                     -’     V.*                                                                                                    u)                                  ‘- . *...*-...
+                                                                                                                                                    c
+                                                                                                                                                                  u                                                  ●
+ g                                                       --         ~                                                                                                 “’- s...                            --------       ..
+              n                                                         =<..                                                                       .:                             Et”.. u...      =..    mp                6.- . . . . . .
+a                                                                                                                                                                                                                                            .:- ..?...      .
+ g   40 “\                                                                         . ,*                                                             u 40 -                                                                         ●
+                                                                                             \                                                      w                                                      “---a . . . . . .                                %--------
+                   \                                                                                 .                                                                                                                                                                          ..
+ 2                      \                                                                                    >                                      :                                                                       ❑ ““-&.-...                                             ●
+                            ❑\                                                                           ●                                                                                                                                   a’-.   ~-...
+                                 \                                                                               ‘*\                                                                                                                                         L7-..    q
+i?                                                                                                                                                 k                                                                                                                       . ..*D
+                                                                                                                         b,
+     30 -                             J \
+                                            K                                                                                  \e
+                                                  ‘u     \a
+                                                              - .0
+          —                 IWM Sequa+ml                                is%
+     20 “ _                 Camelot Sequential                                          -i       -       E-n-+a                                         :    EzizEzl
+             --             RVM R.wrdom
+             m- _           Cunotot Random
+
+
+     100                                                                                                                                                10
+                  20                  40          60           80         100 120                        140            160         180                      0         20         40            60          80             lLXI        120          140              160            180
+                                                                               RmemfPmem                          (percent)                                                                                                 RmeWPmem                        (percent)
+
+                                            (a) Best and Worst Cases                                                                                                                                (b) Average Case
+      These plots illustrate                      the data in Table 1. For clarity,                                    the average case is presented separately from the best and worst eases.
+
+                                                                                                             Figure           8: Transactional                   Throughput
+
+For     localized                         account             access, Figure                             8(b)            shows          that            data in             Table            1 indicates                    that       applications                        with           good
+RVM’S             throughput                      drops almost                    linearly                   with            increasing                 locality         can use up to 40% of physical                                                memory                   for active
+recoverable                  memory                    size.        But the drop is relatively                                        slow,             recoverable               data, while keeping                              throughput                    degradation                 to
+and          performance                               remains                  acceptable                             even          when               less than 10%.                          Applications                      with         poor locality                            have to
+recoverable                      memory                 size        approaches                       physical                  memory                   restrict active recoverable                                  data to less than 25% for similar
+size,        Camelot’s                       throughput                   also drops                         linearly,              and is              performance.                        Inactive             recoverable                        data can be much
+consistently                 worse than RVM’S                                  throughput.                                                              larger,          constrained                    only          by      startup               latency               and virtual
+                                                                                                                                                        memory               limits          imposed                 by the operating                                system.               The
+These measurements                                     confirm ‘that RVM’S                                simplicity                 is not
+                                                                                                                                                        comparison with Camelot is especially revealing.     In spite
+an impediment                               to good                 performance                          for           its     intended
+                                                                                                                                                        of the fact that RVM is not integrated with VM, it is able to
+application                  domain.                    A conservative                   interpretation                             of the
+                                                                                                                                                        outperform               Camelot over a broad range of workloads.
+
+
+
+
+                                                                                                                                                    155
+            _    _     Cmmelot    Rrndom
+            —          Cwldot     Sequa?ntial
+            .    .     RVM Random
+            _          RVM Sequential                                                   ‘a
+                                                 I                ❑    .!.     8 “5
+
+
+
+
+                                                                                                                                                                              .......
+                                                                                                                          ..s...m”””o
+                                                                                                                                                                                ❑     FI...         U--U-’--I3
+
+            ❑                                                                                                            ❑
+                                                                                                                         ✎
+                                                                                                                         ✎    ””a”””m”””am”””a                        .ti.
+
+
+
+                                                                                                                 8“
+                                                                         ●
+                                                                         --9--b-’
+            *
+                                   ---                   r ----               .
+                                                                                                                         ●.. ... ..... ..... .... .... .... ...-9 ....?.... V.... V... W...V-.
+                                                                                                                                                                                            ”●
+                                                                                             9
+                                                                                                                 4
+
+
+    o           20       40        60       80          1(X3   120      140       160        180                 0         20         40      60       80         1(M        120      140           160     180
+                                                         RmetrVPmem            (percent)                                                                           RmenVPmem                  (per cent)
+
+                                 (a) Worst and Best Cases                                                                                       (b) Average Case
+
+    These plots depict the measured CPU usage of RVM and Camelot during tbe experiments described in Secticm 7.1.2. As in Figure 8, we have
+    separated the average ease from the best and worst cases for visuat clarity. To save space, we have omitted the table of data (similar to Table 1)
+    on which these plots are based.
+
+                                                                Figure         9: Amortized               CPU Cost per Transaction
+
+Although         we were            gratified           by these results, we were                               feasible          because            server          hardware                   has          changed
+puzzled         by      Camelot’s           behavior.          For low ratios of                                considerably.              Instead of IBM            RTs we now use the much
+recoverable           to physical           memory             we had expected                    both          faster      Decstation             5000/200s.                Repeating                the    original
+Camelot’s            and RVM’S             throughputs          to be independent                    of         experiment            on     current        hardware            is also             not     possible,
+the degree of locality               in the access pattern.                   The data shows                    because Coda servers now use RVM                                     to the exclusion                     of
+that this is indeed the case for RVM.                                  But in Camelot’s                         Camelot.
+case, throughput                is highly       sensitive       to locality          even at the
+                                                                                                                Consequently,              our evaluation         of RVM’S             sealability           is based
+lowest recoverable                to physical           memory ratio of 12.5%.                      At
+                                                                                                                on the same set of experiments                          deseribed              in Section 7.1.
+that ratio Camelot’s                throughput            in transactions             per second
+                                                                                                                For each trial             of that set of experiments,                          the total CPU
+drops     from         48.1      in the sequential                case to 44.5               in the
+                                                                                                                usage on the machine was recorded.                                  Since no extraneous
+lecalized       case, and to 41.6 in the random case.
+                                                                                                                activity        was        present     on    the     machine,                 all     CPU          usage
+Closer examination                 of the raw data indicates that the drop                                      (whether         in system or user mode)                           is attributable                to the
+in throughput             is attributable               to much          higher        levels        of         running      of the benchmark.                    Dividing          the total CPU usage
+paging      activity       sustained            by the Camelot                Disk     Mamger.                  by the number of transactions                       gives the average CPU cost
+We conjecture            that this increased paging activity                          is induced                per transaction,             which     is our metric               of scalability.                     Note
+by an overly           aggressive log truncation                     strategy in the Disk                       that this metric amortizes the cost of sporadic activities                                              like
+Manager.             During      truncation,           the Disk Manager               writes out                log      truncation           and       page        fault          servicing                over         all
+all dirty pages referenced by entries in the affected portion                                                   transactions.
+of the log.          When truncation                 is frequent and account access
+                                                                                                                Figure     9 compares the sealability                   of RVM                and Camelot for
+is random,            many        opportunities            to amortize           the cost of
+                                                                                                                each of the three access patterns described in Section 7.1.1,
+writing     out a dirty            page across multiple                      transactions           are
+                                                                                                                For sequential account access, RVM requires about half the
+IOSL Less ffequent                 truncation          or sequential account access
+                                                                                                                CPU usage of Camelot.                       The actual values of CPU usage
+result in fewer such lost opportunities.
+                                                                                                                remain       almost          constant       for     both        systems              over        all    the
+7.2. Scalability                                                                                                recoverable        memory sizes we examined.
+
+As discussed in Section                     2.3, Camelot’s             heavy toll on the                        For random            account access, Figure                       9(a) shows that both
+sealability          of Coda servers was a key influence                                     on the             RVM        and Camelot’s             CPU usage increase with recoverable
+design of RVM.                  It is therefore          appropriate          to ask whether                    memory          size. But it is astonishing                   that even at the limit                      of
+RVM       has yielded            the anticipated           gains in scalability.                  The           our experimental               range, RVM’S                  CPU usage is less than
+ideal way to answer this question                              would         be to repeat the                   Camelot’s.         In other words, the inefficiency                                  of page fault
+experiment           mentioned           in Section 2.3, using RVM                       instead                handling        in RVM          is more           than compensated                        for by its
+of Camelot.           Unfortunately,                 such a direct comparison                    is not         lower inherent overhead.
+
+
+
+
+                                                                                                          156
+                           Machine           Machine           ‘IkansactiOms       Bytes Written         Intra-’llansaction          Inter-Transaction                   Total
+                               name             type            committed                                                                                              Savings
+
+
+
+
+                          T
+                                                                                       to Log                   Savings                    Savings
+
+
+                           grieg             server                 267,224           289,215,032                20.7%                          0.070                     20.7’%
+                          haydn              server                 483,978           661,612,324                21.5%                          0,07.                     21.5%
+                           wagner            server                 248,169           264,557,372                20.9%                          0.0%                      20.9%
+                           morart            client                  34,744             9,039,008                41.6%                       26.7%                        68.3%
+                           ives              client                  21,013             6,842,648                31.2%                       22.0%                        53.2%
+                           verdi             client                  21,907             5,789,6%                 28.1%                       20.$%.                       49.0%
+                           bath              client                  26,209            10,787,736                25.8%                       21.9%                        47.7%
+                           purcell           client                  76,491            12,247,508                41.3%                       36.2%                        77.5%
+                           beriioz           client                 101,168            14,918,736                17.3~o                      64.3%                        81.6%
+
+       ‘this table presents the observed reduction in log traffic due to RVM                            optimizatiens.     The column Iahelled “Bytes Written                    to Log” shows the log
+       size after both optimization     were applied.  ‘Rre columns labclled                            “Intra-Transaction    Savings” and “Inter-Transaction                     Saving s“ indicate the
+       percentage of the originat log sire that was supresscd by each type of optimization.                                    This data was obtained        over a 4day         period in March        1993
+       from Coda clients and servers.
+
+                                                                   Table 2: Savings Due to RVM Optimization
+
+For localized           account access, Figure 9(b) shows that CPU                                            those machines              tend to be selected on the basis of size,
+usage increase linearly                  with recoverable                memory           size for            weight, and power consumption                           rather than performance.
+both RVM          and Camelot.               For all sizes investigated,                  RVM’S
+CPU usage remains well below that of Camelot’s.
+                                                                                                              7.4.   Broader Analysis
+                                                                                                              A fair criticism            of the conclusions                   drawn in Sections 7.1
+Overall,         these     measurements                   establish         that      RVM          is         and 7.2 is that they are based solely on comparison                                         with a
+considerably           less of a CPU burden than Camelot.                                       Over          research prototype,               Camelot.          A favorable            comparison        with
+most       of    the      workloads                investigated,          RVM          typically              well-tuned            commercial             products        would            strengthen          the
+requires        about     half        the CPU            usage of           Camelot.             We           claim that RVM’S                  simplicity         does not come at the cost of
+anticipate       that refinements                  to RVM          such as incremental                        good performance.                   Unfortunately,               such a comparison                 is
+truncation       will further improve                  its scalability.                                       not currently          possible because no widely                        used commercial
+                                                                                                              product          supports      recoverable             virtual      memory.            Hence        a
+RVM’S           lower     CPU           usage          follows       directly         from       our
+                                                                                                              performance            analysis        of    broader      scope       will     have    to   awah
+decision        to structure            it    as a library              rather      than        as a
+                                                                                                              the future.
+collection       of tasks communicating                        via PC.         As mentioned
+in Section 3.3, Mach IPC costs about 600 times as much as
+a procedure             call      on     the       hardware          we        used       for    our          8. RVM             as a Building                Block
+experiments.            Further         contributing            to reduced CPU usage                          The simplicity           of the abstraction              offered by RVM                makes it
+are the substantially              smaller path lengths in various RVM                                        a versatile          base on which                  to implement              more     complex
+components due to their inherently                             simpler functionality.                         functionality.            In principle,             any abstraction             that requires
+                                                                                                              persistent data structures with clean local failure                                   semantics
+7.3.    Effectiveness of Optimization                                                                         can be built            on top of RVM.                      In some cases, minor
+To      estimate        the     value         of      intra-      and     inter-transaction
+                                                                                                              extensions of the RVM                     interface maybe             necessary.
+optimizations,          we instrumented                  RVM        to keep track of the
+total     volume        of log data eliminated                      by each technique.                        For example,             nested transactions                could          be implemented
+Table 2 presents the observed savings in log traffic                                            for a         using RVM as a substrate for bookkeeping                                     state such as the
+representative          sample of Coda clients                       and servers in our                       undo logs of nested transactions.                           Only       top-level       begin,
+environment.                                                                                                  cotnmi      t,     and abort           operations        would be visible to RVM,
+                                                                                                              Recovery            would         be      simple,       since        the      restoration         of
+The data in Table 2 shows that both servers and clients                                                       committed           state would be handled entirely                          by RVM.           The
+benefit      significantly            from         intra-transaction           optimization.                  feasibility         of this approach                has been confirmed                    by the
+The savings in log traffic                      is typically          between         20% and                 Venari project [37].
+30%, though             some machines                  exhibit      substantially           higher
+savings.         Inter-transaction              optimizations            typically         reduce             Support for distributed                   transactions       could also be provided
+log traffic      on clients by another 20-30%.                              Servers do not                    by a library          built on RVM.                 Such a library            would provide
+benefit     from    this type of optimization,                        because it is only                      coordinator          and subordinate                routines       for each phase of a
+
+applicable        to no-flush            transactions.             RVM         optimizations                  two-phase            commit,        as well            as for       operations         such as
+have       proved         to       be        especially           valuable          for         good          beginning            a transaction             and       adding         new       sites      to    a
+performance         on portable               Coda clients,             because disks on                      transaction.            Recovery            after      a coordinator            crash would
+                                                                                                              involve      RVM        recovery,           followed      by appropriate termination
+
+
+
+
+                                                                                                        157
+of distributed         transactions        in progress                 at the time of the                         of techniques              for achieving             high      performance             in OLTP
+crash.        The      communication              mechanism                    could        be      left          environments               with        very     large        data     volumes          and poor
+unspecified         until runtime        by using upcalls from the library                                        locality    [12].
+to perform          communications.                    RVM            would         have to be
+                                                                                                                  In contrast          to those efforts,              RVM         represents           a “back       to
+extended         to enable a subordinate                   to undo the effects of a
+                                                                                                                  basics”       movement.                       Rather          than      embellishing              the
+first-phase       commit        if the coordinator               decides to abort.                 One
+                                                                                                                  transactional         abstraction             or its implementation,                 RVM       seeks
+way to do this would be to extend end_t                                     rans     act     ion      to
+                                                                                                                  to simplify      both.        It poses and answers the question “What
+return     a list     of the old-value                 raords            generated           by the
+                                                                                                                  is   the     simplest             realization           of     essential            transactional
+transaction.          These records              could           be preserved                by the
+                                                                                                                  properties       for the average                  application?”           By doing             so, it
+library    at each subordinate                until        the outcome               of the two-
+                                                                                                                  makes       transactions               accessible         to applications              that have
+phase commit              is clear.     On a global                 commit,          the records
+                                                                                                                  hitherto       balked             at     the       baggage             that     comes           with
+would be discarded.                On a global abort, the library                            at each
+                                                                                                                  sophisticated         transactional             facilities.
+subordinate         could        use the saved records                        to construct             a
+compensating          RVM transaction.                                                                            The virtues          of simplicity              for small           databases have been
+                                                                                                                  extolled     previously            by Birrell         et al [5].        Their design is is
+RVM       can also be used as the basis of runtime                                   systems for
+                                                                                                                  even simpler           than RVM’S,                and is based upon new-value
+languages          that      support      persistence.                      Experience             with
+                                                                                                                  logging      and full-database                 checkpointing.             Each transaction
+Avalon      [38],     which        was built          on Camelot,                  confirms         that
+                                                                                                                  is constrained         to update only a single data item.                                There is
+recoverable          virtual       memory             is     indeed           an     appropriate
+                                                                                                                  no support           for     explicit          transaction           abort.         Updates       are
+abstraction          for         implementing                 language-based                       local
+                                                                                                                  recorded       in a log file              on disk,           then reflected            in the in-
+persistence,        Language          support wouId alIeviate the problem
+                                                                                                                  memory        database image.                   Periodically,          the entire memory
+mentioned         in Section 6 of programmers                            forgetting         to issue
+                                                                                                                  image is checkpointed                    to disk, the log file deleted, and the
+set    – range         calls:      compiler-generated                       code could           issue
+                                                                                                                  new checkpoint               file renamed            to be the current version of
+these calls transparently.               An approximation                      to a language-
+                                                                                                                  the database.               Log        truncation         occurs       only     during         crash
+based      solution          would       be      to        use       a      post-compilation
+                                                                                                                  recovery, not during normal operation.
+augmentation          phase tQ test for accesses to mapped RVM
+regions and to generate set                   – range              calls.                                         The reliance          of Birrell          et al’s technique               on full-database
+                                                                                                                  checkpointing              makes          the     technique            practical        only      for
+Further evidence of the versatility                          of RVM            is provided           by
+                                                                                                                  applications         which        manage small amounts                         of recoverable
+the recent work of O’TooIe                    et al [25].             In this work, RVM
+                                                                                                                  data and which have moderate                              update rates.             The absence
+segments are used as the stable to-space and from-space                                               of
+                                                                                                                  of support          for multi-item               updates and for explicit                      abort
+the heap for a language                  that supports concurrent                           garbage
+                                                                                                                  further     limits     its domain              of use.         RVM       is more versatile
+collection        of persistent        data.          While          the authors            suggest
+                                                                                                                  without     being substantially                 more complex.
+some improvements                   to RVM             for    this application,                    their
+work establishes the suitability                  of RVM               for a very different                       Transaction            processing                monitors             (TPMs),           such       as
+context from the one that motivated                          it.                                                  Encina [35, 40]               and             Tuxedo [1, 36],                 are      important
+                                                                                                                  commercial           products.           TPMs add distribution                      and support
+
+9. Related Work                                                                                                   services to OLTP                  back-ends,         and integrate             heterogeneous
+
+The field        of transaction          processing                is enormous.               In the              systems.        Like centralized                database managers, TPM back-
+
+space available,             it is impossible              to fully          attribute       all the              ends are usually monolithic                       in structure.          They encapsulate
+
+past      work      that     has indirectly                influenced              RVM.             We            all three of the basic transactional                           properties           and provide
+
+therefore        restrict     our discussion               here to placing                  RVM’S                 data access via a query                         language        interface.            This      is in
+
+contribution         in proper         perspective,                and to clarifying                  its         contrast to RVM,                  which        supports only atomicity                   and the
+
+relationship        to its closest relatives.                                                                     process failure            aspect of permanence,                      and which provides
+                                                                                                                  access to recoverable                  data as mapped virtual memory.
+Since the original              identification         of transactional               properties
+and techniques              for their realization             [13, 18], attention                   has           A more        modular             approach          is used in the Transarc                       TP
+
+been focused              on three      areas.             One area has been the                                  toolkit,    which          is the back-end              for the Encina TPM.                      The
+
+enrichment          of the transactional               concept along dimensions                                   functionality         provided           by RVM              corresponds            primarily      to
+
+such as distribution,               nesting [23],            and longevity                 [11].      A           the recovery,         logging,          and physical            stomge modules of the
+
+second area has been the incorporation                                        of support             for          Transarc       toolkit.           RVM           differs       from      the corresponding
+
+transactions         into       languages [21],              operating             systems [15],                  Transarc toolkit            components             in two important                 ways.      First,
+
+and hardware [6].                A third area has been the development                                            RVM        is structured          entirely       as a library           that is linked          with
+
+
+
+
+                                                                                                            158
+applications,         while     some       of     the toolkit’s            modules        are         Acknowledgements
+separate       processes.              Second,       recoverable             storage        is        Marvin        Theimer          rmd Robert          Hagmarm          pmticipated           in the early
+                                                                                                      discussions          leading     to the design         of RVM.           We     wish      to thank       the
+accessed       as mapped           memory            in     RVM,           whereas        the
+                                                                                                      designers       and      implementors             of   CameloL          especially         Peter     Stout
+Transarc toolkit         offers access via the conventional                       buffered            and    Lily     MttrnmerL           for     helping        us    understand             and   use    their
+I/O model.                                                                                            system.       The comments            of our SOSP              shepherd,       Bill     Weihl,     helped
+                                                                                                      us improve           the presentation         significantly.
+Chew        et al have recently              reported         on their          efforts     to
+enhance the Mach               kernel      to support         recoverable             virtual
+                                                                                                      References
+memory [7],             Their     work          carries      Camelot’s            idea     of
+                                                                                                      [1]       Andrsde, J.M., Carges, M. T., Kovach, K.R.
+providing      system-level        support for recoverable                   memory             a
+                                                                                                                Buifding a Transaction Processing System on UNIX                               Systems.
+step further,        since their support is in the kernel rather than                                           In UniForurn          Conference        Proceedings.         San Francisco, CA,
+in a user-level Disk Manager.                   In contrast, RVM avoids the                                          Febrtsaty, 19g9.
+
+need for       specialized       operating          system          support,       thereby            [2]       Baron, R.V., Black, D. L., Bolosky, W., Chew, J., Golub, D. B.,
+                                                                                                                Rashid, R. F., Tevarrisn, Jr, A., Young, M.W.
+enhancing portability.
+                                                                                                                Mach Kernel Interface Manual
+                                                                                                                School of Ccrrrsptrter Science, Carnegie Metlon                       University,        1987.
+RVM’S         debt     to Camelot           should         be obvious            by     now.
+Camelot taught us the value of recoverable                            virtual     memory              [3]       Bernstein, P. A., Hadzilacos, V., Goodman, N.
+                                                                                                                Concumency Controt and Recovery in Data&zre                                 Systems,
+and showed us the merits and pitfalls                      of a specific approach                               Addison       Wesley,     1987.
+to its implementation.                 Whereas Camelot                 was willing          to
+                                                                                                      [4]       Bershad, B.N., Anderson,                T. E., Lar.owska,       E. D., Levy, H.M.
+require      operating        system      support         to achieve         generality,                        Lightweight Remote Procedure CZU.
+RVM        has restrained       generality        within      limits       that preserve                        ACM Transaction   on ComptUer Systems 8(l),                           Febmary,         1990.
+
+operating system independence.                                                                        [5]       Birrell,     A. B., Jcmes, M. B., Wobixr,             E.P.
+                                                                                                                A Simple and Efficient Implementation for Small Databases.
+                                                                                                                In Proceedings of ihe Elevenlh ACM Symposium on Operating
+10. Conclusion                                                                                                       System Principles.            Austin,      TX, November,          1987.
+
+In general, RVM           has proved to be useful wherever we have                                    [6]       Chang, A., Mergen, M.F.
+                                                                                                                801 Storage: Architecture and Programming.
+encountered          a need to maintain             persistent         data structures
+                                                                                                                ACM Transactions on Computer Sy.wems 6(l),                            Febmary,         1988.
+with clean failure semantics.                   The only constraints              upon its
+                                                                                                      [7]       Chew, K-M, Reddy, A.J., Rcsner, T. H., Silberschatz, A.
+use have been the need for the size of the data structures to                                                   Kernel Support for Recoverable-Persistent  Virtstat Memory.
+be a small fraction           of disk capacity, and for the working                        set                  In Proceedings          of the USENIX Mach 1[1 Symposium.                       Santa Fe,
+                                                                                                                    NM, Apd,            1993.
+size of accesses to them to be significantly                           less than main
+memory.                                                                                               [8]       Cooper, E.C., Drsves, R.P.
+                                                                                                                C T~eaak.
+The term “lightweight”                 in the title of this paper connotes                                      Technical       Report CIVIWCS-88-              154, Department             of Computer
+                                                                                                                     Scienm,         Carnegie Mellon         University,      June, 1988.
+two distinct qualities.          First, it implies ease of learning                       and
+                                                                                                      [9]       Eppinger, J.L.
+use.       Second,      it signifies       minimal          impact         upon       system
+                                                                                                                Virtunl Memory          Marragemenr for Transaction                  Processing        Systemr.
+resource usage.           RVM          is indeed       lightweight           along both                         PhD thesis, Department              of Computer        Science, Carnegie Mellon
+these      dimensions.        A Unix programmer                 thinks of RVM               in                       University,       Febmary,         1989.
+
+essentially     the same way he thinks of a typical                          subroutine               [10]      Eppirrger, J. L., Mtsmmert,             L. B., Spector, A.Z
+                                                                                                                Camelot and Avalon.
+library,     such as the st      dio      package.
+                                                                                                                Morgan       Kaufmann,          1991.
+
+While       the importance        of the transactional                 abstraction        has         [11]      Garcia-Motina,          H., Salem, K.
+                                                                                                                Sagas.
+been known for many years, its use in low-end                               applications
+                                                                                                                In Proceedings          of the ACIU Signrod Conference.                     1987.
+has     been     hampered          by       the     lack       of      a    lightweight
+                                                                                                      [12]      Good, B., Homan, P.W., Gawlick,                      D. E., Sammer, H.
+implementation.           Our hope is that RVM                      will    remedy this
+                                                                                                                One thousand transactions per second.
+situation.     While integration            with the operating              system may                          In Proceedings of IEEE Compcon. San Francisco,                                CA, 1985.
+be unavoidable         for very demanding                 applications,         it can be a           [13]      Gray, J.
+double-edged          sword, as this paper has shown.                       For a broad                         Notes on Database Operating Systems.
+                                                                                                                In Goos, G., Harttnanis, J. (editor), Operating                      Sysiems: An
+class of less demanding                applications,        we believe that RVM
+                                                                                                                     Advanced         Course. Springer          Verlag,      197g.
+represents close to the limit                of what is attainable                 without
+                                                                                                      [14]      Gray, J., Reuter, A.
+hardware or operating system suppofi                                                                            Transaction Processing: Concepts and Techniques.
+                                                                                                                Morgan Kaufmann, 1993.
+
+                                                                                                      [15]      Haskin, R., Malachi, Y., Sawdon, W., Chan, G.
+                                                                                                                Recovery Management in QuickSilver.
+                                                                                                                ACM Transactions on Camputer Syrterns 6(l), Febma~,                                    1988.
+
+
+
+
+                                                                                                159
+[16]   Kistler, J. J., Satyrmarayanan, M.                                                           [32]   Serlin, O.
+       Disconnected Opcratioo in the Coda File System.                                                     The History     of Debi[Ctedit      and the TPC.
+       ACM Tran.sactiom            on Computer       Systems 10(1), February,         1992.                Irr Gray, J. (editors), The Benchmark            Handbook      Morgan
+                                                                                                                Kaufman, 1991.
+[17]   Kumar, P., Satyanarayanan,            M.
+       Log-based Directory Resolution in the Coda File System.                                      [33]   Spector, A.Z.
+       In Proceedings of the Second International Conference on Parallel                                   The Design of CamelcX.
+           and Distributed         Information       Systems. San Diego, CA,                               In Eppinger, J. L., Mutnmert, L. B., Spector, A.Z. (editors),
+           January, 1993.                                                                                      Camelot and Avulon, Morgan Kaufmann, 1991.
+
+[18]   Larnpsmr, B.W.                                                                               [34]   Stout, P.D., Jaffe, E. D., Spector, A.Z
+       Atomic Transactions.                                                                                Performance of Select Camelot Functions.
+       frr Lampson, B.W., Paul, M,, Siegert, H.J. (editors), Dkributed                                     In Eppinger, J. L., Mummett, L. B., Spector, A.Z. (editors),
+            Systems -- Architecture and Implementation.   Springer Verlag,                                     Camelot and Avalon. Morgan Kaufmsnn, 1991.
+           1981.
+                                                                                                    [35]   Encina Product Overview
+[19]   Larrtpsmt, B. W.                                                                                    Transarc Corporation, 1991.
+       Hints for Computer System Design.
+                                                                                                    [36]   TUXEDO       System Product       Overview
+       lrt Proceedings of tk Ninth ACM Sympositun on Operaling
+                                                                                                           Unix System Laboratories,          1993.
+            Systems Principles. Bretton Woods, NH, October, 1983.
+                                                                                                    [37]   Wistg, J.M., Faehndrich,         M., Morrisen,     G., and Nettles, S.M.
+[20]   Leffler, S.L., McKusick, M.K.,              Karels, M. J., Quartemtan, J.S.
+                                                                                                           Extensions to Standard ML to Support Trarrsacticns.
+       Tk Design and lrnplementation                of the 4.3BSD Unix Operating
+                                                                                                           In ACM SIGPLAN Workshop on ML and its Applicatwns.                         San
+           System.
+                                                                                                              Francisco,     CA, June, 1992.
+       Addison Wesley,         1989.
+                                                                                                    [38]   Wing, J.M.
+[21]   Liskov, B. H., Scheifler,        R.W.
+                                                                                                           The Avalon Language.
+       Guardians and Actions:           Linguistic        Support for Robust, Distributed
+                                                                                                           In Eppinger, J. L., Mummers,         J-B., Spector, A.Z. (editors),
+          Programs.
+                                                                                                              Camelot and Avalon.           Morgan    Kaufmarm,        1991.
+       ACM Transactions            on Programming           Lunguages     5(3), July, 1983.
+                                                                                                    [39]   Young,   M.W.
+[22]   Mashbum, H., Satyanarayattan,               M.
+                                                                                                           Exporting a User Interface         to Memory Managemetifiom               a
+       RVM User Manual
+                                                                                                              Communication-Oriented             Operating System.
+       School of Computer           Science, Carnegie Mellon            University,   1992.
+                                                                                                           PhD thesm, Department        of Computer         Science, Carnegie Mellon
+[23]   Moss, J.E.B.                                                                                           University,     November,       1989.
+       Nesied Transactions:          An Approach          to Reliable   Distributed
+                                                                                                    [40]   Young,   M.W.,    Thompson,        D.S., Jaffe, E.
+           Computing.
+                                                                                                           A Modular Architecture for Distributed Transaction                  Prccessirrg.
+       ~    pt’ess, 1985.
+                                                                                                           In Proceedings of the USENLY Winter Conference.                     Dallas, TX,
+[24]   Nettles, S.M., Wing, J.M.                                                                               January, 1991.
+       Persistence -+ Undoabdlty = Transactions.
+       In Proceedings        of HICSS-25.        Hawaii,     January,    1992.
+
+[25]   O’Toole,    J., Nettles, S., Gifford,         D.
+       Concurrent Compacting Garbage Collection of a Persistent Heap.
+       In Proceedings of the Fourteenth ACM Symposium on Operating
+           Syrtem Principles.          Ashewlle,      NC, December,         1993.
+
+[26]   Ousterhout,    J.K.
+       Why Aren’t Operating            Systems Getting         Faster As Fast as
+          Hardware?
+       fn Proceedings        of the USENIX        Summer Conference.             Anaheun,
+           CA, June, 1990.
+
+[27]   Patterson, D. A., Gibson, G., Katz, R.
+       A Case for Redundant Arrays of inexpensive Disks (RAID).
+       In Proceedings of tk ACM SIGMOD Conference.      1988.
+
+[28]   Rosenblum, M., Ousterhont, J.K.
+       The Design and Implementation   of a Lmg-Stmctumd File System.
+       ACM Transactions on Computer Systems 10(1), February, 1992.
+
+[29]   Satyanarayanan,        M.
+       RPC2 User Guide and Reference Manual
+       School of Computer Science, Carnegie Mellon                      University,   1991.
+
+[30]   Satyanarayanan, M., Kistler,          J.J., Kumar, P., Okasaki, M. E.,
+       Siegel, E. H., Stcere, D.C.
+       Coda A Highly         Available File System for a Distributed
+          Workstation        Environment.
+       IEEE Transactions           on Computers       39(4), April,     1990.
+
+[31]   Satyanarayanan, M., Steere, D. C., Kudo, M., Mashbum, H.
+       Transparent Imgging as a Technique for Debugging Complex
+           Distributed Systems.
+       In Proceedings of lhe Fijih ACM SIGOPS European Worhhop.
+           Mmt St. Michel, France, September, 1992.
+
+
+
+
+                                                                                              160
+

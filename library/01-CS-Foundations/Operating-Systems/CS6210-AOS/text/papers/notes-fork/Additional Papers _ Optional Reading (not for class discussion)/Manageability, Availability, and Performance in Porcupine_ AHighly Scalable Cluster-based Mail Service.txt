@@ -1,0 +1,1018 @@
+        Manageability, availability and performance in
+   Porcupine: a highly scalable, cluster-based mail service
+                                 Yasushi Saito, Brian N. Bershad, and Henry M. Levy
+                                         Department of Computer Science and Engineering
+                                                      University of Washington
+                                           { yasushi, bershad, levy} @cs. washington.edu
+
+
+
+Abstract                                                                       can simply add more machines or disks to improve
+                                                                               throughput and replace them when they break. Over
+This paper describes the motivation, design, and perfor-                       time, a system's nodes will perform at differing capac-
+mance of Porcupine, a scalable mail server. The goal of                        ities, but these differences should be masked (and man-
+Porcupine is to provide a highly available and scalable elec-                  aged) by the system.
+tronic mail service using a large cluster of commodity PCs.
+We designed Porcupine to be easy to manage by emphasiz-                     2. Availability requirements. With so many nodes, it
+ing dynamic load balancing, automatic configuration, and                       is likely that some will be down at any given time.
+graceful degradation in the presence of failures. Key to the                   Despite component failures, the system should deliver
+system's manageability, availability, and performance is that                  good service to all of its users at all times. In prac-
+sessions, data, and underlying services are distributed ho-                    tice, the failure of one or more nodes may prevent some
+mogeneously and dynamically across nodes in a cluster.                         users from accessing some of their mail. However, we
+                                                                               strive to avoid failure modes in which whole groups of
+                                                                               users find themselves without any mail service for even
+1 Introduction                                                                 short periods of time.
+
+The growth of the Internet has led to the need for highly                   3. Performance requirements. Porcupine's single-node
+scalable and highly available services. This paper de-                         performance should be competitive with other single-
+scribes the Porcupine scalable electronic mail service. Por-                   node systems; its aggregate performance should scale
+cupine achieves scalability by clustering many small ma-                       linearly with the number of nodes in the system. For
+chines (PCs), enabling them to work together in an efficient                   Porcupine, we target a system that scales to hundreds
+manner. In this section, we describe system requirements for                   of machines, which is sufficient to service a few bil-
+Porcupine, relate the rationale for choosing a mail applica-                   lion mail messages per day with today's commodity
+tion as our target, and review clustering alternatives.                        PC hardware and system area networks.
+
+                                                                               Porcupine meets these scalability requirements uniquely.
+1.1 System requirements                                                   First, the system is functionally homogeneous. That is, any
+                                                                          node can execute part or all of any transaction, e.g., for the
+Porcupine defines scalability in terms of three essential sys-
+                                                                          delivery or retrieval of mail. Second, every transaction is
+tem aspects: manageability, availability, and performance.                dynamically scheduled to ensure that work is uniformly dis-
+Requirements for each follow:
+                                                                          tributed across all nodes in the cluster. Third, the system
+   1. Manageability requirements.        Although a system                automatically recontigures whenever nodes are added or re-
+      may be physically large, it should be easy to manage.               moved even transiently. Finally, system and user data are
+                                                                          automatically replicated across a number of nodes to ensure
+      In particular, the system must self-conligure with re-
+                                                                          availability.
+      spect to load and data distribution and self-heM with
+      respect to failure and recovery. A system manager                        Figure 1 shows the relationships among the central goal
+                                                                          of scalability, the requirements for manageability, availabil-
+Permission to make digital or hard copies of all or part of this work     ity, and performance, and the key features or techniques used
+for personal or classroom use is granted without fee provided that        in the system. For example, dynamic transaction schedul-
+copies are not made or distributed for profit or commercial advan-        ing, automatic reconfiguration, and functional homogeneity
+tage, and that copies bear this notice and the full citation on the       together make the system manageable, since changes to the
+first page. To copy otherwise, to republish, to post on servers or to     number or quality of machines, users, and load are handled
+redistribute to lists, requires prior specific permission and/or a fee.   automatically. Similarly, dynamic scheduling and replica-
+SOSP-17 12/1999 Kiawah Island, SC
+                                                                          tion improve performance, because load can be distributed
+@1999 ACM 1-58113-140-2/99/0012... $5.00
+                                                                          dynamically to less busy machines.
+                                                                 number of back-end hosts and deploy a front-end traffic
+                                                                 manager that routes requests to specific servers using a dy-
+                                                                 namic policy (e.g,, based on the server's specific function
+                                                                 [11], load or cache affinity [21]). This approach works well
+                                                                 in a read-only context; however, it is inappropriate for ser-
+                                                                 vices such as electronic mail, in which data is frequently
+                                                                 written as well as read, and for which persistence and data
+                                                                 availability are not provided by some external storage ser-
+                                                                 vice.
+                                                                      A second approach to clustering, used when data is as-
+                                                                 sociated with specific users, is to assign users and their data
+                                                                 statically to specific machines [4, 9]. A front-end intelligent
+                                                                 router directs an external client's request to the appropri-
+Figure 1. The primary goal of Porcupine is scalability           ate node. We believe that such statically distributed, write-
+defined in terms of manageability, availability, and per-        oriented services scale poorly. In particular, as the user base
+formance requirements. In turn, these requirements               grows, so does service demand, which can be met only by
+are met through combinations of the four key tech-               adding more machines. Unfortunately, each new machine
+niques shown above.                                              must be configured to handle a subset of the users, requir-
+                                                                 ing that users and their data migrate from older machines.
+                                                                 As more machines are added, the likelihood that at least
+                                                                 one of them is inoperable grows, diminishing availability
+    Today, Porcupine runs on a cluster of thirty PCs con-
+nected by a high-speed network, although we show that it         for users with data on the inoperable machines. In addition,
+                                                                 users whose accounts are on slower machines tend to receive
+is designed to scale well beyond that. Performance is lin-
+                                                                 worse service than those on faster machines. Finally, a stati-
+ear with respect to the number of nodes in the cluster. The
+system adapts automatically to changes in workload, node         cally distributed system is susceptible to overload when traf-
+capacity, and node availability. Data is available despite the   fic is distributed nOn-uniformly across the user base.
+                                                                      To date, systems relying on static distribution have
+presence of a few or many failures.
+                                                                 worked for two reasons. First, service organizations have
+                                                                 been willing to substantially overcommit computing capac-
+1.2    Rationale for a m a i l application                       ity to mitigate short-term load imbalances. Second, organi-
+                                                                 zations have been willing to employ people to reconfigure
+Although Porcupine is a mail system, its underlying services     the system manually in order to balance load over the long
+and architecture are appropriate for other systems in which      term. Because the degree of overcapacity determines where
+data is frequently written and good performance, availabil-      short-term gives way to long-term, static systems have been
+ity, and manageability at high volume are demanded. For ex-      costly in terms of hardware, people, or both. For small static
+ample, Usenet news, community bulletin boards, and large-        systems, these costs have not been substantial; for exam-
+scale calendar services are good candidates for deployment       ple, doubling the size of a small but manageable system may
+using Porcupine. Indeed, we have configured Porcupine to         yield a system that is also small and manageable. How-
+act as a web server and a Usenet news node. In this paper,       ever, once the number of machines becomes large (i.e, on
+however, we focus on the system's use as a large scale elec-     the order of a few dozen), disparate (i.e., fast/slow machines,
+tronic mail server.                                              fast/slow disks, large/small disks), and continually increas-
+     We chose a mail application for several reasons. First      ing, this gross overcapacity becomes unacceptably expen-
+is need. Large-scale commercial services now handle more         sive in terms of hardware and people.
+than ten million messages per day. Anticipating continued             Porcupine seeks to address these problems by providing
+growth, our goal with Porcupine is to handle billions of mes-    a system structure that performs well as it scales, adjusts au-
+sages per day on a PC-based cluster. Second, email presents      tomatically to changes in configuration and load, and is easy
+a more challenging application than that served by conven-       to manage. Our vision is that a single system administrator
+tional web and proxy servers, which have been shown to           can be responsible for the hardware that supports the mail
+be quite scalable. In particular, the workload for electronic    requirements of one hundred million users processing a bil-
+mail is write intensive. Finally, consistency requirements       lion messages per day. When the system begins to run out
+for mail, compared to those for a distributed file or database   of capacity, that administrator can improve performance for
+system, are weak enough to encourage the use of replication      all users simply by adding machines or even disks to the sys-
+techniques that are both efficient and highly available.         tem. Lastly, the administrator can, without inconveniencing
+                                                                 users, attend to the failure of machines, replacing them with
+1.3    Clustering alternatives                                   the same urgency with which one replaces light bulbs.
+
+Existing clustering solutions have taken one of two forms.
+One approach is seen with services that deliver read-only
+data, such as Web servers, search engines, or proxy agents.
+Here, administrators typically replicate data across a large
+                                                                      "'Alice" "Bob"    "Chuck"
+1.4    Organization of the paper
+The remainder of this paper describes Porcupine's architec-
+                                                                        ./ 3,
+ture, implementation, and performance. Section 2 presents
+                                                                       IN, IN=IN=IN,I                                    User map
+
+an overview of the system's architecture. Section 3 describes
+how the system adapts to changes in configuration automati-
+                                                                       Alice:* {N2}
+                                                                       Bob:* {NI,N2}
+                                                                                                  Chuc~:*l,N,[        User     ~ Mailbox
+                                                                                                                   profile soft fragment
+                                                                                                                      state        list
+cally, while Section 4 reveals Porcupine's approach to avail-
+ability. In Section 5 we describe the system's scalable ap-                   ] mbox
+                                                                                                                         Mailbox
+                                                                                                      t mbox   I        fragments
+proach to fine-grained load balancing. Section 6 evaluates                                            r~gm~tq~
+the performance of the Porcupine prototype on our 30-node                                                               User profile
+cluster. Section 7 discusses some of the system's scalability                                                            database
+limitations and areas for additional work. In Section 8 we
+                                                                               Node NI
+discuss related work, and we draw conclusions in Section 9.
+                                                                    Figure 2. An example showing how user information
+2     System architecture overview                                  and mail messages might be distributed across a two-
+                                                                    node Porcupine cluster.
+A key aspect of Porcupine is its functionalhomogeneity: any
+node can perform any function. This greatly simplifies sys-
+tem configuration: the system's capacity grows and shrinks
+with the number and aggregate power of the nodes, not with              Porcupine consists of a collection of data structures and
+how they are logically configured. Consequently, there is no        a set of internal operations provided by managers running on
+need for a system administrator to make specific service or         every node. The key data structures found in Porcupine are:
+data placement decisions. This attribute is key to the sys-
+tem's manageability.                                                Mailbox fragment. The collection of mail messages stored
+     Functional homogeneity ensures that a service is always             for a given user at any given node is called a mail-
+available, but it offers no guarantees about the data that ser-          box fragment; the fragment is also the unit of mail
+vice may be managing. Replicated state serves this purpose.              replication. A Porcupine mailbox is therefore a logical
+There are two kinds of replicated state that Porcupine must              entity consisting of a single user's mailbox fragments
+manage: hard state and soft state. Hard state consists of                distributed and replicated across a number of nodes.
+information that cannot be lost and therefore must be main-              There is no single mailbox structure containing all of a
+tained in stable storage. For example, an email message and              user's mail. A mailbox fragment is hard state.
+a user's password are hard state. Porcupine replicates hard
+state so that its derived soft state can be reconstructed during    Mailbox fragment list. This list describes the nodes con-
+failure. Soft state consists of information that, if lost, can be        taining mailbox fragments for a given user. The mail-
+reconstructed from existing hard state. For example, the list            box fragment list is soft state.
+of nodes containing mail for a particular user is soft state,
+                                                                    User profile database. This database describes Porcupine's
+because it can be reconstructed by a distributed disk scan.
+                                                                         client population, i.e., it contains user names, pass-
+Most soft state is maintained on only one node at a given
+                                                                         words, etc. It is persistent, changes infrequently for
+instant. The exception is directories that are themselves soft
+                                                                         a given user, and is partitioned and replicated across
+state. Such directories are replicated on every node to im-
+                                                                         nodes. The user profile database is hard state.
+prove performance.
+     This approach minimizes persistent store updates, mes-         User profile soft state. Each entry in the user profile
+sage traffic, and consistency management overhead. The                   database is kept as soft state on exactly one node in
+disadvantage is that soft state may need to be reconstructed             the cluster. Accesses and updates to the user profile
+from distributed persistent hard state after a failure. Our de-          database are done first at that node. This data structure
+sign seeks to ensure that these reconstruction costs are low             is soft state.
+and can scale with the size of the system. In Section 6, we
+demonstrate the validity of this assumption by showing that         User map. The user map is a table that maps the hash value
+reconstruction has nominal overhead.                                     of each user name to a node currently responsible for
+     The following subsections describe Porcupine's data                 managing that user's profile soft state and mailbox
+structures and their management.                                         fragment list. The user map is soft state and is repli-
+                                                                         cated on each node.
+
+2.1    Key data structures                                          Cluster membership list. Each node maintains its own
+                                                                         view of the set of nodes currently functioning as part
+Porcupine is a cluster-based, Internet mail service that sup-            of the Porcupine cluster. Most of the time, all nodes
+ports the SMTP protocol [22] for sending and receiving mes-              perceive the same membership, although a node's ar-
+sages across the Internet. Users retrieve their messages using           rival or departure may cause short-term inconsistencies
+any mail user agent that supports either the POP or IMAP re-             as the system establishes the new membership. During
+trieval protocols [20, 7].                                               network partition, inconsistencies may last for a long
+        time. Various system services automatically respond        to select any other node. The proxy then forwards the mes-
+        to changes in the cluster membership list. The cluster     sage to the chosen node's mailbox manager for storage. The
+        membership list is soft state and is replicated on each    storing node ensures that its participation is reflected in the
+        node.                                                      user's mailbox fragment list. If the message is to be repli-
+                                                                   cated (based on information in the user's profile), the proxy
+                                                                   selects multiple nodes on which to store the message.
+2.2      Data structure managers
+The preceding data structures are distributed and maintained       2.3.2   Mail retrieval
+on each node by several essential managers. The user man-
+ager manages soft state that can be reconstructed from disk.       An external mail user agent (MUA) retrieves messages for
+By spreading the responsibility for servicing accesses to the      a user whose mail is stored on a Porcupine cluster using ei-
+user profile database across all nodes in the system, larger       ther the POP or IMAP transfer protocols. The MUA contacts
+user populations can be supported simply by adding more            any node in the cluster to initiate the retrieval. The contacted
+machines. The user manager also maintains the mailbox              node, acting as a proxy, authenticates the request through the
+fragment list for each user.                                       user manager for the client and discovers the mailbox frag-
+    The membership manager on each node maintains that             ment list. It then contacts the mailbox manager at each node
+node's view of the overall cluster state. It tracks which nodes    storing the user's mail to request mail digest information,
+are up or down and the contents of the user map. It also           which it returns to the MUA. Then, for each message re-
+participates in a membership protocol to track that state.         quested, the proxy fetches the message from the appropriate
+    Two other managers, the mailbox manager and the user           node or nodes. If the external agent deletes a message, the
+pro~le manager, maintain persistent storage and enable re-         proxy forwards the deletion request to the appropriate node
+mote access to mailbox fragments and user profiles.                or nodes. When the last message for a user has been re-
+    Each node runs a replication manager, which ensures the        moved from a node, that node removes itself from the user's
+consistency of replicated objects stored in that node's local      mailbox fragment list.
+persistent storage.
+    On top of these managers, each node runs a delivery
+proxy to handle incoming SMTP requests and a retrieval
+                                                                   2.4     Advantages and tradeoffs
+proxy to handle POP and IMAP requests.                             By decoupling the delivery and retrieval agents from the
+    The Porcupine architecture leads to a rich distribution of     storage services and user manager in this way, it is always
+information in which mail storage is decoupled from user           possible to deliver or retrieve mail for a user, even when
+management. For example, Figure 2 shows a sample Porcu-            nodes storing the user's existing mail are unavailable. An-
+pine configuration consisting of two nodes and three users.        other advantage is that mail delivery can be load balanced
+For simplicity, messages are not shown as replicated. The          dynamically; any node can store mail for any user, and no
+user manager on node N1 maintains Alice's and Bob's soft           single node is permanently responsible for a user's mail or
+state, which consists of their user profile database entries and   soft profile information. A user's mail can be replicated arbi-
+their mailbox fragment lists. Similarly, the user manager on       trarily, independent of the replication factor for other users.
+node N2 maintains Chuck's soft state.                              If a user manager goes down, another will take over for
+                                                                   that manager's users. In contrast, in a system where user
+                                                                   mailboxes and/or profile information are fixed to particu-
+2.3      A mail transaction in progress
+                                                                   lar nodes, some nodes may become overloaded while others
+In failure-free operation, mail delivery and retrieval work as     idle.
+follows.                                                                 The system architecture reveals a key tension that must
+                                                                   be addressed in the implementation. Specifically, while a
+                                                                   user's mail may be distributed across a large number of ma-
+2.3.1     Mail delivery                                            chines, doing so complicates both delivery and retrieval. On
+An external mail transfer agent (MTA) delivers a message           delivery, each time a user's mail is stored on a node not al-
+to a user who is hosted on a Porcupine cluster by discover-        ready containing mail for that user, the user's mailbox frag-
+ing the IP address of any Porcupine cluster node using the         ment list (a potentially remote data structure) must be up-
+Internet's Domain Name Service [3]. Because any function           dated. On retrieval, aggregate load increases somewhat with
+can execute on any node, there is no need for special front-       the number of nodes storing the retrieving user's mail. Con-
+end request routers, although nothing in the system prevents       sequently, it is beneficial to limit the spread of a user's mail,
+their use.                                                         widening it primarily to deal with load imbalances and fail-
+    To initiate mail delivery, the MTA uses SMTP to connect        ure. In this way, lhe system behaves (and performs) like a
+to the designated Porcupine node, which acts as a delivery         statically partitioned system when there are no failures and
+proxy. The proxy's job is to store the message on disk. To         load is well-balanced, but like a dynamically partitioned sys-
+do this, it retrieves the mailbox fragment list from the re-       tem otherwise. Section 5 discusses this tradeoff in more de-
+cipient's user manager and then chooses the best node from         tail.
+that list. If the list is empty or all choices are poor (for ex-
+ample, overloaded or out of disk space), the proxy is free
+3     S e l f management                                          3.2    User map
+Porcupine must deal automatically with diverse changes, in-       The purpose of the user map is to distribute management re-
+cluding node failure, node recovery, node addition, and net-      sponsibility evenly across live nodes in the cluster. When-
+work failure. In addition, change can come in bursts, creat-      ever membership services detect a configuration change,
+ing long periods of instability, imbalance and unavailability.    the system must reassign that management responsibility.
+It is a goal of Porcupine to manage change automatically in       Therefore, like the membership list, the user map is repli-
+order to provide good service even during periods of system       cated across all nodes and is recomputed during each mem-
+flux.                                                             bership change as a side effect of the TRM protocol.
+     The following sections describe the Porcupine services           After the second round, the coordinator computes a new
+that detect and respond to configuration changes.                 user map by removing the failed nodes from the current ver-
+                                                                  sion and uniformly redistributing available nodes across the
+                                                                  user map's hash buckets (the user map has many buckets, so
+3.1    Membership services                                        a node typically is assigned to more than one bucket). The
+                                                                  coordinator minimizes changes to the user map to simplify
+Porcupine's cluster membership service provides the basic
+                                                                  reconstruction of other soft state, described in the next sec-
+mechanism for tolerating change. It maintains the current
+                                                                  tion. For each bucket with a changed assignment, the coor-
+membership set, detects node failures and recoveries, noti-       dinator assigns to and includes with the bucket a timestamp
+fies other services of changes in the system's membership,        equal to the current epoch ID. The ID is used by other nodes
+and distributes new system state. We assume a symmetric           to determine which entries in the user map have changed.
+and transitive network in steady state, so that nodes eventu-     The new user map is piggybacked on the final broadcast
+ally converge on a consistent membership set provided that
+                                                                  message of the TRM protocol.
+no failure occurs for a sufficiently long period (i.e., a few
+seconds).
+    The cluster membership service uses a variant of the          3.3    S o f t state reconstruction
+Three Round Membership Protocol [5] (TRM) to detect
+membership changes. In TRM, the first round begins when           Once the user map has been reconstructed, it is necessary to
+any node detects a change in the configuration and becomes        reconstruct the soft state at user managers with new user re-
+the coordinator. The coordinator broadcasts a "new group"         sponsibilities. Specifically, this soft state is the user profile
+message together with its Lamport clock [14], which acts as       soft state and the mailbox fragment list for each user. Essen-
+a proposed epoch ID to identify a particular membership in-       tially, every node pushes soft state corresponding to any of
+carnation uniquely. If two or more nodes attempt to become        its hard state to new user managers responsible for that soft
+a coordinator at the same time, the one proposing the largest     state.
+epoch ID wins.                                                         Reconstruction is a two-step process, completely dis-
+     In the second round, all nodes that receive the "new         tributed, but unsynchronized. The first step occurs imme-
+group" message reply to the coordinator with the proposed         diately after membership reconfiguration. Here, each node
+epoch ID. After a timeout period, the coordinator defines the     compares the previous and current user maps to identify
+new membership to be those nodes from which it received a         any buckets having fresh assignments. A node considers a
+reply. In the third round, the coordinator broadcasts the new     bucket assignment fresh if the bucket's previous epoch ID
+membership and epoch ID to all nodes.                             does not match the current epoch ID. Recall that the user
+     Once membership has been established, the coordina-          map associates nodes with hash buckets, so the relevant soft
+tor periodically broadcasts probe packets over the network.       state belonging on a node is that corresponding to those users
+Probing facilitates the merging of partitions; when a coor-       who hash into the buckets assigned to the node.
+dinator receives a probe packet from a node not in its cur-            Each node proceeds independently to the second step.
+rent membership list, it initiates the TRM protocol. A newly      Here, every node identifying another node's fresh bucket as-
+booted node acts as the coordinator for a group in which it       signment sends it any soft state corresponding to the hard
+is the only member. Its probe packets are sufficient to notify    state for that bucket maintained on the sending node. First,
+others in the network that it has recovered.                      the node locates any mailbox fragments belonging to users in
+     There are several ways in which a node may discover          the freshly managed bucket and requests that the new man-
+the failure of another. The first is through a timeout that oc-   ager include this node in those users' mailbox fragment lists.
+curs normally during part of a remote operation. In addition,     Second, the node scans its portion of the stored user profile
+nodes within a membership set periodically "ping" their next      database and sends to the fresh manager all pertinent user
+highest neighbor in IP address order, with the largest IP ad-     profiles. As the user database is replicated, only the replica
+dress pinging the smallest. If the ping is not responded to       with the largest IP address among those functioning does
+after several attempts, the pinging node becomes the coordi-      the transfer. The hard state stored on every node is "buck-
+nator and initiates the TRM protocol.                             eted" into directories so that it can be quickly reviewed and
+                                                                  collected on each change to the corresponding bucket in the
+                                                                  user map.
+                                                                       The cost of rebuilding soft state during reconfiguration
+                                                                  is intended to be constant regardless of cluster size. The cost
+                                                                  is mostly determined by the number of nodes redistributed
+within the user map after each failure. It therefore decreases             precise, since there need not be agreement on which
+linearly with cluster size. Although the rate of reconfigura-              is the primary node.
+tion increases linearly with cluster size (assuming indepen-
+dent failures), the two effects cancel each other out, and the          2. Eventual consistency. During periods offailure, repli-
+work done by each node after a failure remains about the                   cas may become inconsistent for short periods of time,
+                                                                           but conflicts are eventually resolved. We recognize
+same.
+                                                                           that single-copy consistency [12] is too strong a re-
+                                                                           quirement for many Internet-based services, and that
+3.4 Node addition                                                          replica inconsistencies are tolerable as long as they are
+                                                                           resolved eventually. This strategy improves availabil-
+Porcupine's automatic reconfiguration structure makes it                   ity, since accesses may occur during reconciliation or
+easy to add a new node to the system. A system administra-                 even during periods of network partitioning.
+tor simply installs the Porcupine software on the node. When
+the software boots, it is noticed by the membership protocol            3. Total update. An update to an object totally over-
+and added to the cluster. Other nodes see the configuration                writes that object. Since email messages are rarely
+change and upload soft state onto the new node. To make                    modified, this is a reasonable restriction that greatly
+the host accessible outside of Porcupine, the administrator                simplifies update propagation and replica reconcilia-
+may need to update border naming and routing services. Oc-                 tion, while keeping costs low,
+casionally, a background service rebalances replicated user
+database entries across the nodes in the cluster 1.                     4. Lock free. There are no distributed locks. This im-
+                                                                           proves performance and availability and simplifies re-
+                                                                           covery.
+3.5 Summary                                                             5. Ordering by loosely synchronized clocks. The nodes
+Porcupine's dynamic reconfiguration protocols ensure that                  in the cluster have loosely synchronized clocks [ 17, 18]
+the mail service is always available for any given user and fa-            that are used to order operations on replicated objects.
+cilitate the reconstruction and distribution of soft state. The
+next section discusses the maintenance of hard state.                     The update-anywhere attribute, combined with the fact
+                                                                      that any Porcupine node may act as a delivery agent, means
+                                                                      that incoming messages are never blocked (assuming at least
+4 Replication and availability                                        one node remains functional). If the delivery agent crashes
+                                                                      during delivery, the initiating host (which exists outside of
+This section describes object replication support in Porcu-           Porcupine) can reconnect to another Porcupine node. If the
+pine. As in previous systems (e.g., [11]), Porcupine defines          candidate mailbox manager fails during delivery, the de-
+semantics tuned to its application requirements. This per-            livery agent will select another candidate until it succeeds.
+mits a careful balance between behavior and performance.              Both of these behaviors have the same potential anomalous
+    Porcupine replicates the user database and mailbox frag-          outcome: if the failure occurs after the message has been
+ments to ensure their availability. Our replication service           written to stable storage but before any acknowledgement
+provides the same guarantees and behavior as the Internet's           has been delivered, the end user may receive the same mes-
+electronic-mail protocols. For example, Internet email may            sage more than once. We believe that this is a reasonable
+arrive out of order, on occasion more than once, and may              price to pay for service that is continually available.
+sometimes reappear after being deleted. These anomalies                   The eventual-consistency attribute means that earlier up-
+are artifacts of the non-transactional nature of the Internet's       dates to an object may "disappear" after all replica inconsis-
+mail protocols. Porcupine never loses electronic mail unless          tencies are reconciled. This behavior can be confusing, but
+all nodes on which the mail has been replicated are irretriev-        we believe that this is more tolerable than alternatives that
+ably lost.                                                            block access to data when replica contents are inconsistent.
+                                                                      In practice, eventual consistency for email means that a mes-
+                                                                      sage once deleted may temporarily reappear. This is visible
+4.1    Replication properties                                         only if users attempt to retrieve their mail during the tempo-
+The general unit of replication in Porcupine is the object,           rary inconsistency, which is expected to last at most a few
+which is simply a named byte array that corresponds to a              seconds.
+single mail message or the profile of a single user. A detailed           The lock-free attribute means that multiple mail-reading
+view of Porcupine's replication strategy includes these five          agents, acting on, behalf of the same user at the same time,
+high-level properties:                                                may see inconsistent data. However, POP and IMAP pro-
+                                                                      tocols do not require a consistent outcome with multiple
+   1. Update anywhere. An update can be initiated at any              clients concurrently accessing the same user's mail.
+      replica. This improves availability, since updates need             The user profile database is replicated with the same
+      not await the revival of a primary. This strategy also          mechanisms used for mail messages. Because of this, it
+      eliminates the requirement that failure detection be            is possible for a client to perceive an inconsistency in its
+                                                                      (replicated) user database entry during node recovery. Op-
+    1In the current implementation, the rebalancer must be run man-
+ually.                                                                erations are globally ordered by the loosely synchronized
+                                                                      clocks; therefore, a sequence of updates to the user profile
+database will eventually converge to a consistent state. We            The receiving replica acts as the update coordinator and
+assume that the maximum skew of the loosely synchronized          propagates updates to its peers. The replication manager
+clocks is less than the inter-arrival time of externally initi-   on every node maintains a persistent update log, used to
+ated, order-dependent operations, such as Create-User and         record updates to objects that have not yet been accepted by
+Change-Password. In practice, clock skew is usually on the        all replica peers maintaining that object. Each entry in the
+order of tens of microseconds[ 18], whereas order-dependent       update log is the tuple (timestamp, objectlD, target-nodes,
+operations are separated by networking latencies of at least a    remaining-nodes).
+few milliseconds. Wall clocks, not Lamport clocks [14], are
+used to synchronize updates, because wall clocks can order           • Timestamp is the tuple (wallclock time, nodelD),
+events that are not logically related (e.g., an external agent         where wallclock time is the time at which the update
+contacting two nodes in the cluster serially).                         was accepted at the coordinator named by nodeID.
+    We now describe the replication manager, email opera-                Timestamp uniquely identifies and totally orders the
+tions using replicas, and the details of updating replicated             update.
+objects.
+                                                                     •   Target-nodes is the set of nodes that should receive the
+                                                                         update.
+4.2 Replication manager                                              •   Remaining-nodes is the set of peer nodes that have
+A replication manager running on each host exchanges mes-                not yet acknowledged the update. Initially, remaining-
+sages among nodes to ensure replication consistency. The                 nodes is equal to target-nodes and is pruned by the co-
+manager is oblivious to the format of a replicated object                ordinator as acknowledgments arrive.
+and does not define a specific policy regarding when and
+where replicas are created. Thus, the replication manager         The coordinating replication manager works through the log,
+exports two interfaces: one for the creation and deletion         attempting to push updates to all the nodes found in the
+of objects, which is used by the higher level delivery and        remaining-nodes field of an entry. Once contact has been
+retrieval agents, and another for interfacing to the specific     made with a remaining node, the manager sends the replica's
+managers, which are responsible for maintaining replicated        contents and the log entry to the peer. Since updates to ob-
+objects. The replication manager does not coordinate object       jects are total, multiple pending updates to the same object
+reads. Mail retrieval proxies are free to pick any replica and    on a peer are synchronized by discarding all but the newest.
+read them directly.                                               If no pending update exists, or if the update request is the
+                                                                  newest for an object, the peer adds the update to the log,
+                                                                  modifies the replica, and sends an acknowledgement to the
+4.3    Sending and retrieving replicated m a i l                  coordinator. Once the coordinator receives acknowledge-
+                                                                  ments from all replica peers, it ret/res the update entry in its
+When a user's mail is replicated, that user's mailbox frag-
+                                                                  own log (freeing that log space) and then notifies the peers
+ment list reflects the set of nodes on which each fragment
+                                                                  that they may also retire the entry.
+is replicated. For example, if Alice has two fragments,
+                                                                       If the coordinator fails before responding to the initiating
+one replicated on nodes N1 and N2 and another replicated
+                                                                  agent, the agent will select another coordinator. For updates
+on nodes N2 and N3, the mailbox fragment list for Alice
+                                                                  to a new object, as is the case with a new mail message,
+records {{N1,N2}, {N2,N3}}. To retrieve mail, the re-
+                                                                  the initiating agent will create another new object and se-
+trieval agent contacts the least-loaded node for each repli-
+                                                                  lect a new, possibly overlapping, set of replicas. This helps
+cated mailbox fragment to obtain the complete mailbox con-
+                                                                  to ensure that the degree of replication remains high even
+tent for Alice.
+                                                                  in the presence of a failed coordinator. (In the current im-
+    To create a new replicated object (as would occur with
+                                                                  plementation, if a peer fails during replication, the initiating
+the delivery of a mail message), an agent generates an object
+                                                                   agent does not select an alternative replica, forcing the re-
+ID and the set of nodes on which the object is to be repli-
+                                                                  mote client to restart the entire session.) The coordinators
+cated. An object ID is simply an opaque, unique string. For
+                                                                   and participants force their update log to disk before apply-
+example, mail messages have an object ID of the form (type,
+                                                                   ing the update to ensure that the replicas remain consistent.
+username, messagelD), where type is the type of object
+                                                                  As an optimization, a replica receiving an update message
+(mail message), username is the recipient, and messageID
+                                                                  for which it is the only remaining node need not force its log
+is an unique mail identifier found in the mail header.
+                                                                  before applying the update. This is because the other repli-
+                                                                  cas are already up to date, so the sole remaining node will
+4.4 Updating objects                                              never have to make them current for this update. In prac-
+                                                                   tice, this means that only the coordinator forces its log for
+Given an object ID and an intended replica set, a delivery         two-way replication.
+or retrieval agent can initiate an update request to the object        Should the coordinator fail after responding to the initiat-
+by sending an update message to any replica manager in the         ing target but before the update is applied to all replicas, any
+set. A delivery agent's update corresponds to the storing of      remaining replica can become the coordinator and bring oth-
+a message. The retrieval agent's update corresponds to the        ers up to date. Multiple replicas can become the coordinator
+deletion and modification of a message.                            in such case, since replicas can discard duplicate updates by
+                                                                   comparing timestamps.
+    In the absence of node failures, the update log remains        message passed along the ring. The first approach gives a
+relatively small for two reasons. First, the log never con-        timely but possibly narrow view of the system's load. The
+tains more than one update to the same object. Second, up-         second approach ensures that every node eventually discov-
+dates are propagated as quickly as they are logged and are         ers the load from every other node.
+deleted as soon as all replicas acknowledge. Timely propa-             The load on a node has two components: a boolean,
+gation also narrows the window during which an inconsis-           which indicates whether or not the disk is full, and an inte-
+tency could be perceived.                                          ger, which is the number of pending remote procedure calls
+    When a node fails for a long time, the update logs of          that might require a disk access. A node with a full disk is
+other nodes could grow indefinitely. To prevent this, updates      always considered "very loaded" and is used only for op-
+remain in the update log for at most a week. If a node is          erations that read or delete existing messages. After some
+restored after that time, it must reenter the Porcupine cluster    experimentation, we found that it was best to exclude disk-
+as a "new" node, rather than as a recovering one. A node           less operations from the load to keep it from becoming stale
+renews itself by deleting all of its hard state before rejoining   too quickly. Because disk operations are so slow, a node
+the system.                                                        with many pending disk operations is likely to stay loaded
+                                                                   for some time.
+                                                                       A delivery proxy that uses load information alone to se-
+4.5 Summary                                                        lect the best node(s) on which to store a message will tend
+Porcupine's replication scheme provides high availability          to distribute a user's mailbox across many nodes. As a re-
+through the use of consistency semantics that are weaker           suit, this broad distribution can actually reduce overall sys-
+than strict single-copy consistency, but strong enough to ser-     tem throughput for the reasons mentioned earlier. Conse-
+vice Internet clients using non-transactional protocols. In-       quently, we define for each user a spread; the spread is a
+consistencies, when they occur, are short lived (the update        soft upper bound on the number of different nodes on which
+propagation latency between functioning hosts) and, by In-         a given user's mail should be stored. The bound is soft to
+ternet standards, unexceptional.                                   permit the delivery agent to violate the spread if one of the
+                                                                   nodes storing a user's mail is not responding.
+                                                                       As shown in Section 6, the use of a spread-limiting load
+5 Dynamic load balancing                                           balancer has a substantial effect on system throughput even
+                                                                   with a relatively narrow spread. The benefit is that a given
+Porcupine uses dynamic load balancing to distribute the            user's mail will be found on relatively few nodes, but those
+workload across nodes in the cluster in order to maximize          nodes can change entirely each time the user retrieves and
+throughput. As mentioned, Porcupine clients select an ini-         deletes mail from the server.
+tial contact node either to deliver or to retrieve mail. That
+contact node then uses the system's load-balancing services
+to select the "best" set of nodes for servicing the connection.    6 System evaluation
+     In developing the system's load balancer, we had sev-
+eral goals. First, it needed to be fine-grained, making good       This section presents measurements from the Porcupine pro-
+decisions at the granularity of message delivery. Second, it       totype running synthetic workloads on a 30-node cluster. We
+needed to support a heterogeneous cluster, since not all the       characterize the system's scalability as a function of its size
+nodes are of equivalent power. Third, it had to be automatic       in terms of the three key requirements:
+and not require the use of any "magic constants" thresh-
+olds, or tuning parameters that would need to be manually             • Performance. We show that the system performs well
+adjusted as the system evolved. Fourth, with throughput as              on a single node and scales linearly with additional
+the primary goal, it needed to resolve the tension between              nodes. We also show that the system outperforms a
+load and affinity. Specifically, in order to best balance load,         statically partitioned configuration consisting of a clus-
+messages should be stored on idle nodes. However, it is less            ter of standard SMTP and POP servers with fixed user
+expensive to store (and retrieve) a message on nodes that al-           mapping.
+ready contain mail for the message's recipient. Such affinity-        • Availability. We demonstrate that replication and re-
+ based scheduling reduces the amount of memory needed to                configuration have low cost.
+store fragment lists, increases the sequentiality of disk ac-
+cesses, and decreases the number of inter-node RPCs re-               • Manageability. We show that the system responds
+quired to read, write, or delete a message.                             automaticatly and rapidly to node failure and recov-
+     In Porcupine, delivery and retrieval proxies make load-            ery, while continuing to provide good performance.
+balancing decisions. There is no centralized load-balancing             We also show that incremental hardware improve-
+node service; instead, each node keeps track of the load on             ments can automatically result in system-wide per-
+other nodes and makes decisions independently.                          formance improvements. Lastly, we show that au-
+     Load information is collected in the same ways we col-             tomatic dynamic load balancing efficiently handles
+lect liveness information (Section 3.1): (1) as a side-effect           highly skewed workloads.
+of RPC operations (i.e., each RPC request or reply packet
+contains the load information of the sender), and (2) through
+ a virtual ring in which load information is aggregated in a
+6.1      Platform and workload                                          The front-end nodes accept SMTP and POP requests and
+                                                                        route them to back-end nodes by way of a hash on the user
+The Porcupine system runs on Linux-based PCs with all sys-              name. To keep the front ends from becoming a bottleneck,
+tem services on a node executing as part of a multi-threaded            we determined empirically that we need to run one front end
+process. For the measurements in this paper, we ran on a                for every fifteen back ends. The tables and graphs that follow
+cluster of thirty nodes connected by 1Gb/second Ethernet                include the front ends in our count of the system size. Based
+hubs. As would be expected in any large cluster, our sys-               on a priori knowledge of the workload, we defined the hash
+tem contains several different hardware configurations: six             function to distribute users perfectly across the back-end
+200MHz machines with 64MB of memory and 4GB SCSI                        nodes. To further optimize the configuration, we disabled
+disks, eight 300 MHz machines with 128MB of memory                      all security checks, including user authentication, client do-
+and 4GB IDE disks, and sixteen 350 MHz machines with                    main name lookup, and system log auditing.
+ 128MB of memory and 8GB IDE disks.                                         For both Porcupine and the conventional system, we de-
+    Some key attributes of the system's implementation fol-             fined a user population with size equal to 160,000 times the
+low:                                                                    number of nodes in the cluster (or about 5 million users for
+                                                                        the 30-node configuration). Nevertheless, since the database
+      • The system runs on Linux 2.2.7 and uses the ext2 file
+                                                                        is distributed in Porcupine, and no authentication is per-
+        system for storage [25].
+                                                                        formed for the conventional platform, the size of the user
+      • The system consists of fourteen major components                base is nearly irrelevant to the measurements. Each POP
+        written in C++. The total system size is about forty-one        session selects a user according to the same Zipf distribu-
+        thousand lines of code, yielding a 1MB executable.              tion, collects and then deletes all messages awaiting the user.
+                                                                        In the Porcupine configuration, the generator initiates a con-
+      • A mailbox fragment is stored in two files, regardless           nection with a Porcupine node selected at random from all
+        of the number of messages contained within. One file            the nodes. In the conventional configuration, the generator
+        contains the message bodies, and the other contains             selects a node at random from the front-end nodes. By de-
+        message index information.                                      fault, the load generator attempts to saturate the cluster by
+      • The size of the user map is 256 entries.                        probing for the maximum throughput, increasing the num-
+                                                                        ber of outstanding requests until at least 10% of them fail to
+      • The mailbox fragment files are grouped and stored in            complete within two seconds. At that point, the generator
+        directories corresponding to the hash of user names             reduces the request rate and resumes probing.
+        (e.g., if Ann's hash value is 9, then her fragment files             We demonstrate performance by showing the maximum
+        are spool / 9 / ann and spool / 9/ann. idx). This               number of messages the system receives per second. Only
+        design allows discovery of mailbox fragments belong-            message deliveries are counted, although message retrievals
+        ing to a particular hash bucket - a critical operation          occur as part of the workload. Thus, this figure really reflects
+        during membership reconfiguration - to be performed             the number of messages the cluster can receive, write, read,
+        by a single directory scan.                                     and delete per second. The error margin is smaller than 5%,
+                                                                        with 95% confidence for all values presented in the follow-
+      • Most of a node's memory is consumed by the soft user            ing sections.
+        profile state. In the current implementation, each user
+        entry takes 76 bytes plus 44 bytes per mailbox frag-
+        ment. For example, in a system with ten million users           6.2    Scalability and performance
+        running on 30 nodes, about 50 MB/node would be de-
+                                                                        Figure 3 shows the performance of the system as a func-
+        voted to user soft state.
+                                                                        tion of cluster size. The graph shows four different config-
+We developed a synthetic workload to evaluate Porcupine                 urations: without message replication, with message repli-
+because users at our site do not receive enough email to drive          cation, with message replication using NVRAM for the
+the system into an overload condition. We did, however, de-             logs, and finally for the conventional configuration of send-
+sign the workload generator to model the traffic pattern we             mail+popd. Although neither replicates, the Porcupine
+have observed on our departmental mail servers. Specifi-                no-replication case outperforms and outscales conventional
+cally, we model a mean message size of 4.7KB, with a fairly             sendmail. The difference is primarily due to the conven-
+fat tail up to about 1MB. Mail delivery (SMTP) accounts                 tional system's use of temporary files, excessive process
+for about 90% of the transactions, with mail retrieval (POP)            forking, and the use of lock-files. With some effort, we
+accounting for about 10%. Each SMTP session sends a mes-                believe the conventional system could be made to scale as
+sage to a user chosen from a population according to a Zipf             well as Porcupine without replication. However, the systems
+distribution with a = 1.3, unless otherwise noted in the text.          would not be functionally identical, because Porcupine con-
+    For purposes of comparison, we also measure a tightly               tinues to deliver service to all users even when some nodes
+configured conventional mail system in which users and ser-             are down.
+vices are statically partitioned across the nodes in the cluster.           For replication, the performance of Porcupine scales lin-
+In this configuration, we run SMTP/POP redirector nodes at              early when each incoming message is replicated on two
+the front end. At the back end, we run modified versions of             nodes. There is a substantial slowdown relative to the non-
+the widely used Sendmail-8.9.3 and ids-popd-0.23 servers.               replicated case, because replication increases the number of
+
+
+
+
+                                                                    9
+                -O-Porcupine no replication                            "o     150
+"0    800       "-~-Porcupine with                                     t-
+C     700                                                              O
+o                    replication, NVRAM                                O                                            [ ] With one disk/node
+o     600       "~-Porcupine with replication                          m
+                                                                       ~      100
+                                                                                                                        With three disks/node
+      500       - ~ "Sendmail+popd
+      400
+      300                                                              ~       50
+m     200
+m
+IE    100                                                              =                 i       f                  I               I
+        0           I      !       I      I      I       I                                      No            Replication     Replication
+            0      5      10      15     20     25     30                               Replication                           with NVRAM
+                      Cluster size
+                                                                       Figure 4. Summary of single-node throughput in a va-
+Figure 3. Throughput scales with the number of hosts.                  riety of configurations.
+This graph shows how Porcupine and the sendmail-
+based system scale with respect to cluster size.
+
+
+                                                                       "O 6000
+synchronous disk writes three-fold: once for each replica                           i -O-No replication                   I
+and once to update the coordinator's log. Even worse, in this          i     5000   I "a'Rep lication                     I        .     ~
+                                                                             4000        "                .     .     .   .                       . . []
+hardware configuration the log and the mailbox fragments
+share the same disk on each node.                                            3000        '                                     ; . . , " " " " " ° " " []
+    One way to improve the performance of replication is to            t~    2000
+                                                                       I/}                      ,,1:] ~
+use non-volatile RAM for the log. Since updates are typi-              111               ,,,,
+                                                                             1000
+cally retired, most of the writes to NVRAM need never go
+to disk and can execute at memory speeds. Although our                          0       i      l      l      i  i   =
+machines do not have NVRAM installed, we can simulate                                   5     10     15    20  25  30
+NVRAM simply by keeping the log in standard memory. As                                          Cluster size
+shown in Figure 3, NVRAM improves throughput; however,
+                                                                       Figure 5. Throughput of the system configured with
+throughput is still about half that of the non-replicated case,
+                                                                       infinitely fast disks.
+because the system must do twice as many disk operations
+per message.
+
+     Resource           No replication    With replication
+     CPU utilization    15%               12%                              Lastly, we measured a cluster in which disks were as-
+     Disk utilization   75%               75%                          sumed to be infinitely fast. In this case the system does not
+     Network send       2.5Mb/second      1.7Mb/second                 store messages on disk but only records their digests in main
+     Network recv       2.6Mb/second      1.7Mb/second                 memory. Figure 5 shows that the simulated system without
+                                                                       the disk bottleneck achieves a six-fold improvement over the
+Table 1. Resource consumption on a single node with                    measured system, At this point, the CPU becomes the bot-
+one disk.                                                              tleneck. Thus Porcupine with replication performs compar-
+                                                                       atively better than on the real system.
+                                                                           With balanced nodes, the network clearly becomes the
+    Table 1 shows the CPU, disk, and network load in-                  bottleneck. In the non-replicated case, each message travels
+curred by a single 350Mhz Porcupine node running at peak               the network four times ((I) Internet to delivery agent (2) to
+throughput. For this configuration, the table indicates that           mailbox manager (3) to retrieval agent (4) to Internet). At
+the disk is the primary impediment to single-node perfor-              an average message size of 4.7KB, a 1Gb/second network
+mance.                                                                 can then handle about 6500 messages/second. With a sin-
+    To demonstrate this, we made measurements on clusters              gle "disk loaded" node able to handle 105 messages/second,
+with one and two nodes with increased I/O capacity. A sin-             roughly 62 nodes will saturate the network as they process
+gle 300MHz node with one IDE disk and two SCSI disks                   562 million messages/day. With messages replicated on two
+delivered a throughput of 105 messages/second, as opposed              nodes, the same network can handle about 20% fewer mes-
+to about 23 messages/second with just one disk. We then                sages (as the message must be copied one additional time to
+configured a two node cluster, each with one IDE disk and              the replica), which is about 5200 messages/second, or about
+two SCSI disks. The machines were each able to handle                  450 million mesSages/day. Using the throughput numbers
+38 messages/second (48 assuming NVRAM). These results                  measured with the faster disks, this level of performance can
+(normalized to single-node throughput) are summarized in               be achieved with 108 NVRAM nodes, or about 137 nodes
+Figure 4.                                                              without NVRAM. More messages can be handled only by
+
+
+
+
+                                                                  10
+                                                                                                                              distributes uniformly across all buckets. When the skew is
+ •101000 -                                                                                                                    one, the recipients are chosen so that they all hash into a sin-
+  t-                                                                                                --O~D4                    gle user map bucket, corresponding to a highly imbalanced
+  O 800
+  o
+  ~
+              i
+              .
+                                                                                                        )( D2                 workload.
+  ~ 600                                                                                             ~D1                            The graphs compare random, static, and dynamic load
+                                                                                                    ....e.... R               balancing policies. The random policy, labeled R on the
+       400                                                                                          --o--S4                   graph, simply selects a host at random to store each mes-
+                                                                                                    - --I- -$2                sage received; it has the effect of smoothing out any non-
+  W 200                                                                                             ....4....$1
+                                                 . . . . . . . . ~ " . . . . . . . . .':7:."=-~.~
+                                                                                                                              uniformity in the distribution. The static spread policy,
+         0                           I                         I                              I     -'-'~-'-SM                shown by the lines labeled S 1, $2, and $4, selects a node
+              0                   0.25                      0.5                             1.0                               based on a hash of the user name spread over 1, 2 or 4 nodes,
+                                                                                                                              respectively. The dynamic spread policy - the one used in
+                                           Skew
+                                                                                                                              Porcupine - selects from those nodes already storing mail-
+Figure       6. Non-replicated throughput on a 30-node sys-                                                                   box fragments for the recipient. It is shown as D1, D2 and
+tem.                                                                                                                          D4 on the graph. Again, the spread value (1, 2, 4) controls
+                                                                                                                              the maximum number of nodes (in the absence of failure)
+                                                                                                                              that store a single user's mail. On message receipt, if the
+                                                                                                                              size of the current fragment list for the recipient is smaller
+                                                                                                                              than the maximum spread, Porcupine increases the spread
+ "O 400                                                                                                                       by choosing an additional node selected randomly from the
+  t,,,-                             ~(                                                       ,.,    --O~D4                    cluster.
+  o           ;
+  o 300 -                                                                                                                          Static spread manages affinity well but can lead to an
+                                                                                                                              imbalanced load when activity is concentrated on just a few
+ "~ 200           ~...................
+                                ~ : "  ..................................                    ""     .-'.- >(
+                                                                                                         °--D1"--°--$4
+                                                                                                          "-F°"'
+                                                                                                              -S2
+                                                                                                                RD2
+                                                                                                                              nodes. Indeed, a static spread of one corresponds to our
+  03
+                                                                                                                              sendmail+popd configuration in which users are statically
+  ¢n 100                                                                                                                      partitioned to different machines. This effect is shown as
+                                                                                                                              well on the graph for the conventional sendmail+pop config-
+         0                           I                         I                              I                               uration (SM on Figure 6). In contrast, the dynamic spread
+              0                   0.25                      0.5                             1.0                               policy continually monitors load and adjusts the distribution
+                                           Skew                                                                               of mail over the available machines, even when spread is
+Figure 7. Replicated throughput on a 30-node system.                                                                          one. In this case, a new mailbox manager is chosen for a
+                                                                                                                              user each time his/her mailbox is emptied, allowing the sys-
+                                                                                                                              tem to repair affinity-driven imbalances as necessary.
+                                                                                                                                   The graphs show that random and dynamic policies are
+                                                                                                                              insensitive to workload skew, whereas static policies do
+increasing the aggregate network bandwidth. We address                                                                        poorly unless the workload is evenly distributed. Random
+this issue further in Section 7.                                                                                              performs worse than dynamic because of its inability to bal-
+                                                                                                                              ance load and its tendency to spread a user's mail across
+6.3      Load balancing                                                                                                       many machines.
+                                                                                                                                   Among the static policies, those with larger spread sizes
+The previous section demonstrated Porcupine's performance                                                                     perform better under a skewed workload, since they can uti-
+assuming a uniform workload distribution and homogeneous                                                                      lize a larger number of machines for mail storage. Under
+node performance. In practice, though, workloads are not                                                                      uniform workload, however, the smaller spread sizes per-
+uniformly distributed and the speeds of CPUs and disks on                                                                     form better since they respect affinity. The key exception is
+nodes differ. This can create substantial management chal-                                                                    the difference between spread= 1 and spread=2. At spread= 1,
+lenges for system administrators when they must reconfigure                                                                   the system is unable to balance load. At spread=2, load is
+the system manually to adapt to the load and configuration                                                                    balanced and throughput improves. Widening the spread be-
+imbalance.                                                                                                                    yond two improves balance slightly, but not substantially.
+    This section shows how Porcupine automatically handles                                                                    The reason for this has been demonstrated previously [10]
+workload skew and heterogeneous cluster configuration.                                                                        and is as follows: in any system where the likelihood that a
+                                                                                                                              host is overloaded is p, then selecting the least loaded from a
+6.3.1        Adapting to workload skew                                                                                        spread of s hosts will yield a placement decision on a loaded
+                                                                                                                              host with probability pS. Thus, the chance of making a good
+Figures 6 and 7 show the impact of Porcupine's dynamic                                                                        decision (avoiding an overloaded host) improves exponen-
+spread-limiting, load-balancing strategy on throughput as a                                                                   tially with the spread. In a nearly perfectly-balanced system,
+function of workload skew for our 30-node configuration (all                                                                  p is small, so a small 8 yields good choices.
+with a single slow disk). Both the non-replicated and repli-                                                                       The effect of the loss of affinity with larger spread sizes
+cated cases are shown. Skew along the x-axis reflects the                                                                     is not pronounced in the Linux ext2 file system because it
+inherent degree of balance in the incoming workload. When                                                                     creates or deletes files without synchronous directory mod-
+the skew equals zero, recipients are chosen so that the hash                                                                  ification [25]. On other operating systems, load balancing
+
+
+
+                                                                                                                         11
+                             ~_
+             200-                                                                                                                                                                        'ID 700
+        c-                                                                                                                                                      -..... +D4                                                                                                                          No failure
+        O
+                                                                                                                                                                      -.-X--D2           O                                                                                                   ---    One node
+._= ~ Iso -                                                                                                                                                                              ~ 600
+                                                                                                                                                                      .--o~$4            W                                                                                                          failure
+                    -
+                                                                                                                                                                      - -I-- -S2         "~500                                                                                t                     Three node
+8=                                                                                                                                                                    .... e . . . . a
+                                                                                                                                                                                                                                                                                                    failures
+                                                                                                                                                                                         t~                                              I/       v ""
+= u)          50 -                                                                                                                                                                              400                                                                                                 Six node
+                                                                                                                                         4-'- . . . . . .   +                                                                                                                                       failures
+       E       o-                                                                                                                                                                               300                                                                                                Timeline
+                                                                                                                                                                                                                '       '                     ,              '         t',,              ,
+                                                               1                                                                           2                3                                         0        loo 200/~0~ t 4oo 5oo 6~0~00 8oo                                                    (seconds)
+           Number of nodes with fast disks                                                                                                                                                            Nodes                 /    New     N°deSr\,l
+                                                                                                                                                                                                                                               k...__
+                                                                                                                                                                                                                                                   ~     New
+  Figure 8. Performance improvement on a 30-node                                                                                                                                                       fail                 membership recover        membership
+  Porcupine cluster without replication when disks are                                                                                                                                                                        determined              determined
+  added to a small number of nodes.
+                                                                                                                                                                                               Figure 10.           Reconfiguration timeline without replica-
+                                                                                                                                                                                               tion.
+
+
+
+       "ID   100    .........................................................................................................................
+
+
+
+        t-                                                                                                                                                            ~D4
+       O
+                                                                                                                                                                                                300
+._c 8                                                                                                                                                                                    C                                                                                                         No failure
+                                                                                                                                                                                         0
+                                                                                                                                                                                                250       ,"        ,           ., :                                              ~ 4.       ---   One node
+              50                                                                                                                                                      - -]-" -S2
+=..    O1                                                                                                                                                                                I/)                                                                                                       failure
+                                                                                                                                                                                         ~200                                     ~                                           "                    Three node
+                                                                                                                                                                                                                                                                                                   failures
+       m
+       E                                                                                                                                                                                 I/) 150                                   i .    .   .    .     .       .
+                                                                                                                                                                                                                                                                                             - - - Six node
+                                                                                                                                                                                         G)                                        :                                                               failures
+                                                                1                                                                          2                3
+                                                                                                                                                                                         ~: 100                 '       ' ?t                  '              '         i\'               '         Timeline
+                          Number of nodes with fast disks
+                                                                                                                                                                                                      0        100 200/~0~ 400 500 6(p0'~00 800                                                    (seconds)
+      Figure 9. Performance improvement on a 30-node
+      Porcupine cluster with replication when disks are
+                                                                                                                                                                                                      Nodes                 /      New                               NodeSr\,,o,___ New
+                                                                                                                                                                                                       fail                 membership recover                                               membership
+      added to a small number of nodes.
+                                                                                                                                                                                                                            determined                                                       determined
+
+                                                                                                                                                                                               Figure 11. Reconfiguration timeline with replication.
+
+      policies with larger spread sizes will be penalized more by
+      increased frequency of directory operations.
+                                                                                                                                                                                               slightly outperforms spread=2, because the former policy is
+      6.3.2        Adapting to heterogeneous configurations                                                                                                                                    more likely to include the faster nodes in the spread. When a
+                                                                                                                                                                                               few nodes are many times faster than the rest, as is the case
+      As mentioned in the previous section, the easiest way to im-                                                                                                                             with our setting, the spread size needs to be increased. On
+      prove throughput in our configuration is to increase the sys-                                                                                                                            the other hand, as described in Section 5, larger spread sizes
+      tem's disk I/O capacity. This can be done by adding more                                                                                                                                 tend to reduce the system efficiency. Thus, spread size is one
+      machines or by adding more or faster disks to a few ma-                                                                                                                                  parameter that needs to be revisited as the system becomes
+      chines. In a statically partitioned system, it is necessary to                                                                                                                           more heterogeneous.
+      upgrade the disks on all machines to ensure a balanced per-                                                                                                                                  In contrast, the statically partitioned and random mes-
+      formance improvement. In contrast, because of Porcupine's                                                                                                                                sage distribution policies demonstrate little improvement
+      functional homogeneity and automatic load balancing, we                                                                                                                                  with the additional disks. This is because their assignment
+      can improve the system's overall throughput for all users                                                                                                                                improves performance for only a subset of the users.
+      simply by improving the throughput on a few machines. The
+      system will automatically find and exploit the new resources.
+          Figures 8 and 9 show the absolute performance improve-                                                                                                                               6.4    Failure recovery
+      ment of the 30-node configuration when adding two fast                                                                                                                                   As described previously, Porcupine automatically reconfig-
+      SCSI disks to each of one, two, and three of the 300Mhz                                                                                                                                  ures whenever nodes fail or restart. Figures 10 and 11 depict
+      nodes, with and without replication. The improvement for                                                                                                                                 an annotated timeline of events that occur during the fail-
+      Porcupine shows that the dynamic load balancing mecha-                                                                                                                                   ure and recovery of 1, 3, and 6 nodes in a 30-node system
+      nism can fully utilize the added capacity. Here, spread=4
+
+
+
+
+                                                                                                                                                                                         12
+without and with replication. Both figures show the same be-            were often challenged to balance users across mail servers.
+havior. Nodes fail and throughput drops dramatically as two             In contrast, Porcupine implements a flat name space man-
+things occur. First, the system goes through its reconfigura-           aged by a single cluster and automatically balances load.
+tion protocol, increasing its load. Next, during the reconfigu-         Grapevine provided a replicated user database based on op-
+ration, SMTP and POP sessions that involve the failed node              timistic replication, but it did not replicate mail messages.
+are aborted. After ten seconds, the system determines the               Porcupine uses optimistic replication for both mail and the
+new membership, and throughput increases as the remain-                 user database.
+ing nodes take over for the failed ones. The failed nodes                    As described earlier, contemporary email cluster systems
+recover 300 seconds later and rejoin the cluster, at which              deploy many storage nodes and partition the user population
+time throughput starts to rise. For the non-replicated case,            statically among them, either using a distributed file system
+throughput increases back to the pre-failure level almost im-           [4] or protocol redirectors [9]. As we demonstrate in this
+mediately. With replication, throughput rises slowly as the             paper, this static approach is difficult to manage and scale
+failed nodes reconcile while concurrently serving new re-               and has limited fault tolerance.
+quests.                                                                      Numerous fault-tolerant, clustered-computing products
+                                                                        have been described in the past (e.g., [13, 26]). These clus-
+                                                                        ters are often designed specifically for database fail-over,
+7   Limitations and future work                                         have limited scalability, and require proprietary hardware or
+                                                                        software. Unlike these systems, Porcupine's goal is to scale
+Porcupine's architecture and implementation have been de-               to hundreds or thousands of nodes using standard off-the-
+signed to run well in very large clusters. There are, however,          shelf hardware and software.
+some aspects of its design and the environment in which it is                Fox et al. [11] describe an infrastructure for building
+deployed that may need to be rethought as the system grows              scalable network services based on cluster computing. They
+to larger configurations.                                               describe a data semantics called BASE (Basically Avail-
+    First, Porcupine's communication patterns are fiat, with            able, Soft-state, Eventual consistency) that offers advantages
+every node as likely to talk to every other node. A                     for the web-search and document-filtering applications they
+1Gb/second heavily switched network should be able to                   present. Our work shares many of their goals - building scal-
+serve about 6500 messages/second (or 560 million mes-                   able Internet services with a weaker semantics than tradi-
+sages/day) without replication. With replication, the net-              tional databases. As in the Fox work, we observe that ACID
+work can handle 5200 messages/second, or 450 million mes-               semantics [12] may be too strong for our application and de-
+sages/day. Beyond that, faster networks or more network-                fine a data model that is equal to the non-transactional model
+topology-aware load balancing strategies will be required to            used by the system's clients. However, unlike BASE, our se-
+continue scaling.                                                       mantics support write-intensive applications requiring per-
+    Our membership protocol may also require adjustments                sistent data. Our services are also distributed and replicated
+as the system grows. Presently, the membership protocol has             uniformly across all nodes for greater scalability. They are
+the coordinator receiving acknowledgment packets from all               not being statically partitioned by function.
+participants in a very short period of time. Although partici-               A large body of work exists on the general topic of load
+pants currently insert a randomized delay before responding             sharing, but this work has been targeted mainly at systems
+to smooth out packet bursts at the receiver, we still need to           with long-running, CPU-bound tasks. For example, Eager et
+evaluate whether this works well at very large scale. In other          al. [ 10] show that effective load sharing can be accomplished
+work, we are experimenting with a hierarchical membership               with simple adaptive algorithms that use random probes to
+protocol that eliminates this problem. In time, we may use              determine load. In the context of clusters and the Web, sev-
+this to replace Porcupine's current protocol.                           eral commercial products automatically distribute requests
+     Our strategy for reconstructing user profile soft state may        to cluster nodes, typically using a form of round-robin dis-
+also need to be revisited for systems in which a single user            patching [6]. In [8, 19], the authors propose a class of load
+manager manages millions of users (many users, few ma-                  distribution algorithms using a random spread of nodes and
+chines). Rather than transferring the user profile soft state            a load-based selection from the spread. Their results show
+in bulk, as we do now, we could modify the system to fetch              that a spread of two is optimal for a wide variety of situa-
+profile entries on use and cache them. This would reduce                tions in a homogeneous cluster. Pai et al. [21] describe a
+node recovery time (possibly at the expense of making user              "locality-aware request distribution" mechanism for cluster-
+lookups slower, however).                                               based services. A front-end node analyzes the request con-
+                                                                         tent and attempts to direct requests so as to optimize the use
+8    Related work                                                       of buffer cache in back-end nodes, while also balancing load.
+                                                                        Porcupine uses load information, in part, to distribute incom-
+The prototypical distributed mail service was Grapevine                  ing mail traffic to cluster nodes. However, unlike previous
+[23], a wide-area service intended to support about ten thou-            load-balancing studies that assumed complete independence
+sand users. Grapevine users were statically assigned to                  of incoming tasks, we also balance the write traffic, taking
+(user-visible) registries. The system scaled through the ad-             message affinity into consideration.
+dition of new registries having sufficient power to handle                   The replication mechanism used in Porcupine can be
+their populations. Nevertheless, Grapevine's administrators              viewed as a variation of optimistic replication schemes
+                                                                         [1, 27], in which timestamped updates are pushed to peer
+
+
+
+                                                                   13
+nodes to support multi-master replication. Porcupine's total            [2] Andrew D. Birrell, Andy Hisgen, Chuck Jerian, Tim-
+object update property allows it to use a single timestamp per              othy Mann, and Garret Swart. The Echo distributed
+object, instead of timestamp matrices, to order updates. In                 file system. Technical Report 111, Compaq Systems
+addition, since updates are idempotent, Porcupine can retire                Research Center, Palo Alto, CA, September 1993.
+updates more aggressively. These differences make Porcu-
+pine's approach to replication simpler and more efficient at            [3] Thomas P. Brisco. RFC1794: DNS support for
+scale.                                                                      load balancing, April 1995.       http://www.cis.ohio-
+    Several file systems have scalability and fault tolerance               state.edu/htbin/rfc/rfc1794.html.
+goals that are similar to Porcupine's [2, 15, 16, 24]. Unlike           [4] Nick Christenson, Tim Bosserman, and David Becke-
+these systems, Porcupine uses the semantics of the various                  meyer. A highly scalable electronic mail service us-
+data structures it maintains to exploit their special properties            ing open systems. In USEN1X Symposium on lnternet
+in order to increase performance or decrease complexity.                    Technologies and Systems, Monterey, CA, December
+                                                                            1997.
+9     Conclusions                                                        [5] Flaviu Christian and Frank Schmuck. Agreeing on pro-
+                                                                             cessor group membership in asynchronous distributed
+We have described the architecture, implementation, and                      systems. Technical Report CSE95-428, UC San Diego,
+performance of the Porcupine scalable mail server. We have                   1995.
+shown that Porcupine meets its three primary goals:
+                                                                         [6] Cisco Systems. Local director, http://www.cisco.com/-
+Manageability. Porcupine automatically adapts to changes                     warp/public/751/lodir/index.html.
+    in configuration and workload. Porcupine masks het-
+    erogeneity, providing for seamless system growth over                [7] Marc Crispin.     RFC2060: Internet message ac-
+    time using latest-technology components.                                 cess protocol version 4 rev 1, December 1996.
+                                                                             http://www.cis.ohio-state.edu/htbin/rfc/rfc2060.html.
+Availability. Porcupine continues to deliver service to its
+     clients, even in the presence of failures. System soft-             [8] Michael Dalllin. Interpreting stale load information.
+     ware detects and recovers automatically from failures                   In The 19th IEEE International Conference on Dis-
+     and integrates recovering nodes.                                        tributed Computing Systems (ICDCS), Austin, TX,
+                                                                             May 1999.
+Performance. Porcupine's single-node performance is
+     competitive with other systems, and its throughput                  [9] James Deroest. Clusters help allocate computing
+     scales linearly with the number of nodes. Our experi-                   resources,  http://www.washington.edu/tech_home/-
+     ments show that the system can find and exploit added                   windows/issue 18/clusters.html, 1996.
+     resources for its benefit.                                         [10] Derek L. Eager, Edward D. Lazowska, and John Za-
+    Porcupine achieves these goals by combining four key                     horjan. Adaptive load sharing in homogeneous dis-
+                                                                             tributed systems. IEEE Trans. on Software Engineer-
+architectural techniques: functional homogeneity, automatic
+reconfiguration, dynamic transaction scheduling, and repli-                  ing, 12(5):662-675, May 1986.
+cation. In the future, we hope to construct, deploy and eval-           [11] Armando Fox, Steven D. Gribble, Yatin Chawathe,
+uate configurations larger and more powerful than the ones                   Eric A. Brewer, and Paul Gauthier. Cluster-based scal-
+described in this paper.                                                     able network services. In 16th Symposium on Operat-
+                                                                             ing Systems Principles, pages 78-91, St. Malo, France,
+                                                                             October 1997.
+Acknowledgements
+                                                                        [12] Jim Gray and Andreas Reuter. Transaction Processing:
+We would like to thank Eric Hoffman, Bertil Folliot, David                   Concepts and Techniques. Morgan-Kaufmann, 1993.
+Becker, and other members of the Porcupine project for the
+valuable discussions and comments on the Porcupine design.              [ 13] Nancy P. Kronenberg, Henry M. Levy, and William D.
+   This work is supported by DARPA Grant F30602-97-                           Strecker. Vaxclusters: A closely-coupled distributed
+2-0226 and by National Science Foundation Grant # EIA-                        system. ACM Trans. on Computer Systems, 4(2):130-
+9870740.                                                                      146, 1986.
+                                                                        [14] Leslie Lamport. Time, clocks, and the ordering of
+References                                                                   events in a distributed system. Communications of the
+                                                                             ACM, 21(7):558-565, July 1978.
+    [1] Divyakant Agrawal, Amr El Abbadi, and R. C. Steike.
+                                                                        [ 15] Edward K. Lee and Chandramohan Thekkath. Petal:
+        Epidemic algorithms in replicated databases. In Pro-
+                                                                              Distributed virtual disks. In 7th International Confer-
+        ceedings of the 16th Symposium on Principles of
+                                                                              ence on Architectural Support for Programming Lan-
+        Database Systems, pages 161-172, Montreal, Canada,
+                                                                              guages and Operating Systems, pages 84-92, Cam-
+        May 1997.
+                                                                              bridge, MA, October 1996.
+
+
+
+
+                                                                   14
+[16] Barbara Liskov, Sanjay Ghemawat, Robert Gruber,
+     Paul Johnson, Liuba Shrira, and Michael Williams.
+     Replication in the Harp file system. In 13th Sympo-
+     sium on Operating Systems Principles, pages 226-238,
+     Pacific Grove, CA, October 1991.
+[17] David L. Mills. RFC1305: Network time proto-
+     col (version 3), March 1992. http://www.cis.ohio-
+     state.edu/htbin/r fc/rfc 1305.html.
+[18] David L. Mills. Improved algorithms for synchronizing
+     computer network clocks. In ACM SIGCOMM, pages
+     317-327, London, UK, September 1994.
+[19] Michael Mitzenmacher. How useful is old informa-
+     tion? Technical Report 98-002, Compaq Systems Re-
+     search Center, Palo Alto, CA, February 1998.
+[20] John G. Myers and Marshall T. Rose. RFC1939:
+     Post office protocol version 3, May 1996.
+     http://www.cis.ohio-state.edu/htbin/rfc/rfc 1939.html.
+[21] Vivek S. Pai, Mohit Aron, Gaurav Banga, Michael
+     Svendsen, Peter Druschel, Willy Zwaenepoel, and
+     Erich Nahum. Locality-aware request distribution in
+     cluster-based network servers. In 8th International
+     Conference on Architectural Support for Programming
+     Languages and Operating Systems, pages 206-216,
+     San Jose, CA, October 1998.
+[22] Jonathan Postel.       RFC821:     Simple mail trans-
+     fer protocol, August 1982.         http://www.cis.ohio-
+     state.edu/htbin/rfc/rfc821.html.
+[23] Michael D. Schroeder, Andrew D. Birrell, and
+     Roger M. Needham. Experience with Grapevine: The
+     growth of a distributed system. ACM Transactions on
+     Computer Systems, 2(1) :3-23, February 1984.
+[24] Chandramohan Thekkath, Timothy Mann, and Edward
+     Lee. Frangipani: A scalable distributed file system.
+     In 16th Symposium on Operating Systems Principles,
+     pages 224-237, St. Malo, France, October 1997.
+[25] Theodore Ts'o. Ext2 home page, 1999. http:l/web.-
+     mit.edu/tytso/www/linux/ext2.html.
+[26] Werner Vogels, Dan Dumitriu, Ken Birman, Rod
+     Gamache, Mike Massa, Rob Short, John Vert, Joe Bar-
+     rera, and Jim Gray. The design and architecture of the
+     Microsoft cluster service. In 28th International Sym-
+     posium on Fault-Tolerant Computing, pages 422-431,
+     Munich, Germany, June 1998.
+[27] Gene T. J. Wuu and Arthur J. Bernstein. Efficient so-
+     lutions to the replicated log and dictionary problems.
+     In Proceedings of the 3rd Symposium on Principles
+     of Distributed Computing, pages 233-242, Vancouver,
+     Canada, August 1984.
+
+
+
+
+                                                               15
+

@@ -1,0 +1,1292 @@
+                                       Exokernel: An Operating System Architecture for
+                                          Application-Level Resource Management
+                                             Dawson R. Engler, M. Frans Kaashoek, and James O’Toole Jr.
+                                                      M.I.T. Laboratory for Computer Science
+                                                          Cambridge, MA 02139, U.S.A
+                                                  engler, kaashoek, james  @lcs.mit.edu
+
+
+                                                                                      inappropriate for three main reasons: it denies applications the ad-
+                                                                                                vantages of domain-specific optimizations, it discourages changes
+Traditional operating systems limit the performance, flexibility, and                           to the implementations of existing abstractions, and it restricts the
+functionality of applications by fixing the interface and implemen-                             flexibility of application builders, since new abstractions can only
+tation of operating system abstractions such as interprocess com-                               be added by awkward emulation on top of existing ones (if they can
+munication and virtual memory. The exokernel operating system                                   be added at all).
+architecture addresses this problem by providing application-level                                   We believe these problems can be solved through application-
+management of physical resources. In the exokernel architecture, a                              level (i.e., untrusted) resource management. To this end, we have
+small kernel securely exports all hardware resources through a low-                             designed a new operating system architecture, exokernel, in which
+level interface to untrusted library operating systems. Library op-                             traditional operating system abstractions, such as virtual memory
+erating systems use this interface to implement system objects and                              (VM) and interprocess communication (IPC), are implemented en-
+policies. This separation of resource protection from management                                tirely at application level by untrusted software. In this architecture,
+allows application-specific customization of traditional operating                              a minimal kernel—which we call an exokernel—securely multi-
+system abstractions by extending, specializing, or even replacing                               plexes available hardware resources. Library operating systems,
+libraries.                                                                                      working above the exokernel interface, implement higher-level ab-
+    We have implemented a prototype exokernel operating system.                                 stractions. Application writers select libraries or implement their
+Measurements show that most primitive kernel operations (such                                   own. New implementations of library operating systems are incor-
+as exception handling and protected control transfer) are ten to 100                            porated by simply relinking application executables.
+times faster than in Ultrix, a mature monolithic UNIX operating sys-                                Substantial evidence exists that applications can benefit greatly
+tem. In addition, we demonstrate that an exokernel allows applica-                              from having more control over how machine resources are used
+tions to control machine resources in ways not possible in traditional                          to implement higher-level abstractions. Appel and Li [5] reported
+operating systems. For instance, virtual memory and interprocess                                that the high cost of general-purpose virtual memory primitives
+communication abstractions are implemented entirely within an                                   reduces the performance of persistent stores, garbage collectors, and
+application-level library. Measurements show that application-level                             distributed shared memory systems. Cao et al. [10] reported that
+virtual memory and interprocess communication primitives are five                               application-level control over file caching can reduce application
+to 40 times faster than Ultrix’s kernel primitives. Compared to                                 running time by 45%. Harty and Cheriton [26] and Krueger et
+state-of-the-art implementations from the literature, the prototype                             al. [30] showed how application-specific virtual memory policies
+exokernel system is at least five times faster on operations such as                            can increase application performance. Stonebraker [47] argued
+exception dispatching and interprocess communication.                                           that inappropriate file-system implementation decisions can have a
+                                                                                                dramatic impact on the performance of databases. Thekkath and
+                                                                           Levy [50] demonstrated that exceptions can be made an order of
+                                                                                                magnitude faster by deferring signal handling to applications.
+Operating systems define the interface between applications and                                     To provide applications control over machine resources, an ex-
+physical resources. Unfortunately, this interface can significantly                             okernel defines a low-level interface. The exokernel architecture is
+limit the performance and implementation freedom of applications.                               founded on and motivated by a single, simple, and old observation:
+Traditionally, operating systems hide information about machine                                 the lower the level of a primitive, the more efficiently it can be
+resources behind high-level abstractions such as processes, files,                              implemented, and the more latitude it grants to implementors of
+address spaces and interprocess communication. These abstrac-                                   higher-level abstractions.
+tions define a virtual machine on which applications execute; their                                 To provide an interface that is as low-level as possible (ideally,
+implementation cannot be replaced or modified by untrusted appli-                               just the hardware interface), an exokernel designer has a single
+cations. Hardcoding the implementations of these abstractions is                                overriding goal: to separate protection from management. For
+This research was supported in part by the Advanced Research Projects Agency under
+                                                                                                instance, an exokernel should protect framebuffers without under-
+contract N00014-94-1-0985 and by a NSF National Young Investigator Award.                       standing windowing systems and disks without understanding file
+              
+    Copyright c 1995 by the Association for Computing Machinery, Inc. Permission
+                                                                                                systems. One approach is to give each application its own virtual
+to make digital or hard copies of part or all of this work for personal or classroom use
+                                                                                                machine [17]. As we discuss in Section 8, virtual machines can
+is granted without fee provided that copies are not made or distributed for profit or           have severe performance penalties. Therefore, an exokernel uses a
+commercial advantage and that new copies bear this notice and the full citation on the          different approach: it exports hardware resources rather than emu-
+first page. Copyrights for components of this WORK owned by others than ACM must                lating them, which allows an efficient and simple implementation.
+be honored. Abstracting with credit is permitted.
+    To copy otherwise, to republish, to post on servers or to redistribute to lists, requires
+                                                                                                An exokernel employs three techniques to export resources securely.
+prior specific permission and/or a fee. Request Permissions from Publications Dept,             First, by using secure bindings, applications can securely bind to
+                                         
+ACM Inc., Fax +1 (212) 869-0481, or permissions@acm.org .                                      machine resources and handle events. Second, by using visible re-
+source revocation, applications participate in a resource revocation           stractions and show how the exokernel architecture addresses these
+protocol. Third, by using an abort protocol, an exokernel can break            problems.
+secure bindings of uncooperative applications by force.
+    We have implemented a prototype exokernel system based on
+                                                                                     
+                                                                                                 
+                                                                                                                     "!#$     
+secure bindings, visible revocation, and abort protocols. It includes
+an exokernel (Aegis) and an untrusted library operating system                 The essential observation about abstractions in traditional operating
+(ExOS). We use this system to demonstrate several important prop-              systems is that they are overly general. Traditional operating sys-
+erties of the exokernel architecture: (1) exokernels can be made               tems attempt to provide all the features needed by all applications.
+efficient due to the limited number of simple primitives they must             As previously noted by Lampson and Sproul [32], Anderson et
+provide; (2) low-level secure multiplexing of hardware resources               al. [4] and Massalin and Pu [36], general-purpose implementations
+can be provided with low overhead; (3) traditional abstractions,               of abstractions force applications that do not need a given feature to
+such as VM and IPC, can be implemented efficiently at application              pay substantial overhead costs. This longstanding problem has be-
+level, where they can be easily extended, specialized, or replaced;            come more important with explosive improvements in raw hardware
+and (4) applications can create special-purpose implementations of             performance and enormous growth in diversity of the application
+abstractions, tailored to their functionality and performance needs.           software base. We argue that preventing the modification of the
+                                                                               implementation of these high-level abstractions can reduce the per-
+     In practice, our prototype exokernel system provides applica-
+                                                                               formance, increase the complexity, and limit the functionality of
+tions with greater flexibility and better performance than mono-
+                                                                               application programs.
+lithic and microkernel systems. Aegis’s low-level interface allows
+application-level software such as ExOS to manipulate resources                    Fixed high-level abstractions hurt application performance be-
+very efficiently. Aegis’s protected control transfer is almost seven           cause there is no single way to abstract physical resources or to
+times faster than the best reported implementation [33]. Aegis’s               implement an abstraction that is best for all applications. In im-
+exception dispatch is five times faster than the best reported imple-          plementing an abstraction, an operating system is forced to make
+mentation [50]. On identical hardware, Aegis’s exception dispatch              trade-offs between support for sparse or dense address spaces,
+and control transfer are roughly two orders of magnitude faster than           read-intensive or write-intensive workloads, etc. Any such trade-
+in Ultrix 4.2, a mature monolithic system.                                     off penalizes some class of applications. For example, relational
+                                                                               databases and garbage collectors sometimes have very predictable
+     Aegis also gives ExOS (and other application-level software)
+                                                                               data access patterns, and their performance suffers when a general-
+flexibility that is not available in microkernel-based systems. For
+                                                                               purpose page replacement strategy such as LRU is imposed by
+instance, virtual memory is implemented at application level, where
+                                                                               the operating system. The performance improvements of such
+it can be tightly integrated with distributed shared memory systems
+                                                                               application-specific policies can be substantial; Cao et al. [10] mea-
+and garbage collectors. Aegis’s efficient protected control trans-
+                                                                               sured that application-controlled file caching can reduce application
+fer allows applications to construct a wide array of efficient IPC
+                                                                               running time by as much as 45%.
+primitives by trading performance for additional functionality. In
+contrast, microkernel systems such as Amoeba [48], Chorus [43],                    Fixed high-level abstractions hide information from applica-
+Mach [2], and V [15] do not allow untrusted application software to            tions. For instance, most current systems do not make low-level
+define specialized IPC primitives because virtual memory and mes-              exceptions, timer interrupts, or raw device I/O directly available to
+sage passing services are implemented by the kernel and trusted                application-level software. Unfortunately, hiding this information
+servers. Similarly, many other abstractions, such as page-table                makes it difficult or impossible for applications to implement their
+structures and process abstractions, cannot be modified in micro-              own resource management abstractions. For example, database im-
+kernels. Finally, many of the hardware resources in microker-                  plementors must struggle to emulate random-access record storage
+nel systems, such as the network, screen, and disk, are encapsu-               on top of file systems [47]. As another example, implementing
+lated in heavyweight servers that cannot be bypassed or tailored               lightweight threads on top of heavyweight processes usually re-
+to application-specific needs. These heavyweight servers can be                quires compromises in correctness and performance, because the
+viewed as fixed kernel subsystems that run in user-space.                      operating system hides page faults and timer interrupts [4]. In such
+                                                                               cases, application complexity increases because of the difficulty of
+    This paper focuses on the exokernel architecture design and how
+                                                                               getting good performance from high-level abstractions.
+it can be implemented securely and efficiently. Section 2 provides
+a more detailed case for exokernels. Section 3 discusses the issues                Fixed high-level abstractions limit the functionality of appli-
+that arise in their design. Section 4 overviews the status of our proto-       cations, because they are the only available interface between ap-
+type and explains our experimental methodology. Sections 5 and 6               plications and hardware resources. Because all applications must
+present the implementation and summarize performance measure-                  share one set of abstractions, changes to these abstractions occur
+ments of Aegis and ExOS. Section 7 reports on experiments that                 rarely, if ever. This may explain why few good ideas from the
+demonstrate the flexibility of the exokernel architecture. Section 8           last decade of operating systems research have been adopted into
+summarizes related work and Section 9 concludes.                               widespread use: how many production operating systems support
+                                                                               scheduler activations [4], multiple protection domains within a sin-
+          
+                                
+                                                                            gle address space [11], efficient IPC [33], or efficient and flexible
+                                                                               virtual memory primitives [5, 26, 30]?
+
+Traditionally, operating systems have centralized resource manage-                    %                
+                                                                                                    $$ '&              "            (   %)*   
+ment via a set of abstractions that cannot be specialized, extended,
+or replaced. Whether provided by the kernel or by trusted user-
+                                                                               The familiar “end-to-end” argument applies as well to low-level
+level servers (as in microkernel-based systems), these abstractions
+                                                                               operating system software as it does to low-level communication
+are implemented by privileged software that must be used by all
+                                                                               protocols [44]. Applications know better than operating systems
+applications, and therefore cannot be changed by untrusted soft-
+                                                                               what the goal of their resource management decisions should be
+ware. Typically, the abstractions include processes, files, address
+                                                                               and therefore, they should be given as much control as possible over
+spaces, and interprocess communication. In this section we discuss
+the problems with general-purpose implementations of these ab-
+
+
+                                                                           2
+                                                                                           system can be smaller, since most of the operating system runs in
+                                                                                           the address space of the application.
+                      Mosaic                    Applications        Barnes−Hut                  Library operating systems can provide as much portability and
+                                                                                           compatibility as is desirable. Applications that use an exokernel
+                     WWW                                                DSM
+                                                                                           interface directly will not be portable, because the interface will in-
+                 POSIX     TCP                                    IPC           VM         clude hardware-specific information. Applications that use library
+                                                                                           operating systems that implement standard interfaces (e.g., POSIX)
+                                      Library operating systems         Traps              will be portable across any system that provides the same interface.
+                                                                                           An application that runs on an exokernel can freely replace these
+                                                                                           library operating systems without any special privileges, which sim-
+     Exokernel                              Secure bindings                                plifies the addition and development of new standards and features.
+     Hardware Frame buffer            TLB                      Memory           Disk
+                                                                                           We expect that most applications will use a handful of available
+                                                     Network
+                                                                                           library operating systems that implement the popular interfaces;
+                                                                                           only designers of more ambitious applications will develop new
+                                                                                           library operating systems that fit their needs. Library operating
+Figure 1: An example exokernel-based system consisting of a thin                           systems themselves can be made portable by designing them to use
+exokernel veneer that exports resources to library operating systems                       a low-level machine-independent layer to hide hardware details.
+through secure bindings. Each library operating system implements                              Extending or specializing a library operating system might be
+its own system objects and policies. Applications link against stan-                       considerably simplified by modular design. It is possible that object-
+dard libraries (e.g., WWW, POSIX, and TCP libraries for Web ap-                            oriented programming methods, overloading, and inheritance can
+plications) or against specialized libraries (e.g., a distributed shared                   provide useful operating system service implementations that can
+memory library for parallel applications).                                                 be easily specialized and extended, as in the VM++ library [30].
+                                                                                           To reduce the space required by these libraries, support for shared
+                                                                                           libraries and dynamic linking will be an essential part of a complete
+those decisions. Our solution is to allow traditional abstractions to                      exokernel-based system.
+be implemented entirely at application level.
+                                                                                               As in microkernel systems, an exokernel can provide backward
+    To provide the maximum opportunity for application-level re-                           compatibility in three ways: one, binary emulation of the operating
+source management, the exokernel architecture consists of a thin                           system and its programs; two, by implementing its hardware ab-
+exokernel veneer that multiplexes and exports physical resources                           straction layer on top of an exokernel; and three, re-implementing
+securely through a set of low-level primitives. Library operating                          the operating system’s abstractions on top of an exokernel.
+systems, which use the low-level exokernel interface, implement
+higher-level abstractions and can define special-purpose implemen-                                                 
+                                                                                                                      $$     
+                                                                                                                              
+tations that best meet the performance and functionality goals of
+applications (see Figure 1). (For brevity, we sometimes refer to
+“library operating system” as “application.”) This structure allows                        The challenge for an exokernel is to give library operating systems
+the extension, specialization and even replacement of abstractions.                        maximum freedom in managing physical resources while protecting
+For instance, page-table structures can vary among library operat-                         them from each other; a programming error in one library operat-
+ing systems: an application can select a library with a particular                         ing system should not affect another library operating system. To
+implementation of a page table that is most suitable to its needs.                         achieve this goal, an exokernel separates protection from manage-
+To the best of our knowledge, no other secure operating system                             ment through a low-level interface.
+architecture allows applications so much useful freedom.
+                                                                                               In separating protection from management, an exokernel per-
+    This paper demonstrates that the exokernel architecture is an ef-                      forms three important tasks: (1) tracking ownership of resources,
+fective way to address the problems listed in Section 2.1. Many of                         (2) ensuring protection by guarding all resource usage or binding
+these problems are solved by simply moving the implementation of                           points, and (3) revoking access to resources. To achieve these
+abstractions to application level, since conflicts between application                     tasks, an exokernel employs three techniques. First, using secure
+needs and available abstractions can then be resolved without the                          bindings, library operating systems can securely bind to machine
+intervention of kernel architects. Furthermore, secure multiplexing                        resources. Second, visible revocation allows library operating sys-
+does not require complex algorithms; it mostly requires tables to                          tems to participate in a resource revocation protocol. Third, an
+track ownership. Therefore, the implementation of an exokernel can                         abort protocol is used by an exokernel to break secure bindings of
+be simple. A simple kernel improves reliability and ease of main-                          uncooperative library operating systems by force.
+tenance, consumes few resources, and enables quick adaptation to
+                                                                                               In this section, we enumerate the central design principles of
+new requirements (e.g., gigabit networking). Additionally, as is
+                                                                                           the exokernel architecture. Then, we discuss in detail the three
+true with RISC instructions, the simplicity of exokernel operations
+                                                                                           techniques that we use to separate protection from management.
+allows them to be implemented efficiently.
+
+      !                  
+                                 $             )                                                              
+                                                                                                                                   
+
+
+
+
+                                                                                           An exokernel specifies the details of the interface that library op-
+The implementations of abstractions in library operating systems
+                                                                                           erating systems use to claim, release, and use machine resources.
+can be simpler and more specialized than in-kernel implementa-
+                                                                                           This section articulates some of the principles that have guided
+tions, because library operating systems need not multiplex a re-
+                                                                                           our efforts to design an exokernel interface that provides library
+source among competing applications with widely different de-
+                                                                                           operating systems the maximum degree of control.
+mands. In addition, since libraries are not trusted by an exokernel,
+they are free to trust the application. For example, if an application                         Securely expose hardware. The central tenet of the exoker-
+passes the wrong arguments to a library, only that application will                        nel architecture is that the kernel should provide secure low-level
+be affected. Finally, the number of kernel crossings in an exokernel
+
+
+                                                                                       3
+primitives that allow all hardware resources to be accessed as di-           allocation requests to grant and from which applications to revoke
+rectly as possible. An exokernel designer therefore strives to safely        resources, an exokernel can enforce traditional partitioning strate-
+export all privileged instructions, hardware DMA capabilities, and           gies, such as quotas or reservation schemes. Since policy conflicts
+machine resources. The resources exported are those provided by              boil down to resource allocation decisions (e.g., allocation of seek
+the underlying hardware: physical memory, the CPU, disk memory,              time, physical memory, or disk blocks), an exokernel handles them
+translation look-aside buffer (TLB), and addressing context iden-            in a similar manner.
+                                                                                            
+tifiers. This principle extends to less tangible machine resources
+such as interrupts, exceptions, and cross-domain calls. An exok-                               
+
+ernel should not impose higher-level abstractions on these events
+(e.g., Unix signal or RPC semantics). For improved flexibility,              One of the primary tasks of an exokernel is to multiplex resources
+most physical resources should be finely subdivided. The num-                securely, providing protection for mutually distrustful applications.
+ber, format, and current set of TLB mappings should be visible to            To implement protection an exokernel must guard each resource. To
+and replaceable by library operating systems, as should any “priv-           perform this task efficiently an exokernel allows library operating
+ileged” co-processor state. An exokernel must export privileged              systems to bind to resources using secure bindings.
+instructions to library operating systems to enable them to imple-
+ment traditional operating system abstractions such as processes                 A secure binding is a protection mechanism that decouples au-
+and address spaces. Each exported operation can be encapsulated              thorization from the actual use of a resource. Secure bindings
+within a system call that checks the ownership of any resources              improve performance in two ways. First, the protection checks
+involved.                                                                    involved in enforcing a secure binding are expressed in terms of
+                                                                             simple operations that the kernel (or hardware) can implement
+    Phrased negatively, this principle states that an exokernel should       quickly. Second, a secure binding performs authorization only at
+avoid resource management. It should only manage resources to                bind time, which allows management to be decoupled from protec-
+the extent required by protection (i.e., management of allocation,           tion. Application-level software is responsible for many resources
+revocation, and ownership). The motivation for this principle is our         with complex semantics (e.g., network connections). By isolating
+belief that distributed, application-specific, resource management           the need to understand these semantics to bind time, the kernel can
+is the best way to build efficient flexible systems. Subsequent              efficiently implement access checks at access time without under-
+principles deal with the details of achieving this goal.                     standing them. Simply put, a secure binding allows the kernel to
+    Expose allocation. An exokernel should allow library operat-             protect resources without understanding them.
+ing systems to request specific physical resources. For instance, if a           Operationally, the one requirement needed to support secure
+library operating system can request specific physical pages, it can         bindings is a set of primitives that application-level software can
+reduce cache conflicts among the pages in its working set [29]. Fur-         use to express protection checks. The primitives can be imple-
+thermore, resources should not be implicitly allocated; the library          mented either in hardware or software. A simple hardware secure
+operating system should participate in every allocation decision.            binding is a TLB entry: when a TLB fault occurs the complex map-
+The next principle aids the effectiveness of this participation.             ping of virtual to physical addresses in a library operating system’s
+     Expose Names. An exokernel should export physical names.                page table is performed and then loaded into the kernel (bind time)
+Physical names are efficient, since they remove a level of indirection       and then used multiple times (access time). Another example is the
+otherwise required to translate between virtual and physical names.          packet filter [37], which allows predicates to be downloaded into
+Physical names also encode useful resource attributes. For example,          the kernel (bind time) and then run on every incoming packet to de-
+in a system with physically-indexed direct-mapped caches, the name           termine which application the packet is for (access time). Without a
+of a physical page (i.e., its page number) determines which pages            packet filter, the kernel would need to query every application or net-
+it conflicts with. Additionally, an exokernel should export book-            work server on every packet reception to determine who the packet
+keeping data structures such as freelists, disk arm positions, and           was for. By separating protection (determining who the packet is
+cached TLB entries so that applications can tailor their allocation          for) from authorization and management (setting up connections,
+requests to available resources.                                             sessions, managing retransmissions, etc.) very fast network multi-
+                                                                             plexing is possible while still supporting complete application-level
+    Expose Revocation. An exokernel should utilize a visible re-
+                                                                             flexibility.
+source revocation protocol so that well-behaved library operating
+systems can perform effective application-level resource manage-                 We use three basic techniques to implement secure bindings:
+ment. Visible revocation allows physical names to be used easily             hardware mechanisms, software caching, and downloading appli-
+and permits library operating systems to choose which instance of            cation code.
+a specific resource to relinquish.                                               Appropriate hardware support allows secure bindings to be
+  
+ 
+                                                                             couched as low-level protection operations such that later oper-
+                                                                             ations can be efficiently checked without recourse to high-level
+                                                                             authorization information. For example, a file server can buffer
+An exokernel hands over resource policy decisions to library op-             data in memory pages and grant access to authorized applications
+erating systems. Using this control over resources, an application           by providing them with capabilities for the physical pages. An
+or collection of cooperating applications can make decisions about           exokernel would enforce capability checking without needing any
+how best to use these resources. However, as in all systems, an ex-          information about the file system’s authorization mechanisms. As
+okernel must include policy to arbitrate between competing library           another example, some Silicon Graphics frame buffer hardware as-
+operating systems: it must determine the absolute importance of              sociates an ownership tag with each pixel. This mechanism can be
+different applications, their share of resources, etc. This situation        used by the window manager to set up a binding between a library
+is no different than in traditional kernels. Appropriate mechanisms          operating system and a portion of the frame buffer. The application
+are determined more by the environment than by the operating                 can access the frame buffer hardware directly, because the hardware
+system architecture. For instance, while an exokernel cedes man-             checks the ownership tag when I/O takes place.
+agement of resources over to library operating systems, it controls              Secure bindings can be cached in an exokernel. For instance,
+the allocation and revocation of these resources. By deciding which          an exokernel can use a large software TLB [7, 28] to cache address
+
+
+                                                                         4
+translations that do not fit in the hardware TLB. The software TLB                Software support for message demultiplexing can be provided
+can be viewed as a cache of frequently-used secure bindings.                  by packet filters [37]. Packet filters can be viewed as an implemen-
+    Secure bindings can be implemented by downloading code into               tation of secure bindings in which application code—the filters—
+the kernel. This code is invoked on every resource access or event to         are downloaded into the kernel. Protocol knowledge is limited to
+determine ownership and the actions that the kernel should perform.           the application, while the protection checks required to determine
+Downloading code into the kernel allows an application thread of              packet ownership are couched in a language understood by the ker-
+control to be immediately executed on kernel events. The advan-               nel. Fault isolation is ensured by careful language design (to bound
+tages of downloading code are that potentially expensive crossings            runtime) and runtime checks (to protect against wild memory ref-
+can be avoided and that this code can run without requiring the               erences and unsafe operations).
+application itself to be scheduled. Type-safe languages [9, 42], in-               Our prototype exokernel uses packet filters, because our cur-
+terpretation, and sandboxing [52] can be used to execute untrusted            rent network does not provide hardware mechanisms for message
+application code safely [21].                                                 demultiplexing. One challenge with a language-based approach is
+    We provide examples of each of these three techniques below               to make running filters fast. Traditionally, packet filters have been
+and discuss how secure bindings apply to the secure multiplexing              interpreted, making them less efficient than in-kernel demultiplex-
+of physical memory and network devices.                                       ing routines. One of the distinguishing features of the packet filter
+                                                                              engine used by our prototype exokernel is that it compiles packet
+    
+    %                               $)                   filters to machine code at runtime, increasing demultiplexing per-
+                                                                              formance by more than an order of magnitude [22].
+Secure bindings to physical memory are implemented in our pro-                    The one problem with the use of a packet filter is ensuring that
+totype exokernel using self-authenticating capabilities [12] and ad-          that a filter does not “lie” and accept packets destined to another
+dress translation hardware. When a library operating system al-               process. Simple security precautions such as only allowing a trusted
+locates a physical memory page, the exokernel creates a secure                server to install filters can be used to address this problem. On a
+binding for that page by recording the owner and the read and write           system that assumes no malicious processes, our language is simple
+capabilities specified by the library operating system. The owner             enough that in many cases even the use of a trusted server can be
+of a page has the power to change the capabilities associated with            avoided by statically checking a new filter to ensure that it cannot
+it and to deallocate it.                                                      accept packets belonging to another; by avoiding the use of any
+                                                                              central authority, extensibility is increased.
+    To ensure protection, the exokernel guards every access to a
+physical memory page by requiring that the capability be presented                Sharing the network interface for outgoing messages is easy.
+by the library operating system requesting access. If the capability is       Messages are simply copied from application space into a transmit
+insufficient, the request is denied. Typically, the processor contains        buffer. In fact, with appropriate hardware support, transmission
+a TLB, and the exokernel must check memory capabilities when a                buffers can be mapped into application space just as easily as phys-
+library operating system attempts to enter a new virtual-to-physical          ical memory pages [19].
+mapping. To improve library operating system performance by
+reducing the number times secure bindings must be established,
+                                                                                     
+                                                                                             %       $      
+an exokernel may cache virtual-to-physical mappings in a large
+software TLB.                                                                 In addition to implementing secure bindings, downloading code can
+    If the underlying hardware defines a page-table interface, then           be used to improve performance. Downloading code into the kernel
+an exokernel must guard the page table instead of the TLB. Although           has two main performance advantages. The first is obvious: elimi-
+the details of how to implement secure memory bindings will vary              nation of kernel crossings. The second is more subtle: the execution
+depending on the details of the address translation hardware, the             time of downloaded code can be readily bounded [18]. The crucial
+basic principle is straightforward: privileged machine operations             importance of “tamed” code is that it can be executed when the
+such as TLB loads and DMA must be guarded by an exokernel. As                 application is not scheduled. This decoupling allows downloaded
+dictated by the exokernel principle of exposing kernel book-keeping           code to be executed in situations where context switching to the
+structures, the page table should be visible (read only) at application       application itself is infeasible (e.g., when only a few microseconds
+level.                                                                        of free processing time is available). Packet filters are an example
+                                                                              of this feature: since the packet-filter runtime is bounded, the kernel
+    Using capabilities to protect resources enables applications to           can use it to demultiplex messages irrespective of what application
+grant access rights to other applications without kernel interven-            is scheduled; without a packet filter the operating system would
+tion. Applications can also use “well-known” capabilities to share            have to schedule each potential consumer of the packet [37].
+resources easily.
+                                                                                  Application-specific Safe Handlers (ASHs) are a more inter-
+    To break a secure binding, an exokernel must change the as-               esting example of downloading code into our prototype exokernel.
+sociated capabilities and mark the resource as free. In the case of           These application handlers can be downloaded into the kernel to
+physical memory, an exokernel would flush all TLB mappings and                participate in message processing. An ASH is associated with a
+any queued DMA requests.                                                      packet filter and runs on packet reception. One of the key features
+    
+    %               
+                           
+                                                                              of an ASH is that it can initiate a message. Using this feature,
+                                                                              roundtrip latency can be greatly reduced, since replies can be trans-
+                                                                              mitted on the spot instead of being deferred until the application
+Multiplexing the network efficiently is challenging, since protocol-          is scheduled. ASHs have a number of other useful features (see
+specific knowledge is required to interpret the contents of incoming          Section 6).
+messages and identify the intended recipient.                                    A salient issue in downloading code is the level at which the
+     Support for network demultiplexing can be provided either in             code is specified. High-level languages have more semantic infor-
+software or hardware. An example of a hardware-based mechanism                mation, which provides more information for optimizations. For
+is the use of the virtual circuit in ATM cells to securely bind streams       example, our packet-filter language is a high-level declarative lan-
+to applications [19].                                                         guage. As a result packet filters can be merged [56] in situations
+
+
+                                                                          5
+where merging a lower-level, imperative language would be infea-                    One possible abort protocol is to simply kill any library op-
+sible. However, in cases where such optimizations are not done,                 erating system and its associated application that fails to respond
+(e.g., in an exception handler) a low-level language is more in keep-           quickly to revocation requests. We rejected this method because
+ing with the exokernel philosophy: it allows the broadest range                 we believe that most programmers have great difficulty reasoning
+of application-level languages to be targeted to it and the simplest            about hard real-time bounds. Instead, if a library operating system
+implementation. ASHs are another example of this tradeoff: most                 fails to comply with the revocation protocol, an exokernel simply
+ASHs are imported into the kernel in the form of the object code                breaks all existing secure bindings to the resource and informs the
+of the underlying machine; however, in the few key places where                 library operating system.
+higher level semantics are useful we have extended the instruction                  To record the forced loss of a resource, we use a repossession
+
+              
+set of the machine.                                                             vector. When an exokernel takes a resource from a library oper-
+                  %                 '              #
+                                                                                ating system, this fact is registered in the vector and the library
+                                                                                operating system receives a “repossession” exception so that it can
+                                                                                update any mappings that use the resource. For resources with
+Once resources have been bound to applications, there must be a way             state, an exokernel can write the state into another memory or disk
+to reclaim them and break their secure bindings. Revocation can                 resource. In preparation, the library operating system can pre-load
+either be visible or invisible to applications. Traditionally, operating        the repossession vector with a list of resources that can be used for
+systems have performed revocation invisibly, deallocating resources             this purpose. For example, it could provide names and capabilities
+without application involvement. For example, with the exception                for disk blocks that should be used as backing store for physical
+of some external pagers [2, 43], most operating systems deallocate              memory pages.
+(and allocate) physical memory without informing applications.
+                                                                                    Another complication is that an exokernel should not arbitrarily
+This form of revocation has lower latency than visible revocation
+                                                                                choose the resource to repossess. A library operating system may
+since it requires no application involvement. Its disadvantages are
+                                                                                use some physical memory to store vital bootstrap information such
+that library operating systems cannot guide deallocation and have
+                                                                                as exception handlers and page tables. The simplest way to deal with
+no knowledge that resources are scarce.
+                                                                                this is to guarantee each library operating system a small number
+    An exokernel uses visible revocation for most resources. Even               of resources that will not be repossessed (e.g., five to ten physical
+the processor is explicitly revoked at the end of a time slice; a library       memory pages). If even those resources must be repossessed, some
+operating system can react by saving only the required processor                emergency exception that tells a library operating system to submit
+
+
+                                                                                     
+state. For example, a library operating system could avoid saving               itself to a “swap server” is required.
+the floating point state or other registers that are not live. However,
+since visible revocation requires interaction with a library operating                                   %      )               
+                                                                                                                                                %   
+system, invisible revocation can perform better when revocations
+occur very frequently. Processor addressing-context identifiers are
+a stateless resource that may be revoked very frequently and are                We have implemented two software systems that follow the exoker-
+
+
+    
+best handled by invisible revocation.                                           nel architecture: Aegis, an exokernel, and ExOS, a library operating
+                                                                                system. Another prototype exokernel, Glaze, is being built for an
+     #                                 
+                                                         )   $                experimental SPARC-based shared-memory multiprocessor [35],
+                                                                                along with PhOS, a parallel operating system library.
+The use of physical resource names requires that an exokernel re-                   Aegis and ExOS are implemented on MIPS-based DECstations.
+veal each revocation to the relevant library operating system so that           Aegis exports the processor, physical memory, TLB, exceptions,
+it can relocate its physical names. For instance, a library operating           and interrupts. In addition, it securely exports the network inter-
+system that relinquishes physical page “5” should update any of its             face using a packet filter system that employs dynamic code gen-
+page-table entries that refer to this page. This is easy for a library          eration. ExOS implements processes, virtual memory, user-level
+operating system to do when it deallocates a resource in reaction to            exceptions, various interprocess abstractions, and several network
+an exokernel revocation request. An abort protocol (discussed be-               protocols (ARP/RARP, IP, UDP, and NFS). A native extensible file
+low) allows relocation to be performed when an exokernel forcibly               system that implements global buffer management is under devel-
+reclaims a resource.                                                            opment. Currently, our prototype system has no real users, but is
+    We view the revocation process as a dialogue between an ex-                 used extensively for development and experimentation.
+okernel and a library operating system. Library operating systems                   The next three sections describe the implementation of Aegis,
+should organize resource lists so that resources can be deallocated             ExOS, and extensions to ExOS. Included in the discussion are ex-
+quickly. For example, a library operating system could have a sim-              periments that test the efficacy of the exokernel approach. These
+
+                                                                                   
+ple vector of physical pages that it owns: when the kernel indicates            experiments test four hypotheses:
+that some page should be deallocated, the library operating system
+
+
+     
+selects one of its pages, writes it to disk, and frees it.
+                                                                               Exokernels can be very efficient.
+                                                                                           Low-level, secure multiplexing of hardware resources can be
+
+                                                                                   
+           $                              
+
+                                                                                           implemented efficiently.
+An exokernel must also be able to take resources from library operat-                      Traditional operating system abstractions can be implemented
+
+                                                                                   
+ing systems that fail to respond satisfactorily to revocation requests.                    efficiently at application level.
+An exokernel can define a second stage of the revocation protocol
+in which the revocation request (“please return a memory page”)                            Applications can create special-purpose implementations of
+becomes an imperative (“return a page within 50 microseconds”).                            these abstractions.
+However, if a library operating system fails to respond quickly, the
+secure bindings need to be broken “by force.” The actions taken                    On identical hardware we compare the performance of Aegis
+when a library operating system is recalcitrant are defined by the              and ExOS with the performance of Ultrix4.2, a mature monolithic
+abort protocol.                                                                 UNIX operating system. It is important to note that Aegis and
+
+
+                                                                            6
+                                                                                                    System call                             Description
+   Machine                   Processor      SPEC rating    MIPS                                     Yield                                   Yield processor to named process
+   DEC2100 (12.5 MHz)        R2000         8.7 SPECint89     11                                     Scall                                   Synchronous protected control transfer
+   DEC3100 (16.67 MHz)       R3000        11.8 SPECint89     15                                     Acall                                   Asynchronous protected control transfer
+   DEC5000/125 (25 MHz)      R3000        16.1 SPECint92     25                                     Alloc                                   Allocation of resources (e.g., physical page)
+                                                                                                    Dealloc                                 Deallocation of resources
+                 Table 1: Experimental platforms.
+                                                                                                    Table 2: A subset of the Aegis system call interface.
+
+ExOS do not offer the same level of functionality as Ultrix. We
+do not expect these additions to cause large increases in our timing                                 Primitive operations                                    Description
+measurements.                                                                                        TLBwr                                                   Insert mapping into TLB
+                                                                                                     FPUmod                                                  Enable/disable FPU
+     The comparisons with Ultrix serve two purposes. First, they                                     CIDswitch                                               Install context identifier
+show that there is much overhead in today’s systems, which can                                       TLBvadelete                                             Delete virtual address from TLB
+be easily removed by specialized implementations. Second, they
+provide a well-known, easily-accessible point of reference for un-                                   Table 3: A sample of Aegis’s primitive operations.
+derstanding Aegis’s and ExOS’s performance. Ultrix, despite its
+poor performance relative to Aegis, is not a poorly tuned system; it                                 &               %                 
+                                                                                                                                                  
+is a mature monolithic system that performs quite well in compari-
+son to other operating systems [39]. For example, it performs two
+to three times better than Mach 3.0 in a set of I/O benchmarks [38].        This section describes the implementation and performance of
+Also, its virtual memory performance is approximately twice that            Aegis. The performance numbers demonstrate that Aegis and low-
+of Mach 2.5 and three times that of Mach 3.0 [5].                           level multiplexing can be implemented efficiently. We describe in
+    In addition, we attempt to assess Aegis’s and ExOS’s perfor-            detail how Aegis multiplexes the processor, dispatches exceptions,
+mance in the light of recent advances in operating systems research.        translates addresses, transfers control between address spaces, and
+These advances have typically been evaluated on different hardware          multiplexes the network.
+                                                                                                                                         
+and frequently use experimental software, making head-to-head
+comparisons impossible. In these cases we base our comparisons                                                   #     ( 
+
+on relative SPECint ratings and instruction counts.
+    Table 1 shows the specific machine configurations used in the ex-           Table 2 lists a subset of the Aegis interface. We discuss the
+periments. For brevity, we refer to the DEC5000/125 as DEC5000.             implementation of most of the system calls in this section. Aegis
+The three machine configurations are used to get a tentative mea-           also supports a set of primitive operations that encapsulate privi-
+sure of the scalability of Aegis. All times are measured using the          leged instructions and are guaranteed not to alter application-visible
+“wall-clock.” We used clock on the Unix implementations and                 registers (see Table 3 for some typical examples). These primitive
+a microsecond counter on Aegis. Aegis’s time quantum was set                operations can be viewed as pseudo-instructions (similar to the Al-
+at 15.625 milliseconds. All benchmarks were compiled using an               pha’s use of PALcode [45]). In this subsection we examine how
+identical compiler and flags: gcc version 2.6.0 with optimization           Aegis protects time slices and processor environments; other re-
+flags “-O2.” None of the benchmarks use floating-point instruc-             sources are protected as described in Section 3.
+tions; therefore, we do not save floating-point state. Both systems
+were run in “single-user” mode and were isolated from the network.                                           
+                                                                                                                   '                         )             
+                                                                                                                                                             '
+
+
+    The per-operation cost was obtained by repeating the operation a
+large number of times and averaging. As a result, the measurements          Aegis represents the CPU as a linear vector, where each element
+do not consider cold start misses in the cache or TLB, and therefore        corresponds to a time slice. Time slices are partitioned at the clock
+represent a “best case.” Because, Ultrix has a much larger cache            granularity and can be allocated in a manner similar to physical
+and virtual memory footprint than Aegis, this form of measurement           memory. Scheduling is done “round robin” by cycling through
+is more favorable to Ultrix. Because Ultrix was sensitive to the            the vector of time slices. A crucial property of this representation
+instance of the type of machine it was run on, we took the best time        is position, which encodes an ordering and an approximate upper
+measured. The exokernel numbers are the median of three trials.             bound on when the time slice will be run. Position can be used to
+                                                                            meet deadlines and to trade off latency for throughput. For example,
+    A few of our benchmarks are extremely sensitive to instruction          a long-running scientific application could allocate contiguous time
+cache conflicts. In some cases the effects amounted to a factor of          slices in order to minimize the overhead of context switching, while
+three performance penalty. Changing the order in which ExOS’s               an interactive application could allocate several equidistant time
+object files are linked was sufficient to remove most conflicts. A          slices to maximize responsiveness.
+happy side-effect of using application-level libraries is that object
+code rearrangement is extremely straightforward (i.e., a “make-                 Timer interrupts denote the beginning and end of time slices, and
+file” edit). Furthermore, with instruction cache tools, conflicts           are delivered in a manner similar to exceptions (discussed below): a
+between application and library operating system code can be re-            register is saved in the “interrupt save area,” the exception program
+moved automatically—an option not available to applications using           counter is loaded, and Aegis jumps to user-specified interrupt han-
+traditional operating systems. We believe that the large impact of          dling code with interrupts re-enabled. The application’s handlers
+instruction cache conflicts is due to the fact that most Aegis opera-       are responsible for general-purpose context switching: saving and
+tions are performed at near hardware speed; as a result, even minor         restoring live registers, releasing locks, etc. This framework gives
+conflicts are noticeable.                                                   applications a large degree of control over context switching. For
+                                                                            example, it can be used to implement scheduler activations [4].
+                                                                                Fairness is achieved by bounding the time an application takes to
+                                                                            save its context: each subsequent timer interrupt (which demarcates
+                                                                            a time slice) is recorded in an excess time counter. Applications pay
+
+
+                                                                        7
+for each excess time slice consumed by forfeiting a subsequent time
+                                                                                          Machine               OS       Procedure call      Syscall (getpid)
+slice. If the excess time counter exceeds a predetermined threshold,
+                                                                                          DEC2100             Ultrix              0.57                   32.2
+the environment is destroyed. In a more friendly implementation,                          DEC2100             Aegis               0.56               3.2 / 4.7
+Aegis could perform a complete context switch for the application.                        DEC3100             Ultrix              0.42                   33.7
+   This simple scheduler can support a wide range of higher-level                         DEC3100             Aegis               0.42               2.9 / 3.5
+scheduling policies. As we demonstrate in Section 7, an application                       DEC5000             Ultrix              0.28                   21.3
+can enforce proportional sharing on a collection of sub-processes.                        DEC5000             Aegis               0.28               1.6 / 2.3
+
+   
+     %            
+                '                   %)*                               Table 4: Time to perform null procedure and system calls. Two
+                                                                              numbers are listed for Aegis’s system calls: the first for system calls
+                                                                              that do not use a stack, the second for those that do. Times are in
+An Aegis processor environment is a structure that stores the in-             microseconds.
+formation needed to deliver events to applications. All resource
+consumption is associated with an environment because Aegis must
+deliver events associated with a resource (such as revocation excep-                    Machine             OS         unalign   overflow      coproc      prot
+tions) to its designated owner.                                                         DEC2100           Ultrix           n/a      208.0         n/a     238.0
+                                                                                        DEC2100           Aegis            2.8         2.8        2.8       3.0
+    Four kinds of events are delivered by Aegis: exceptions, inter-
+                                                                                        DEC3100           Ultrix           n/a      151.0         n/a     177.0
+rupts, protected control transfers, and address translations. Proces-                   DEC3100           Aegis            2.1         2.1        2.1       2.3
+sor environments contain the four contexts required to support these                    DEC5000           Ultrix           n/a      130.0         n/a     154.0
+events:                                                                                 DEC5000           Aegis            1.5         1.5        1.5       1.5
+   Exception context: for each exception an exception context
+contains a program counter for where to jump to and a pointer to              Table 5: Time to dispatch an exception in Aegis and Ultrix; times
+physical memory for saving registers.                                         are in microseconds.
+     Interrupt context: for each interrupt an interrupt context in-
+cludes a program counters and register-save region. In the case               through the same fault handler as system calls. Therefore, Ultrix
+of timer interrupts, the interrupt context specifies separate program         must take great care not to disturb any registers that will be required
+counters for start-time-slice and end-time-slice cases, as well as            to “patch up” an interrupted TLB miss. Because Aegis does not
+status register values that control co-processor and interrupt-enable         map its data structures (and has no page tables) it can avoid such
+flags.                                                                        intricacies. We expect this to be the common case with exokernels.
+    Protected Entry context: a protected entry context specifies
+program counters for synchronousand asynchronousprotected con-                         % '   
+                                                                                                 
+
+trol transfers from other applications. Aegis allows any processor
+environment to transfer control into any other; access control is             Aegis dispatches all hardware exceptions to applications (save for
+managed by the application itself.                                            system calls) using techniques similar to those described in Thekkath
+    Addressing context: an addressing context consists of a set               and Levy [50]. To dispatch an exception, Aegis performs the fol-
+of guaranteed mappings. A TLB miss on a virtual address that is               lowing actions:
+mapped by a guaranteed mapping is handled by Aegis. Library
+operating systems rely on guaranteed mappings for bootstrapping                       1. It saves three scratch registers into an agreed-upon “save
+page-tables, exception handling code, and exception stacks. The                          area.” (To avoid TLB exceptions, Aegis does this operation
+addressing context also includes an address space identifier, a status                   using physical addresses.)
+register, and a tag used to hash into the Aegis software TLB (see
+Section 5.4). To switch from one environment to another, Aegis                        2. It loads the exception program counter, the last virtual address
+must install these three values.                                                         that failed to have a valid translation, and the cause of the
+                                                                                         exception.
+    These are the event-handling contexts required to define a pro-
+cess. Each context depends on the others for validity: for example,                   3. It uses the cause of the exception to perform an indirect jump
+an addressing context does not make sense without an exception                           to an application-specified program counter value, where ex-
+context, since it does not define any action to take when an excep-                      ecution resumes with the appropriate permissions set (i.e., in
+tion or interrupt occurs.                                                                user-mode with interrupts re-enabled).
+
+                                                                    After processing an exception, applications can immediately resume
+                                                                              execution without entering the kernel. Ensuring that applications
+The base cost for null procedure and system calls are shown in                can return from their own exceptions (without kernel intervention)
+Table 4. The null procedure call shows that Aegis’s scheduling                requires that all exception state be available for user reconstruction.
+flexibility does not add overhead to base operations. Aegis has two           This means that all registers that are saved must be in user-accessible
+system call paths: the first for system calls that do not require a           memory locations.
+stack, the second for those that do. With the exception of protected              Currently, Aegis dispatches exceptions in 18 instructions. The
+control transfers, which are treated as a special case for efficiency,        low-level nature of Aegis allows an extremely efficient implementa-
+all Aegis system calls are vectored along one of these two paths.             tion: the time for exception dispatching on a DECstation5000/125
+Ultrix’s getpid is approximately an order of magnitude slower                 is 1.5 microseconds. This time is over five times faster than the
+than Aegis’s slowest system call path—this suggests that the base             most highly-tuned implementation in the literature (8 microsec-
+cost of demultiplexing system calls is significantly higher in Ultrix.        onds on DECstation5000/200 [50], a machine that is 1.2 faster on
+Part of the reason Ultrix is so much less efficient on this basic oper-       SPECint92 than our DECstation5000/125). Part of the reason for
+ation is that it performs a more expensive demultiplexing operation.          this improvement is that Aegis does not use mapped data structures,
+For example, on a MIPS processor, kernel TLB faults are vectored              and so does not have to separate kernel TLB misses from the more
+
+
+                                                                          8
+general class of exceptions in its exception demultiplexing rou-
+                                                                                               OS     Machine                 MHz       Transfer cost
+tine. Fast exceptions enable a number of intriguing applications:
+                                                                                             Aegis    DEC2100             12.5MHz       2.9
+efficient page-protection traps can be used by applications such as                          Aegis    DEC3100            16.67MHz       2.2
+distributed shared memory systems, persistent object stores, and                             Aegis    DEC5000               25MHz       1.4
+garbage collectors [5, 50].                                                                    L3         486               50MHz       9.3 (normalized)
+    Table 5 shows exception dispatch times for unaligned pointer
+accesses (unalign), arithmetic overflow (overflow), attempted use                Table 6: Time to perform a (unidirectional) protected control trans-
+of the floating point co-processor when it is disabled (coproc) and              fer; times are in microseconds.
+access to protected pages (prot). The times for unalign are not
+available under Ultrix since the kernel attempts to “fix up” an un-
+aligned access and writes an error message to standard error. Addi-              contrast, performing an upcall to application level on a TLB miss,
+tionally, Ultrix does not allow applications to disable co-processors,           followed by a system call to install a new mapping is at least three
+and hence cannot utilize the coproc exception. Times are given in                to six microseconds more expensive.
+Table 5. In each case, Aegis’s exception dispatch times are approx-                 As dictated by the exokernel principle of exposing kernel book-
+
+            
+imately two orders of magnitude faster than Ultrix.                              keeping structures, the STLB can be mapped using a well-known
+                           
+                              
+                                                                                 capability, which allows applications to efficiently probe for entries.
+                                                                                                                       
+
+
+
+
+
+                                                                                                              %          
+
+This section looks at two problems in supporting application-level
+virtual memory: bootstrapping and efficiency. An exokernel must                  Aegis provides a protected control transfer mechanism as a substrate
+provide support for bootstrapping the virtual naming system (i.e., it            for efficient implementations of IPC abstractions. Operationally, a
+must support translation exceptions on both application page-tables              protected control transfer changesthe program counter to an agreed-
+and exception code). Aegis provides a simple bootstrapping mech-                 upon value in the callee, donates the current time slice to the callee’s
+anism through the use of a small number of guaranteed mappings.                  processor environment, and installs the required elements of the
+A miss on a guaranteed mapping will be handled automatically by                  callee’s processor context (addressing-context identifier, address-
+Aegis. This organization frees the application from dealing with                 space tag, and processor status word).
+the intricacies of boot-strapping TLB miss and exception handlers,
+which can take TLB misses. To implement guaranteed mappings                          Aegis provides two forms of protected control transfers: syn-
+efficiently, an application’s virtual address space is partitioned into          chronous and asynchronous. The difference between the two is
+two segments. The first segment holds normal application data and                what happens to the processor time slice. Asynchronous calls do-
+code. Virtual addresses in the segment can be “pinned” using guar-               nate only the remainder of the current time slice to the callee. Syn-
+anteed mappings and typically holds exception handling code and                  chronous calls donate the current time and all future instantiations
+page-tables.                                                                     of it; the callee can return the time slice via a synchronous con-
+                                                                                 trol transfer call back to the original caller. Both forms of control
+         On a TLB miss, the following actions occur:                             transfer guarantee two important properties. First, to applications,
+                                                                                 a protected control transfer is atomic: once initiated it will reach
+        1. Aegis checks which segment the virtual address resides in. If         the callee. Second, Aegis will not overwrite any application-visible
+           it is in the standard user segment, the exception is dispatched       register. These two properties allow the large register sets of modern
+           directly to the application. If it is in the second region,           processors to be used as a temporary message buffer [14].
+           Aegis first checks to see if it is a guaranteed mapping. If so,
+           Aegis installs the TLB entry and continues; otherwise, Aegis              Currently, our synchronous protected control transfer operation
+                                                                                 takes 30 instructions. Roughly ten of these instructions are used to
+           forwards it to the application.
+                                                                                 distinguish the system call “exception” from other hardware excep-
+        2. The application looks up the virtual address in its page-table        tions on the MIPS architecture. Setting the status, co-processor, and
+           structure and, if the access is not allowed raises the appro-         address-tag registers consumes the remaining 20 instructions, and
+           priate exception (e.g., “segmentation fault”). If the mapping         could benefit from additional optimizations. Because Aegis imple-
+           is valid, the application constructs the appropriate TLB en-          ments the minimum functionality required for any control transfer
+           try and its associated capability and invokes the appropriate         mechanism, applications can efficiently construct their own IPC
+           Aegis system routine.                                                 abstractions. Sections 6 and 7 provide examples.
+        3. Aegis checks that the given capability corresponds to the                  Table 6 shows the performance in microseconds of a “bare-
+           access rights requested by the application. If it does, the           bone” protected control transfer. This time is derived by dividing
+           mapping is installed in the TLB and control is returned to the        the time to perform a call and reply in half (i.e., we measure the time
+           application. Otherwise an error is returned.                          to perform a unidirectional control transfer). Since the experiment
+                                                                                 is intended to measure the cost of protected control transfer only, no
+        4. The application performs cleanup and resumes execution.               registers are saved and restored. However, due to our measurement
+                                                                                 code, the time includes the overhead of incrementing a counter and
+    In order to support application-level virtual memory efficiently,            performing a branch.
+TLB refills must be fast. To this end, Aegis caches TLB entries                     We attempt a crude comparison of our protected control transfer
+(a form of secure bindings) in the kernel by overlaying the hard-                operation to the equivalent operation on L3 [33]. The L3 imple-
+ware TLB with a large software TLB (STLB) to absorb capacity                     mentation is the fastest published result, but it runs on an Intel 486
+misses [7, 28]. On a TLB miss, Aegis first checks to see whether the             DX-50 (50 MHz). For Table 6, we scaled the published L3 results
+required mapping is in the STLB. If so, Aegis installs it and resumes            (5 microseconds) by the SPECint92 rating of Aegis’s DEC5000
+execution; otherwise, the miss is forwarded to the application.                  and L3’s 486 (16.1 vs. 30.1). Aegis’s trusted control transfer
+    The STLB contains 4096 entries of 8 bytes each. It is direct-                mechanism is 6.6 times faster than the scaled time for L3’s RPC
+mapped and resides in unmapped physical memory. An STLB “hit”                    mechanism.
+takes 18 instructions (approximately one to two microseconds). In
+
+
+                                                                             9
+                                         Filter          Classification Time                                    Machine                  OS      pipe           pipe’      shm    lrpc
+                                         MPF                             35.0                                   DEC2100                Ultrix   326.0             n/a     187.0     n/a
+                                         PATHFINDER                      19.0                                   DEC2100                ExOS      30.9            24.8      12.4   13.9
+                                         DPF                              1.5                                   DEC3100                Ultrix   243.0             n/a     139.0     n/a
+                                                                                                                DEC3100                ExOS      22.6            18.6       9.3   10.4
+Table 7: Time on a DEC5000/200 to classify TCP/IP headers des-                                                  DEC5000                Ultrix   199.0             n/a     118.0     n/a
+tined for one of ten TCP/IP filters; times are in microseconds.                                                 DEC5000                ExOS      14.2            10.7       5.7    6.3
+
+                                                                                     Table 8: Time for IPC using pipes, shared memory, and LRPC
+    Architectural characteristics of the Intel 486 partially account                 on ExOS and Ultrix; times are in microseconds. Pipe and shared
+for Aegis’s better performance. L3 pays a heavy penalty to enter                     memory are unidirectional, while LRPC is bidirectional.
+and leave the kernel (71 and 36 cycles, respectively) and must flush
+the TLB on a context switch.                                                                                
+                                                                                                                 &       !           %   $          )
+
+
+                            )        $        
+                                                *           
+
+                                                                                     The most unusual aspect of ExOS is that it manages fundamental
+Aegis’s network subsystem uses aggressive dynamic code gener-                        operating system abstractions (e.g., virtual memory and process)
+ation techniques to provide efficient message demultiplexing and                     at application level, completely within the address space of the
+handling. We briefly discuss some key features of this system. A                     application that is using it. This section demonstrates that basic
+complete discussion can be found in [22].                                            system abstractions can be implemented at application level in a
+                                                                                     direct and efficient manner. Due to space constraints we focus on
+     Message demultiplexing is the process of determining which                      IPC, virtual memory, and remote communication.
+application an incoming message should be delivered to. Packet
+filters are a well-known technique used to implement extensible                                                   
+kernel demultiplexing [6, 56]. Traditionally, packet filters are in-
+terpreted, which entails a high computational cost. Aegis uses
+Dynamic Packet Filter (DPF), a new packet filter system that is                      Fast interprocess communication is crucial for building efficient and
+over an order of magnitude more efficient than previous systems.                     decoupled systems [8, 27, 33]. As described in Section 5, the Aegis
+                                                                                     protected control transfer mechanism is an efficient substrate for
+     The key in our approach to making filters run fast is dynamic                   implementing IPC abstractions. This section describes experiments
+code generation. Dynamic code generation is the creation of exe-                     used to measure the performance of ExOS’s IPC abstractions on
+cutable code at runtime. DPF exploits dynamic code generation in                     top of the Aegis primitives. The results of these experiments are
+two ways: (1) by using it to eliminate interpretation overhead by                    summarized in Table 8. The experiments are:
+compiling packet filters to executable code when they are installed
+into the kernel and (2) by using filter constants to aggressively                        pipe: measures the latency of sending a word-sized message
+optimize this executable code. To gain portability, DPF compiles                     from one process to another using pipes by “ping-ponging” a counter
+filters using VCODE, a portable, very fast, dynamic code genera-                     between two processes. The Ultrix pipe implementation uses stan-
+tion system [20]. VCODE generates machine code in approximately                      dard UNIX pipes. The ExOS pipe implementation uses a shared-
+10 instructions per generated instruction and runs on a number of                    memory circular buffer. Writes to full buffers and reads from empty
+machines (e.g., MIPS, Alpha and SPARC).                                              ones cause the current time slice to be yielded by the current process
+                                                                                     to the reader or writer of the buffer, respectively. We use two pipe
+    We measured DPF’s time to classify packets destined for one                      implementations: the first is a naive implementation (pipe), while
+of ten TCP/IP filters, and compare its times to times for MPF [56]                   the second (pipe’) exploits the fact that this library exists in appli-
+(a widely used packet filter engine) and PATHFINDER [6] (the                         cation space by simply inlining the read and write calls. ExOS’s
+fastest packet filter engine in the literature). To ensure meaningful                unoptimized pipe implementation is an order of magnitude more
+comparisons between the systems, we ran our DPF experiments on                       efficient than the equivalent operation under Ultrix.
+the same hardware (a DECstation 5000/200) in user space. Table 7
+presents the time to perform this message classification; it was de-                     shm: measures the time for two processes to “ping-pong” using
+rived from the average of one million trials. This experiment and the                a shared counter. ExOS uses Aegis’s yield system call to switch
+numbers for both MPF and PATHFINDER are taken from [6]. On                           between partners. Ultrix does not provide a yield primitive, so
+this experiment DPF is 20 times faster than MPF and 10 times faster                  we synthesized it using signals. ExOS’s shm is 15 to 20 times faster
+than PATHFINDER. The bulk of this performance improvement is                         than Ultrix’s shm. ExOS’s shm is about twice as fast as its pipe
+due to the use of dynamic code generation,                                           implementation, which must manipulate circular buffers.
+                                                                                         lrpc: this experiment measures the time to perform an LRPC
+            
+                %)          )                                                       into another address space, increment a counter and return its value.
+                                                                                     ExOS’s LRPC is built on top of Aegis’s protected control transfer
+The main conclusion we draw from these experiments is that an                        mechanism. lrpc saves all general-purpose callee-saved registers.
+exokernel can be implemented efficiently. The reasons for Aegis’s                    The lrpc implementation assumes that only a single function is of
+good performance are the following. One, keeping track of owner-                     interest (e.g., it does not use the RPC number to index into a table)
+ship is a simple task and can therefore be implemented efficiently.                  and it does not check permissions. The implementation is also
+Two, since the kernel provides very little functionality beyond low-                 single-threaded.
+level multiplexing, it is small and lean: for instance, it keeps its                     Because Ultrix is built around a set of fixed high-level abstrac-
+data structures in physical memory. Three, by caching secure bind-                   tions, new primitives can be added only by emulating them on top of
+ings in a software TLB, most hardware TLB misses can be handled                      existing ones. Specifically, implementations of lrpc must use pipes
+efficiently. Four, by downloading packets filters and by employing                   or signals to transfer control. The cost of such emulation is high:
+dynamic code generation, secure binding to the network can be                        on Ultrix, lrpc using pipes costs 46 to 60 more than on ExOS and
+implemented efficiently.                                                             using signals costs 26 to 37 more than on ExOS. These experiments
+
+
+                                                                                10
+                                                                              can be eliminated by implementing abstractions at application level.
+                          Machine              OS          matrix
+                                                                              Second, application-level software can implement functionality that
+                          DEC2100            Ultrix           7.1
+                          DEC2100            ExOS             7.0
+                                                                              is frequently not provided by traditional operating systems.
+                          DEC3100            Ultrix           5.2                 If we compare the time for dirty to the time for prot1, we see
+                          DEC3100            ExOS             5.2             that over half the time spent in prot1 is due to the overhead of
+                          DEC5000            Ultrix           3.8             parsing the page table. As we show in Section 7.2, this overhead
+                          DEC5000            ExOS             3.7             can be reduced through the use of a data structure more tuned to
+                                                                              efficient lookup (e.g., a hash table). Even with this penalty, ExOS
+Table 9: Time to perform a 150x150 matrix multiplication; time in             performs prot1 almost twice as fast as Ultrix. The likely reason for
+seconds.                                                                      this difference is that, as shown in Table 4, Aegis dispatches system
+                                                                              calls an order of magnitude more efficiently than Ultrix.
+indicate that an Ultrix user either pays substantially in performance             In general, our exokernel-based system performs well on this
+for new functionality, or is forced to modify the kernel.                     set of benchmarks. The exceptions are prot100 and unprot100.
+                                                                              Ultrix is extremely efficient in protecting and unprotecting contigu-
+        
+             %          #$              )                   ous ranges of virtual addresses: it performs these operations 1.1
+                                                                              to 1.6 times faster than Aegis. One reason for this difference is
+                                                                              the immaturity of our implementation. Another is that changing
+ExOS provides a rudimentary virtual memory system (approxi-
+                                                                              page protections in ExOS requires access to two data structures
+mately 1000 lines of heavily commented code). Its two main limi-
+                                                                              (Aegis’s STLB and ExOS’s page-table). However, even with poor
+tations are that it does not handle swapping and that page-tables are
+                                                                              performance on these two operations, the benchmark that uses this
+implemented as a linear vector (address translations are looked up
+                                                                              operation (appel2) is close to an order of magnitude more efficient
+in this structure using binary search). Barring these two limitations,
+                                                                              on ExOS than on Ultrix. In fact, we can expect further improve-
+its interface is richer than other virtual memory systems we know
+                                                                              ments in performance from more sophisticated page-table structures
+of. It provides flexible support for aliasing, sharing, disabling and
+                                                                              and hand-coded assembly language for some operations. The use
+enabling of caching on a per-page basis, specific page-allocation,
+                                                                              of a high-level language (C) to handle exceptions adds overhead for
+and DMA.
+                                                                              saving and restoring all caller-saved registers when a trap handler
+    The overhead of application-level memory is measured by per-              starts and returns.
+forming a 150 by 150 integer matrix multiplication. Because this
+naive version of matrix multiply does not use any of the special                            
+                                                                                                     %                ASH
+abilities of ExOS or Aegis (e.g., page-coloring to reduce cache
+conflicts), we expect it to perform equivalently on both operating
+systems. The times in Table 9 indicate that application-level virtual         ExOS operates efficiently in spite of executing at application level
+memory does not add noticeable overhead to operations that have               in part because the cost of crossing between kernel and user space is
+reasonable virtual memory footprints. Of course, this is hardly a             extremely low in our prototype (18 instructions). Most application-
+conclusive proof.                                                             specific optimizations can therefore be implemented in libraries at
+                                                                              application level. However, in the context of networking, there are
+    Table 10 compares Aegis and ExOS to Ultrix on seven virtual               two reasons for ExOS to download code: the first is technology
+memory experiments based on those used by Appel and Li [5].                   driven, while the second is more fundamental. First, the network
+These experiments are of particular interest, since they measure              buffers on our machines cannot be easily mapped into application
+the cost of VM operations that are crucial for the construction of            space in a secure way. Therefore, by downloading code into the
+ambitious systems, such as page-based distributed shared memory               kernel, applications can integrate operations such as checksum-
+systems and garbage collectors. Note that Ultrix’s VM perfor-                 ming during the copy of the message from these buffers to user
+mance is quite good compared to other systems [5]. The operations             space. Such integration can improve performance on a DECsta-
+measured are the following:                                                   tion5000/200 by almost a factor of two [22]. Second, if the runtime
+    dirty: time to query whether a page is “dirty.” Since it does not         of downloaded code is bounded, it can be run in situations when
+require examination of the TLB, this experiment measures the base             performing a full context switch to an unscheduled application is
+cost of looking up a virtual address in ExOS’s page-table structure.          impractical. Downloading code thus allows applications to decou-
+This operation is not provided by Ultrix.                                     ple latency-critical operations such as message reply from process
+      prot1: time to change the protection of a single page.                  scheduling.
+
+      prot100: time to “read-protect” 100 pages.                                  We examine these issues using application-specific handlers
+                                                                              (ASHs). ASHs are untrusted application-level message-handlers
+      unprot100: time to remove read-protections on 100 pages.                that are downloaded into the kernel, made safe by a combination
+      trap: time to handle a page-protection trap.                            of code inspection [18] and sandboxing [52], and executed upon
+                                                                              message arrival. The issues in other contexts (e.g., disk I/O) are
+    appel1: time to access a random protected page and, in the                similar.
+fault handler, protect some other page and unprotect the faulting
+page (this benchmark is “prot1+trap+unprot” in Appel and Li [5]).                 An ASH can perform general computation. We have augmented
+                                                                              this ability with a set of message primitives that enable the following
+   appel2: time to protect 100 pages, then access each page in a              four useful abilities:
+random sequence and, in the fault-handler, unprotect the faulting
+page (this benchmark is “protN+trap+unprot” in Appel and Li [5]).                  1. Direct, dynamic message vectoring. An ASH controls where
+Note that appel2 requires less time than appel1 since appel1 must                     messages are copied in memory, and can therefore eliminate
+both unprotect and protect different pages in the fault handler.                      all intermediate copies, which are the bane of fast networking
+   The dirty benchmark measures the average time to parse the                         systems.
+page-table for a random entry. This operation illustrates two con-                 2. Dynamic integrated layer processing (ILP) [1, 16]. ASHs
+sequences of the exokernel architecture. First, kernel transitions                    can integrate data manipulations such as checksumming and
+
+
+                                                                         11
+                             Machine     OS       dirty   prot1   prot100       unprot100                                         trap            appel1            appel2
+                             DEC2100     Ultrix     n/a    51.6     175.0           175.0                                        240.0             383.0             335.0
+                             DEC2100     ExOS      17.5    32.5     213.0           275.0                                         13.9              74.4              45.9
+                             DEC3100     Ultrix     n/a    39.0     133.0           133.0                                        185.0             302.0             267.0
+                             DEC3100     ExOS      13.1    24.4     156.0           206.0                                         10.1              55.0              34.0
+                             DEC5000     Ultrix     n/a    32.0     102.0           102.0                                        161.0             262.0             232.0
+                             DEC5000     ExOS       9.8    16.9     109.0           143.0                                           4.8             34.0              22.0
+
+Table 10: Time to perform virtual memory operations on ExOS and Ultrix; times are in microseconds. The times for appel1 and appel2 are
+per page.
+
+
+            Machine               OS     Roundtrip latency                                                           3500
+
+         DEC5000/125      ExOS/ASH                     259                                                           3250
+
+
+
+
+                                                                                 Roundtrip Latency (microseconds)
+         DEC5000/125            ExOS                   320                                                                                                ExOS with ASH
+                                                                                                                     3000
+         DEC5000/125            Ultrix                3400                                                                                                ExOS without ASH
+                                                                                                                     2750
+         DEC5000/200     Ultrix/FRPC                   340
+                                                                                                                     2500
+                                                                                                                     2250
+Table 11: Roundtrip latency of a 60-byte packet over Ethernet using
+                                                                                                                     2000
+ExOS with ASHs, ExOS without ASHs, Ultrix, and FRPC; times
+are in microseconds.                                                                                                 1750
+                                                                                                                     1500
+                                                                                                                     1250
+      conversion into the data transfer engine itself. This integra-                                                 1000
+      tion is done at the level of pipes. A pipe is a computation
+                                                                                                                      750
+      that acts on streaming data. Pipes contain sufficient semantic
+                                                                                                                      500
+      information for the ASH compiler to integrate several pipes
+                                                                                                                      250
+      into the message transfer engine at runtime, providing a large
+      degree of flexibility and modularity. Pipe integration allows                                                      0
+
+      message traversals to be modularly aggregated to a single                                                              1        2            3            4      5     6   7   8   9   10
+      point in time. To the best of our knowledge, ASH-based                                           Number of Processes
+      ILP is the first to allow either dynamic pipe composition or
+                                                                            Figure 2: Average roundtrip latency with increasing number of
+      application-extended in-kernel ILP.
+                                                                            active processes on receiver.
+   3. Message initiation. ASHs can initiate message sends, allow-
+      ing for low-latency message replies.
+                                                                                Despite being measured on a slower machine, ExOS/ASH is
+   4. Control initiation. ASHs perform general computation. This            81 microseconds faster than a high-performance implementation of
+      ability allows them to perform control operations at message          RPC for Ultrix (FRPC) running on DECstation5000/200s and using
+      reception time, implementing such computational actions as            a specialized transport protocol [49]. In fact, ExOS/ASH is only 6
+      traditional active messages [51] or remote lock acquisition.          microseconds slower than the lower bound for cross-machine com-
+                                                                            munication on Ethernet, measured on DECstation5000/200s [49].
+    It is important to note the power of the ASH computational                   ASHs can be used to decouple latency-critical operations such
+model. It allows the vectoring process to be completely dynamic:            as message reply from the scheduling of processes. To measure
+the application does not have to pre-specify that it is waiting for         the impact of this decoupling on average message roundtrip latency
+a particular message, nor does it have to pre-bind buffer locations         we performed the same experiment as above while increasing the
+for the message. Instead, it can defer these decisions until message        number of active processes on the receiving host (see Figure 2).
+reception and use application-level data structures, system state,          With ASHs, the roundtrip latency stays constant. Without them,
+and/or the message itself to determine where to place the message.          the latency increases, since the reply can be sent only when the ap-
+Capturing the same expressiveness within a statically defined pro-          plication is scheduled. As the number of active processes increases,
+tocol is difficult.                                                         it becomes less likely that the process is scheduled. Since processes
+    Table 11 shows the roundtrip latency over Ethernet of ASH-              are scheduled in “round-robin” order, latency increases linearly. On
+based network messaging and compares it to ExOS without ASHs,               Ultrix, the increase in latency was more erratic, ranging from .5 to
+Ultrix, and FRPC [49] (the fastest RPC in the literature on compara-        4.5 milliseconds with 10 active processes. While the exact rate that
+ble hardware). Roundtrip latency for Aegis and Ultrix was measured          latency increases will vary depending on algorithm used to sched-
+by ping-ponging a counter in a 60-byte UDP/IP packet 4096 times             ule processes, the implication is clear: decoupling actions such as
+between two processes in user-space on DECstation5000/125s. The             message reception from scheduling of a process can dramatically
+FRPC numbers are taken from the literature [49]. They were mea-             improve performance.
+
+                                                                                                                         
+sured on a DECstation5000/200, which is approximately 1.2 times
+faster than a DECstation5000/125 on SPECint92.                                                                                                 %   
+
+    The message processing at each node consisted of reading the
+60-byte message, incrementing the counter, copying the new value            Library operating systems, which work above the exokernel inter-
+and a precomputed message header into a transmission buffer, and            face, implement higher-level abstractions and can define special-
+then sending the reply message. In comparison to a complete                 purpose implementations that best meet the performance and func-
+application-level implementation, ASHs save 61 microseconds.                tionality goals of applications. We demonstrate the flexibility of the
+
+
+
+                                                                       12
+                                       Machine                 lrpc   tlrpc                                                 2500
+                                       DEC2100                 13.9     8.6                                                                      Ideal
+
+
+
+
+                                                                                       Cumulative Iterations (thousands)
+                                                                                                                            2250
+                                       DEC3100                 10.4     6.4                                                                      Measured
+                                       DEC5000                  6.3     2.9                                                 2000
+                                                                                                                            1750
+Table 12: Time to perform untrusted (lrpc) and trusted (tlrpc)
+LRPC extensions; times are in microseconds.                                                                                 1500
+                                                                                                                            1250
+exokernel architecture by showing how fundamental operating sys-                                                            1000
+tem abstractions can be redefined by simply changing application-
+level libraries. We show that these extensions can have dramatic                                                             750
+performance benefits. These different versions of ExOS can co-                                                               500
+
+
+                              
+exist on the same machine and are fully protected by Aegis.
+                                                                                                                             250
+    %                     
+                                                                                                                              0
+                                                                                                                                   0   10   20   30   40    50   60   70   80   90 100
+    Most RPC systems do not trust the server to save and restore
+                                                                                                                                                  Time (quanta)
+registers [27]. We implemented a version of lrpc (see Section 6.1)
+that trusts the server to save and restore callee-saved registers. We                                                          Figure 3: Application-level stride scheduler.
+call this version tlrpc (trusted LRPC). Table 12 compares tlrpc to
+ExOS’s more general IPC mechanism,lrpc, which saves all general-
+purpose callee-saved registers. Both implementations assume that                       It is important to note that there is nothing special about this
+only a single function is of interest (e.g., neither uses the RPC                  scheduler either in terms of privileges (any application can perform
+number to index into a table) and do not check permissions. Both                   identical actions) or in its complexity (the entire implementation is
+implementations are also single-threaded. The measurements show                    less than 100 lines of code). As a result, any application can easily
+that this simple optimization can improve performance by up to a                   manage processes. An important use of such fine-grained control
+factor of two.                                                                     is to enhance the modularity of application design: previously,
+                                                                                   applications that had subtasks of different/fluctuating priorities had
+      %                 $%'                 
+                                                                                  to internalize them in the form of schedulable threads. As a result,
+                                                                                   the likelihood of software errors increased, and the complexity
+                                                                                   of the design grew. By constructing a domain-specific scheduler,
+    We made a new version of ExOS that supports inverted page                      these applications can now effectively and accurately schedule sub-
+
+
+                                                                                                   
+tables. Applications that have a dense address space can use linear                processes, greatly improving fault isolation and independence.
+page tables, while applications with a sparse address space can use
+inverted ones. Table 13 shows the performance for this new version                                                     $
+of ExOS. The inverted page-table trades the performance of mod-
+ifying protection on memory regions for the performance of faster
+lookup. On the virtual memory benchmarks of Section 6.2, it is                     Many early operating system papers discussed the need for ex-
+over a factor of two more efficient on dirty, 37% faster on appel1,                tendible, flexible kernels [32, 42]. Lampson’s description of CAL-
+and 17% faster on appel2. Because VM is implemented at appli-                      TSS [31] and Brinch Hansen’s microkernel paper [24] are two clas-
+cation level, applications can make such tradeoffs as appropriate.                 sic rationales. Hydra was the most ambitious early system to have
+This experiment emphasizes the degree of flexibility offered by an                 the separation of kernel policy and mechanism as one of its central
+exokernel architecture.                                                            tenets [55]. An exokernel takes the elimination of policy one step
+                                                                                   further by removing “mechanism” wherever possible. This process
+      %                #$     %                                  is motivated by the insight that mechanism is policy, albeit with one
+                                                                                   less layer of indirection. For instance, a page-table is a very detailed
+     Aegis includes a yield primitive to donate the remainder of a pro-            policy that controls how to translate, store and delete mappings and
+cess’ current time slice to another (specific) process. Applications               what actions to take on invalid addresses and accesses.
+can use this simple mechanism to implement their own scheduling                        VM/370 [17] exports the ideal exokernel interface: the hard-
+algorithms. To demonstrate this, we have built an application-level                ware interface. On top of this hardware interface, VM/370 supports
+scheduler that implements stride scheduling [54], a deterministic,                 a number of virtual machines on top of which radically different
+proportional-share scheduling mechanism that improves on recent                    operating systems can be implemented. However, the important
+work [53]. The ExOS implementation maintains a list of processes                   difference is that VM/370 provides this flexibility by virtualizing
+for which it is responsible, along with the proportional share they                the entire base-machine. Since the base machine can be quite com-
+are to receive of its time slice(s). On every time slice wakeup, the               plicated, virtualization can be expensive and difficult. Often, this
+scheduler calculates which process is to be scheduled and yields to                approach requires additional hardware support [23, 40]. Addition-
+it directly.                                                                       ally, since much of the actual machine is intentionally hidden from
+    We measure the effectiveness of this scheduler by creating three               application-level software, such software has little control over the
+processes that increment counters in shared memory. The processes                  actual resources and may manage the virtual resources in a counter-
+are assigned a 3:2:1 relative allocation of the scheduler’s time slice             productive way. For instance, the LRU policy of pagers on top of
+quanta. By plotting the cumulative values of the shared counters,                  the virtual machine can conflict with the paging strategy used by
+we can determine how closely this scheduling allocation is realized.               the virtual machine monitor [23]. In short, while a virtual machine
+As can be seen in Figure 3, the achieved ratios are very close to                  can provide more control than many other operating systems, appli-
+idealized ones.                                                                    cation performance can suffer and actual control is lacking in key
+                                                                                   areas.
+
+
+
+                                                                              13
+                       Machine      Method                dirty   prot1    prot100                 unprot100              trap   appel1   appel2
+                       DEC2100      Original page-table    17.5    32.5       213.                      275.              13.9     74.4     45.9
+                       DEC2100      Inverted page-table     8.0    23.1       253.                      325.              13.9     54.4     38.8
+                       DEC3100      Original page-table    13.1    24.4       156.                      206.              10.1     55.0     34.0
+                       DEC3100      Inverted page-table     5.9    17.7       189.                      243.              10.1     40.4     28.9
+
+   Table 13: Time to perform virtual memory operations on ExOS using two different page-table structures; times are in microseconds.
+
+
+    Modern revisitations of microkernels have argued for kernel ex-
+                                                                                               
+                                                                                                   #
+
+
+tensibility [2, 43, 48]. Like microkernels, exokernels are designed
+to increase extensibility. Unlike traditional microkernels, an exok-           In the exokernel architecture, an exokernel securely multiplexes
+ernel pushes the kernel interface much closer to the hardware, which           available hardware resources among applications. Library operat-
+allows for greater flexibility. An exokernel allows application-level          ing systems, which work above the low-level exokernel interface,
+libraries to define virtual memory and IPC abstractions. In addition,          implement higher-level abstractions and can define special-purpose
+the exokernel architecture attempts to avoid shared servers (espe-             implementations that best meet the performance and functional-
+cially trusted shared servers), since they often limit extensibility.          ity goals of applications. The exokernel architecture is motivated
+For example, it is difficult to change the buffer management policy            by a simple observation: the lower the level of a primitive, the
+of a shared file server. In many ways, servers can be viewed as fixed          more efficiently it can be implemented, and the more latitude it
+kernel subsystems that run in user-space. Some newer microker-                 grants to implementors of higher-level abstractions. To achieve
+nels push the kernel interface closer to the hardware [34], obtaining          a low-level interface, the exokernel separates management from
+better performance than previous microkernels. However, since                  protection. To make this separation efficient it uses secure bind-
+these systems do not employ secure bindings, visible resource re-              ings, implemented using hardware mechanisms, software caches,
+vocation, and abort protocols, they give less control of resources to          or downloading code.
+application-level software.
+                                                                                    Experiments using our Aegis and ExOS prototypes demonstrate
+    The SPIN project is building a microkernel system that allows              our four hypotheses. First, the simplicity and limited number of ex-
+applications to make policy decisions [9] by safely downloading                okernel primitives allows them to be implemented very efficiently.
+extensions into the kernel. Unlike SPIN, the focus in the exoker-              Measurements of Aegis show that its basic primitives are substan-
+nel architecture is to obtain flexibility and performance by securely          tially more efficient than the general primitives provided by Ultrix.
+exposing low-level hardware primitives rather than extending a tra-            In addition, Aegis’s performance is better than or on par with re-
+ditional operating system in a secure way. Because the exokernel               cent high-performance implementations of exceptions dispatch and
+low-level primitives are simple compared to traditional kernel in-             control transfer primitives.
+terfaces, they can be made very fast. Therefore, the exokernel has
+less use for kernel extensions.                                                   Second, because exokernel primitives are fast, low-level secure
+                                                                               multiplexing of hardware resources can be implemented efficiently.
+    Scout [25] and Vino [46] are other current extensible operating            For example, Aegis multiplexes resources such as the processor,
+systems. These systems are just beginning to be constructed, so it             memory, and the network more efficiently than state-of-the-art im-
+is difficult to determine their relationship to exokernels in general          plementations.
+and Aegis in particular.
+                                                                                    Third, traditional operating system abstractions can be im-
+     SPACE is a “submicro-kernel” that provides only low-level ker-            plemented efficiently at application level. For instance, ExOS’s
+nel abstractions defined by the trap and architecture interface [41].          application-level VM and IPC primitives are much faster than Ul-
+Its close coupling to the architecture makes it similar in many ways           trix’s corresponding primitives and than state-of-the-art implemen-
+to an exokernel, but we have not been able to make detailed com-               tations reported in the literature.
+parisons because its design methodology and performance have not
+yet been published.                                                                Fourth, applications can create special-purpose implementa-
+                                                                               tions of abstractions by merely modifying a library. We imple-
+    Anderson [3] makes a clear argument for application-specific               mented several variations of fundamental operating system abstrac-
+library operating systems and proposes that the kernel concentrate             tions such as interprocess communication, virtual memory, and
+solely on the adjudication of hardware resources. The exokernel                schedulers with substantial improvements in functionality and per-
+design addresses how to provide secure multiplexing of physical                formance. Many of these variations would require substantial kernel
+resources in such a system, and moves the kernel interface to a lower          alternations on today’s systems.
+level of abstraction. In addition, Aegis and ExOS demonstrate that
+low-level secure multiplexing and library operating systems can                    Based on the results of these experiments, we conclude that the
+offer excellent performance.                                                   exokernel architecture is a viable structure for high-performance,
+                                                                               extensible operating systems.
+     Like Aegis, the Cache Kernel [13] provides a low-level kernel
+that can support multiple application-level operating systems. To
+the best of our knowledge ExOS and the Cache Kernel are the
+                                                                                  $                  )   
+first general-purpose library operating systems implemented in a
+multiprogramming environment. The difference between the Cache
+                                                                               We thank Henri Bal, Robert Bedichek, Matthew Frank, Greg Ganger,
+Kernel and Aegis is mainly one of high-level philosophy. The
+                                                                               Bob Gruber, Sandeep Gupta, Wilson Hsieh, Kirk Johnson, But-
+Cache Kernel focuses primarily on reliability, rather than securely
+                                                                               ler Lampson, Ulana Legedza, Hank Levy (our shepherd), David
+exporting hardware resources to applications. As result, it is biased
+                                                                               Mosberger-Tang, Massimiliano Poletto, Robbert van Renesse, Satya
+towards a server-based system structure. For example, it supports
+                                                                               (M. Satyanarayanan), Raymie Stata, Carl Waldspurger, and Debo-
+only 16 “application-level” kernels concurrently.
+                                                                               rah Wallach for insightful discussions and careful reading of earlier
+                                                                               versions of this paper. We also thank the anonymous referees for
+                                                                               their valuable feedback. We thank Jochen Lietdke for his aid in
+
+
+
+                                                                          14
+comparing the IPC mechanisms of Aegis and L3. We thank Ken                    [13] D. Cheriton and K. Duda. A caching model of operating
+Mackenzie for many insights and discussions. In addition, we thank                 system kernel functionality. In Proceedings of the First Sym-
+Hector Briceno for porting NFS and SUN RPC; Sandeep Gupta for                      posium on Operating Systems Design and Implementation,
+developing an inverted page-table; Robert Grimm for porting a                      pages 179–193, November 1994.
+disk driver; and Tom Pinckney for porting gdb and developing an
+application-level file system. Finally, we thank Deborah Wallach              [14] D. R. Cheriton. An experiment using registers for fast
+for her input on the design of ASHs, the software she developed to                 message-based interprocess communication. Operating Sys-
+evaluate them, and porting Aegis to the DECstation5000. Her help                   tems Review, 18:12–20, October 1984.
+was invaluable.
+
+
+                                                                              [15] D. R. Cheriton. The V kernel: A software base for distributed
+                                                                                   systems. IEEE Software, 1(2):19–42, April 1984.
+    '   (    
+              '
+                                                                              [16] D. D. Clark and D. L. Tennenhouse. Architectural considera-
+                                                                                   tions for a new generation of protocols. In ACM Communica-
+    [1] M. B. Abbot and L. L. Peterson. Increasing network through-                tion Architectures, Protocols, and Applications (SIGCOMM)
+        put by integrating protocol layers. IEEE/ACM Transactions                  1990, September 1990.
+        on Networking, 1(5):600–610, October 1993.
+                                                                              [17] R. J. Creasy. The origin of the VM/370 time-sharing system.
+    [2] M. Accetta, R. Baron, W. Bolosky, D. Golub, R. Rashid,                     IBM J. Research and Development, 25(5):483–490, Septem-
+        A. Tevanian, and M. Young. Mach: a new kernel foundation                   ber 1981.
+        for UNIX development. In Proceedings of the Summer 1986
+        USENIX Conference, pages 93–112, July 1986.                           [18] P. Deutsch and C. A. Grant. A flexible measurement tool for
+                                                                                   software systems. Information Processing 71, 1971.
+    [3] T.E. Anderson. The case for application-specific operating
+                                                                              [19] P. Druschel, L. L. Peterson, and B. S. Davie. Experiences
+        systems. In Third Workshop on Workstation Operating Sys-
+                                                                                   with a high-speed network adaptor: A software perspective.
+        tems, pages 92–94, 1992.
+                                                                                   In ACM Communication Architectures, Protocols, and Appli-
+    [4] T.E. Anderson, B.N. Bershad, E.D. Lazowska, and H.M. Levy.                 cations (SIGCOMM) 1994, pages 2–13, October 1994.
+        Scheduler activations: Effective kernel support for the user-
+                                                                              [20] D. R. Engler. VCODE: a very fast, retargetable, and extensible
+        level management of parallelism. In Proceedings of the Thir-
+                                                                                   dynamic code generation substrate. Technical Memorandum
+        teenth ACM Symposium on Operating Systems Principles,
+                                                                                   MIT/LCS/TM534, MIT, July 1995.
+        pages 95–109, October 1991.
+                                                                              [21] D. R. Engler, M. F. Kaashoek, and J. O’Toole. The operating
+    [5] A.W. Appel and K. Li. Virtual memory primitives for user
+                                                                                   system kernel as a secure programmable machine. In Proceed-
+        programs. In Fourth International Conference on Architecture
+                                                                                   ings of the Sixth SIGOPS European Workshop, pages 62–67,
+        Support for Programming Languages and Operating Systems,
+                                                                                   September 1994.
+        pages 96–107, Santa Clara, CA, April 1991.
+                                                                              [22] D. R. Engler, D. Wallach, and M. F. Kaashoek. Efficient, safe,
+    [6] M. L. Bailey, B. Gopal, M. A. Pagels, L. L. Peterson, and
+                                                                                   application-specific message processing. Technical Memo-
+        P. Sarkar. PATHFINDER: A pattern-based packet classifier.
+                                                                                   randum MIT/LCS/TM533, MIT, March 1995.
+        In Proceedings of the First Symposium on Operating Systems
+        Design and Implementation, pages 115–123, November 1994.              [23] R. P. Goldberg. Survey of virtual machine research. IEEE
+                                                                                   Computer, pages 34–45, June 1974.
+    [7] K. Bala, M.F. Kaashoek, and W.E. Weihl. Software prefetch-
+        ing and caching for translation lookaside buffers. In Proceed-        [24] P. Brinch Hansen. The nucleus of a multiprogramming system.
+        ings of the First Symposium on Operating Systems Design and                Communications of the ACM, 13(4):238–241, April 1970.
+        Implementation, pages 243–253, November 1994.
+                                                                              [25] J.H. Hartman, A.B. Montz, D. Mosberger, S.W. O’Malley,
+    [8] B. N. Bershad, T. E. Anderson, E. D. Lazowska, and H. M.                   L.L. Peterson, and T.A. Proebsting. Scout: A communication-
+        Levy. Lightweight remote procedure call. ACM Transactions                  oriented operating system. Technical Report TR 94-20, Uni-
+        on Computer Systems, 8(1):37–55, February 1990.                            versity of Arizona, Tucson, AZ, June 1994.
+    [9] B. N. Bershad, S. Savage, P. Pardyak, E. G. Sirer, M. Fiuczyn-        [26] K. Harty and D.R. Cheriton. Application-controlled physi-
+        ski, D. Becker, S. Eggers, and C. Chambers. Extensibility,                 cal memory using external page-cache management. In Fifth
+        safety and performance in the SPIN operating system. In                    International Conference on Architecture Support for Pro-
+        Proceedings of the Fifteenth ACM Symposium on Operating                    gramming Languages and Operating Systems, pages 187–199,
+        Systems Principles, December 1995.                                         October 1992.
+[10] P. Cao, E. W. Felten, and K. Li. Implementation and perfor-              [27] W.C. Hsieh, M.F. Kaashoek, and W.E. Weihl. The persistent
+     mance of application-controlled file caching. In Proceedings                  relevance of IPC performance: New techniques for reducing
+     of the First Symposium on Operating Systems Design and                        the IPC penalty. In Fourth Workshop on Workstation Operat-
+     Implementation, pages 165–178, November 1994.                                 ing Systems, pages 186–190, October 1993.
+[11] J. S. Chase, H. M. Levy, M. J. Feeley, and E. D. Lazowska.               [28] J. Huck and J. Hays. Architectural support for translation
+     Sharing and protection in a single-address-space operating                    table management in large address space machines. In Pro-
+     system. ACM Transactions on Computer Systems, 12(4):271–                      ceedings of the 19th International Symposium on Computer
+     308, November 1994.                                                           Architecture, pages 39–51, May 1992.
+[12] D. L. Chaum and R. S. Fabry. Implementing capability-based               [29] R. E. Kessler and M. D. Hill. Page placement algorithms
+     protection using encryption. Technical Report UCB/ERL                         for large real-index caches. ACM Transactions on Computer
+     M78/46, University of California at Berkeley, July 1978.                      Systems, 10(4):338–359, November 1992.
+
+
+                                                                         15
+[30] K. Krueger, D. Loftesness, A. Vahdat, and T. Anderson. Tools         [46] C. Small and M. Seltzer. Vino: an integrated platform for
+     for development of application-specific virtual memory man-               operating systems and database research. Technical Report
+     agement. In Conference on Object-Oriented Programming                     TR-30-94, Harvard, 1994.
+     Systems, Languages, and Applications (OOPSLA) 1993, pages
+     48–64, October 1993.                                                 [47] M. Stonebraker. Operating system support for database man-
+                                                                               agement. Communications of the ACM, 24(7):412–418, July
+[31] B.W. Lampson. On reliable and extendable operating systems.               1981.
+     State of the Art Report, Infotech, 1, 1971.
+                                                                          [48] A.S. Tanenbaum, R. van Renesse, H. van Staveren, G. Sharp,
+[32] B.W. Lampson and R.F. Sproull. An open operating system                   S.J. Mullender, A. Jansen, and G. van Rossum. Experiences
+     for a single-user machine. Proceedings of the Seventh ACM                 with the Amoeba distributed operating system. Communica-
+     Symposium on Operating Systems Principles, pages 98–105,                  tions of the ACM, 33(12):46–63, December 1990.
+     December 1979.
+                                                                          [49] C. A. Thekkath and H. M. Levy. Limits to low-latency com-
+[33] J. Liedtke. Improving IPC by kernel design. In Proceedings of             munication on high-speed networks. ACM Transactions on
+     the Fourteenth ACM Symposium on Operating Systems Prin-                   Computer Systems, 11(2):179–203, May 1993.
+     ciples, pages 175–188, December 1993.
+                                                                          [50] C. A. Thekkath and H. M. Levy. Hardware and software
+[34] J. Liedtke. On micro-kernel construction. In Proceedings of               support for efficient exception handling. In Sixth Interna-
+     the Fifteenth ACM Symposium on Operating Systems Princi-                  tional Conference on Architecture Support for Programming
+     ples, December 1995.                                                      Languages and Operating Systems, pages 110–121, October
+                                                                               1994.
+[35] K. Mackenzie, J. Kubiatowicz, A. Agarwal, and M. F.
+     Kaashoek. FUGU: Implementing translation and protection              [51] T. von Eicken, D.E. Culler, S.C. Goldstein, and K.E. Schauser.
+     in a multiuser, multimodel multiprocessor. Technical Memo-                Active messages: a mechanism for integrated communication
+     randum MIT/LCS/TM503, MIT, October 1994.                                  and computation. In Proceedings of the 19th International
+                                                                               Symposium on Computer Architecture, pages 256–267, May
+[36] H. Massalin and C. Pu. Threads and input/output in the Syn-               1992.
+     thesis kernel. In Proceedings of the Twelfth ACM Symposium
+     on Operating Systems Principles, pages 191–201, 1989.                [52] R. Wahbe, S. Lucco, T. Anderson, and S. Graham. Effi-
+                                                                               cient software-based fault isolation. In Proceedings of the
+[37] J.C. Mogul, R.F. Rashid, and M.J. Accetta. The packet fil-                Fourteenth ACM Symposium on Operating Systems Princi-
+     ter: An efficient mechanism for user-level network code. In               ples, pages 203–216, December 1993.
+     Proceedings of the Eleventh ACM Symposium on Operating
+     Systems Principles, pages 39–51, November 1987.                      [53] C. A. Waldspurger and W. E. Weihl. Lottery scheduling: Flex-
+                                                                               ible proportional-share resource management. In Proceedings
+[38] D. Nagle, R. Uhlig, T. Stanley, S. Sechrest, T. Mudge, and                of the First Symposium on Operating Systems Design and
+     R. Brown. Design tradeoffs for software-managed TLBs. In                  Implementation, pages 1–11, November 1994.
+     20th Annual International Symposium on Computer Architec-
+     ture, pages 27–38, May 1993.                                         [54] C. A. Waldspurger and W. E. Weihl. Stride scheduling: deter-
+                                                                               ministic proportional-share resource management. Technical
+[39] J. K. Ousterhout. Why aren’t operating systems getting faster             Memorandum MIT/LCS/TM528, MIT, June 1995.
+     as fast as hardware? In Proceedings of the Summer 1990
+     USENIX Conference, pages 247–256, June 1990.                         [55] W. Wulf, E. Cohen, W. Corwin, A. Jones, R. Levin, C. Pierson,
+                                                                               and F. Pollack. HYDRA: The kernel of a multiprocessing
+[40] G. J. Popek and C. S. Kline. The PDP-11 virtual machine                   operating system. Communications of the ACM, 17(6):337–
+     architecture. In Proceedings of the Fifth ACM Symposium                   345, July 1974.
+     on Operating Systems Principles, pages 97–105, November
+     1975.                                                                [56] M. Yahara, B. Bershad, C. Maeda, and E. Moss. Efficient
+                                                                               packet demultiplexing for multiple endpoints and large mes-
+[41] D. Probert, J.L. Bruno, and M. Karzaorman. SPACE: A new                   sages. In Proceedings of the Winter 1994 USENIX Conference,
+     approach to operating system abstraction. In International                1994.
+     Workshop on Object Orientation in Operating Systems, pages
+     133–137, October 1991.
+[42] D.D. Redell, Y.K. Dalal, T.R. Horsley, H.C. Lauer, W.C.
+     Lynch, P.R. McJones, H.G. Murray, and S.C. Purcell. Pilot:
+     An operating system for a personal computer. Communica-
+     tions of the ACM, 23(2):81–92, February 1980.
+[43] M. Rozier, V. Abrossimov, F. Armand, I. Boule, M. Gien,
+     M. Guillemont, F. Herrmann, C. Kaiser, S. Langlois,
+     P. Leonard, and W. Neuhauser. Chorus distributed operating
+     system. Computing Systems, 1(4):305–370, 1988.
+[44] J.H. Saltzer, D.P. Reed, and D.D. Clark. End-to-end arguments
+     in system design. ACM Transactions on Computer Systems,
+     2(4):277–288, November 1984.
+[45] R. L. Sites. Alpha AXP architecture. Communications of the
+     ACM, 36(2), February 1993.
+
+
+                                                                     16
+

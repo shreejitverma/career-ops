@@ -1,0 +1,576 @@
+                                                                                 A distributed system consists of a collection of distinct
+                                                                             processes which are spatially separated, and which com-
+                                                                             municate with one another by exchanging messages. A
+                                                                             network of interconnected computers, such as the ARPA
+ Operating                           R. Stockton Gaines                      net, is a distributed system. A single computer can also
+ Systems                             Editor                                  be viewed as a distributed system in which the central
+                                                                             control unit, the memory units, and the input-output
+Time, Clocks, and the                                                        channels are separate processes. A system is distributed
+                                                                             if the message transmission delay is not negligible com-
+Ordering of Events in                                                        pared to the time between events in a single process.
+                                                                                  We will concern ourselves primarily with systems of
+a Distributed System                                                         spatially separated computers. However, many of our
+                                                                             remarks will apply more generally. In particular, a mul-
+Leslie Lamport                                                               tiprocessing system on a single computer involves prob-
+Massachusetts Computer Associates, Inc.                                      lems similar to those of a distributed system because of
+                                                                             the unpredictable order in which certain events can
+                                                                             occur.
+                                                                                 In a distributed system, it is sometimes impossible to
+    The concept of one event happening before another
+                                                                             say that one of two events occurred first. The relation
+in a distributed system is examined, and is shown to
+                                                                             "happened before" is therefore only a partial ordering
+define a partial ordering of the events. A distributed
+                                                                             of the events in the system. We have found that problems
+algorithm is given for synchronizing a system of logical
+                                                                             often arise because people are not fully aware of this fact
+clocks which can be used to totally order the events.
+                                                                             and its implications.
+The use of the total ordering is illustrated with a
+                                                                                 In this paper, we discuss the partial ordering defined
+method for solving synchronization problems. The
+                                                                             by the "happened before" relation, and give a distributed
+algorithm is then specialized for synchronizing physical
+                                                                             algorithm for extending it to a consistent total ordering
+clocks, and a bound is derived on how far out of
+                                                                             of all the events. This algorithm can provide a useful
+synchrony the clocks can become.
+                                                                             mechanism for implementing a distributed system. We
+    Key Words and Phrases: distributed systems,
+                                                                             illustrate its use with a simple method for solving syn-
+computer networks, clock synchronization, multiprocess
+                                                                             chronization problems. Unexpected, anomalous behav-
+systems
+                                                                             ior can occur if the ordering obtained by this algorithm
+    CR Categories: 4.32, 5.29
+                                                                             differs from that perceived by the user. This can be
+                                                                             avoided by introducing real, physical clocks. We describe
+Introduction                                                                 a simple method for synchronizing these clocks, and
+                                                                             derive an upper bound on how far out of synchrony they
+    The concept of time is fundamental to our way of                         can drift.
+thinking. It is derived from the more basic concept of
+the order in which events occur. We say that something
+happened at 3:15 if it occurred after our clock read 3:15                    The Partial Ordering
+and before it read 3:16. The concept of the temporal
+ordering of events pervades our thinking about systems.                          Most people would probably say that an event a
+For example, in an airline reservation system we specify                     happened before an event b if a happened at an earlier
+that a request for a reservation should be granted if it is                  time than b. They might justify this definition in terms
+made before the flight is filled. However, we will see that                  of physical theories of time. However, if a system is to
+this concept must be carefully reexamined when consid-                       meet a specification correctly, then that specification
+ering events in a distributed system.                                        must be given in terms of events observable within the
+      General permission to make fair use in teaching or research of all     system. If the specification is in terms of physical time,
+or part of this material is granted to individual readers and to nonprofit
+libraries acting for them provided that ACM's copyright notice is given      then the system must contain real clocks. Even if it does
+and that reference is made to the publication, to its date of issue, and     contain real clocks, there is still the problem that such
+to the fact that reprinting privileges were granted by permission o f the    clocks are not perfectly accurate and do not keep precise
+Association for Computing Machinery. To otherwise reprint a figure,
+table, other substantial excerpt, or the entire work requires specific       physical time. We will therefore define the "happened
+permission as does republication, or systematic or multiple reproduc-        before" relation without using physical clocks.
+tion.                                                                            We begin by defining our system more precisely. We
+      This work was supported by the Advanced Research Projects
+Agency of the Department of Defense and Rome Air Development                 assume that the system is composed of a collection of
+Center. It was monitored by Rome Air Development Center under                processes. Each process consists of a sequence of events.
+contract number F 30602-76-C-0094.                                           Depending upon the application, the execution of a
+      Author's address: Computer Science Laboratory, SRI Interna-
+tional, 333 Ravenswood Ave., Menlo Park CA 94025.                            subprogram on a computer could be one event, or the
+© 1978 ACM 0001-0782/78/0700-0558 $00.75                                     execution of a single machine instruction could be one
+558                                                                          Communications                July 1978
+                                                                             of                            Volume 21
+                                                                             the ACM                       Number 7
+Fig. 1.                                                                     Fig. 2.
+
+a,                           CY                          ,Y                                          cy                      c~
+
+(9                            (9                         ~o                 (9                        (9                     ~)
+                                                                            O                         O                      U
+                              ~                          o
+
+
+P4'                                q7                          r4
+
+                                   q6                                            -2   - - -          q6     ;--# . i
+P3                                 q5                          r3           P3' ~     ~~        ~~ _ ~ ~ - ~ Y _                  r3
+
+P2'                                                           r2
+
+
+
+Pl ~                               ql                         r1
+
+
+
+event. We are assuming that the events of a process form                    the diagram by moving forward in time along process
+a sequence, where a occurs before b in this sequence if                     and message lines. For example, we have p, --~ r4 in
+a happens before b. In other words, a single process is                     Figure 1.
+defined to be a set of events with an a priori total                             Another way of viewing the definition is to say that
+ordering. This seems to be what is generally meant by a                     a --) b means that it is possible for event a to causally
+process.~ It would be trivial to extend our definition to                   affect event b. Two events are concurrent if neither can
+allow a process to split into distinct subprocesses, but we                 causally affect the other. For example, events pa and q:~
+will not bother to do so.                                                   of Figure 1 are concurrent. Even though we have drawn
+     We assume that sending or receiving a message is an                    the diagram to imply that q3 occurs at an earlier physical
+event in a process. We can then define the "happened                        time than 1)3, process P cannot know what process Q did
+before" relation, denoted by "---~", as follows.                            at qa until it receives the message at p , (Before event p4,
+     Definition. The relation "---->"on the set of events of                P could at most know what Q was planning to do at q:~.)
+a system is the smallest relation satisfying the following                       This definition will appear quite natural to the reader
+three conditions: (1) I f a and b are events in the same                    familiar with the invariant space-time formulation of
+process, and a comes before b, then a ~ b. (2) I f a is the                 special relativity, as described for example in [1] or the
+sending of a message by one process and b is the receipt                    first chapter of [2]. In relativity, the ordering of events is
+o f the same message by another process, then a ~ b. (3)                    defined in terms of messages that could be sent. However,
+I f a ~ b and b ~ c then a ---* c. Two distinct events a                    we have taken the more pragmatic approach of only
+and b are said to be concurrent if a ~ b and b -/-* a.                      considering messages that actually are sent. We should
+     We assume that a ~ a for any event a. (Systems in                      be able to determine if a system performed correctly by
+which an event can happen before itself do not seem to                      knowing only those events which did occur, without
+be physically meaningful.) This implies that ~ is an                        knowing which events could have occurred.
+irreflexive partial ordering on the set of all events in the
+system.
+     It is helpful to view this definition in terms of a                    Logical Clocks
+"space-time diagram" such as Figure 1. The horizontal
+direction represents space, and the vertical direction                          We now introduce clocks into the system. We begin
+represents t i m e - - l a t e r times being higher than earlier            with an abstract point of view in which a clock is just a
+ones. The dots denote events, the vertical lines denote                     way of assigning a number to an event, where the n u m b e r
+processes, and the wavy lines denote messagesfl It is easy                  is thought of as the time at which the event occurred.
+to see that a ~ b means that one can go from a to b in                      More precisely, we define a clock Ci for each process Pi
+                                                                            to be a function which assigns a number Ci(a) to any
+     ' The choice of what constitutes an event affects the ordering of      event a in that process. The entire system o f c l b c k s is
+events in a process. For example, the receipt of a message might denote     represented by the function C which assigns to any event
+the setting of an interrupt bit in a computer, or the execution of a        b the number C ( b ) , where C ( b ) = C/(b) i f b is an event
+subprogram to handle that interrupt. Since interrupts need not be
+handled in the order that they occur, this choice will affect the order-    in process Pj. For now, we make no assumption about
+ing of a process' message-receiving events.                                 the relation of the numbers Ci(a) to physical time, so we
+     2 Observe that messages may be received out of order. We allow         can think of the clocks Ci as logical rather than physical
+the sending of several messages to be a single event, but for convenience
+we will assume that the receipt of a single message does not coincide       clocks. They m a y be implemented by counters with no
+with the sending or receipt of any other message.                           actual timing mechanism.
+559                                                                         Communications                 July 1978
+                                                                            of                             Volume 21
+                                                                            the ACM                        Number 7
+Fig. 3.                                                           condition C2 means that every message line must cross
+                          CY                      n¢              a tick line. F r o m the pictorial meaning of--->, it is easy to
+                                                                  see why these two conditions imply the Clock Con-
+  8                       8                       8               dition.
+  c~!                     ~ ~iLql                 ~    .r 4           We can consider the tick lines to be the time coordi-
+                                                                  nate lines of some Cartesian coordinate system on space-
+                                                                  time. We can redraw Figure 2 to straighten these coor-
+                                                                  dinate lines, thus obtaining Figure 3. Figure 3 is a valid
+                                                                  alternate way of representing the same system of events
+                                                                  as Figure 2. Without introducing the concept of physical
+                                                                  time into the system (which requires introducing physical
+                                                                  clocks), there is no way to decide which of these pictures
+                                                                  is a better representation.
+                                                                       The reader may find it helpful to visualize a two-
+                                                                  dimensional spatial network of processes, which yields a
+                                                                  three-dimensional space-time diagram. Processes and
+                                                                  messages are still represented by lines, but tick lines
+                                                                  become two-dimensional surfaces.
+                                                                       Let us now assume that the processes are algorithms,
+    We now consider what it means for such a system of            and the events represent certain actions during their
+clocks to be correct. We cannot base our definition of            execution. We will show how to introduce clocks into the
+correctness on physical time, since that would require            processes which satisfy the Clock Condition. Process Pi's
+introducing clocks which keep physical time. Our defi-            clock is represented by a register Ci, so that C~(a) is the
+nition must be based on the order in which events occur.          value contained by C~ during the event a. The value of
+The strongest reasonable condition is that if an event a          C~ will change between events, so changing Ci does not
+occurs before another event b, then a should happen at            itself constitute an event.
+an earlier time than b. We state this condition more                   To guarantee that the system of clocks satisfies the
+formally as follows.                                              Clock Condition, we will insure that it satisfies conditions
+                                                                  C 1 and C2. Condition C 1 is simple; the processes need
+Clock Condition. For any events a, b:                             only obey the following implementation rule:
+                           if a---> b then C ( a ) < C(b).
+                                                                       IR1. Each process P~ increments Ci between any
+    Note that we cannot expect the converse condition to            two successive events.
+hold as well, since that would imply that any two con-
+current events must occur at the same time. In Figure 1,              To meet condition C2, we require that each message
+p2 and p.~ are both concurrent with q3, so this would             m contain a timestamp Tm which equals the time at which
+mean that they both must occur at the same time as q.~,           the message was sent. U p o n receiving a message time-
+which would contradict the Clock Condition because p2             stamped Tin, a process must advance its clock to be later
+-----> /93.
+                                                                  than Tin. More precisely, we have the following rule.
+     It is easy to see from our definition of the relation              IR2. (a) I f event a is the sending of a message m
+"---~" that the Clock Condition is satisfied if the following       by process P~, then the message m contains a timestamp
+two conditions hold.                                                T m = Ci(a). (b) U p o n receiving a message m, process
+         C 1. I f a and b are events in process P~, and a comes     Pi sets Ci greater than or equal to its present value and
+      before b, then Ci(a) < Ci(b).                                 greater than Tin.
+         C2. If a is the sending of a message by process Pi            In IR2(b) we consider the event which represents the
+      and b is the receipt of that message by process Pi, then    receipt of the message m to occur after the setting of Ci.
+      Ci(a) < Ci(b).                                              (This is just a notational nuisance, and is irrelevant in
+    Let us consider the clocks in terms of a space-time           any actual implementation.) Obviously, IR2 insures that
+diagram. We imagine that a process' clock "ticks"                 C2 is satisfied. Hence, the simple implementation rules
+through every number, with the ticks occurring between            I R l and IR2 imply that the Clock Condition is satisfied,
+the process' events. For example, if a and b are consec-          so they guarantee a correct system of logical clocks.
+utive events in process Pi with Ci(a) = 4 and Ci(b) = 7,
+then clock ticks 5, 6, and 7 occur between the two events.
+We draw a dashed "tick line" through all the like-                Ordering the Events Totally
+numbered ticks of the different processes. The space-
+time diagram of Figure 1 might then yield the picture in              We can use a system of clocks satisfying the Clock
+Figure 2. Condition C 1 means that there must be a tick           Condition to place a total ordering on the set of all
+line between any two events on a process line, and                system events. We simply order the events by the times
+560                                                               Communications                 July 1978
+                                                                  of                             Volume 21
+                                                                  the ACM                        Number 7
+ at which they occur. To break ties, we use any arbitrary                clocks with'rules IR 1 and IR2, and use them to define a
+ total ordering < of the processes. More precisely, we                   total ordering ~ of all events. This provides a total
+ define a relation ~ as follows: if a is an event in process             ordering of all request and release operations. With this
+ Pi and b is an event in process Pj, then a ~ b if and only              ordering, finding a solution becomes a straightforward
+ if either (i) Ci{a) < Cj(b) or (ii) El(a)      Cj(b) and Pi
+                                                   ----"                 exercise. It just involves making sure that each process
+ < Py. It is easy to see that this defines a total ordering,             learns about all other processes' operations.
+ and that the Clock Condition implies that if                                To simplify the problem, we make some assumptions.
+ a ----> b then a ~ b. In other words, the relation ~ is a               They are not essential, but they are introduced to avoid
+ way of completing the "happened before" partial order-                  distracting implementation details. We assume first o f all
+ ing to a total ordering, a                                              that for any two processes P / a n d Pj, the messages sent
+      The ordering ~ depends upon the system of clocks                   from Pi to Pi are received in the same order as they are
+ Cz, and is not unique. Different choices of clocks which                sent. Moreover, we assume that every message is even-
+satisfy the Clock Condition yield different relations ~ .                tually received. (These assumptions can be avoided by
+ Given any total ordering relation ~ which extends --->,                 introducing message numbers and message acknowledg-
+ there is a system of clocks satisfying the Clock Condition              ment protocols.) We also assume that a process can send
+which yields that relation. It is only the partial ordering              messages directly to every other process.
+     which is uniquely determined by the system of events.                   Each process maintains its own request queue which
+      Being able to totally order the events can be very                 is never seen by any other process. We assume that the
+ useful in implementing a distributed system. In fact, the               request queues initially contain the single message To:Po
+reason for implementing a correct system of logical                      requests resource, where Po is the process initially granted
+clocks is to obtain such a total ordering. We will illustrate            the resource and To is less than the initial value of any
+the use of this total ordering of events by solving the                  clock.
+following version of the mutual exclusion problem. Con-                      The algorithm is then defined by the following five
+sider a system composed of a fixed collection of processes               rules. For convenience, the actions defined by each rule
+which share a single resource. Only one process can use                  are assumed to form a single event.
+the resource at a time, so the processes must synchronize                     1. To request the resource, process Pi sends the mes-
+themselves to avoid conflict. We wish to find an algo-                   sage TIn:P/requests resource to every other process, and
+rithm for granting the resource to a process which satis-                puts that message on its request queue, where T,~ is the
+fies the following three conditions: (I) A process which                 timestamp of the message.
+has been granted the resource must release it before it                      2. When process Pj receives the message T,~:P~ re-
+can be granted to another process. (II) Different requests               quests resource, it places it on its request queue and sends
+for the resource must be granted in the order in which                   a (timestamped) acknowledgment message to P~.'~
+they are made. (III) If every process which is granted the                   3. To release the resource, process P~ removes any
+resource eventually releases it, then every request is                   Tm:Pi requests resource message from its request queue
+eventually granted.                                                      and sends a (timestamped) Pi releases resource message
+      We assume that the resource is initially granted to                to every other process.
+exactly one process.                                                         4. When process Pj receives a Pi releases resource
+      These are perfectly natural requirements. They pre-                message, it removes any Tm:P~ requests resource message
+cisely specify what it means for a solution to be correct/               from its request queue.
+Observe how the conditions involve the ordering of                           5. Process P/is granted the resource when the follow-
+events. Condition II says nothing about which of two                     ing two conditions are satisfied: (i) There is a Tm:Pi
+concurrently issued requests should be granted first.                    requests resource message in its request queue which is
+      It is important to realize that this is a nontrivial               ordered before any other request in its queue by the
+problem. Using a central scheduling process which grants                 relation ~ . (To define the relation " ~ " for messages,
+requests in the order they are received will not work,                   we identify a message with the event of sending it.) (ii)
+unless additional assumptions are made. To see this, let                 P~ has received a message from every other process time-
+P0 be the scheduling process. Suppose P1 sends a request                 stamped later than Tin.~
+to Po and then sends a message to P2. U p o n receiving the
+                                                                         Note that conditions (i) and (ii) of rule 5 are tested
+latter message, Pe sends a request to Po. It is possible for             locally by P~.
+P2's request to reach P0 before Pl's request does. Condi-
+                                                                             It is easy to verify that the algorithm defined by these
+tion II is then violated if P2's request is granted first.
+                                                                         rules satisfies conditions I-III. First of all, observe that
+     To solve the problem, we implement a system of
+                                                                         condition (ii) of rule 5, together with the assumption that
+                                                                         messages are received in order, guarantees that P~ has
+     ;~The ordering < establishes a priority among the processes. If a   learned about all requests which preceded its current
+"fairer" method is desired, then < can be made a function of the clock
+value. For example, if Ci(a) = C/b) andj < L then we can let a ~ b
+ifj < C~(a) mod N --< i, and b ~ a otherwise; where N is the total           '~This acknowledgment messageneed not be sent if Pj has already
+number of processes.                                                     sent a messageto Pi timestamped later than T....
+     4 The term "eventually" should be made precise, but that would          " If P, -< Pi, then Pi need only have receiveda messagetimestamped
+require too long a diversion from our main topic.                        _>T,,, from P/.
+561                                                                      Communications                    July 1978
+                                                                         of                                Volume 21
+                                                                         the ACM                           Number 7
+request. Since rules 3 and 4 are the only ones which                    Anomalous Behavior
+delete messages from the request queue, it is then easy to
+see that condition I holds. Condition II follows from the                    Our resource scheduling algorithm ordered the re-
+fact that the total ordering ~ extends the partial ordering             quests according to the total ordering =*. This permits
+---~. Rule 2 guarantees that after Pi requests the resource,            the following type of "anomalous behavior." Consider a
+condition (ii) of rule 5 will eventually hold. Rules 3 and              nationwide system of interconnected computers. Suppose
+4 imply that if each process which is granted the resource              a person issues a request A on a computer A, and then
+eventually releases it, then condition (i) of rule 5 will               telephones a friend in another city to have him issue a
+eventually hold, thus proving condition III.                            request B on a different computer B. It is quite possible
+     This is a distributed algorithm. Each process inde-                for request B to receive a lower timestamp and be ordered
+pendently follows these rules, and there is no central                  before request A. This can happen because the system
+synchronizing process or central storage. This approach                 has no way of knowing that A actually preceded B, since
+can be generalized to implement any desired synchroni-                  that precedence informatiori is based on messages exter-
+zation for such a distributed multiprocess system. The                  nal to the system.
+synchronization is specified in terms of a State Machine,                    Let us examine the source of the problem more
+consisting of a set C of possible commands, a set S of                  closely. Let O° be the set of all system events. Let us
+possible states, and a function e: C × S--~ S. The relation             introduce a set of events which contains the events in b°
+ e(C, S) -- S' means that executing the command C with                  together with all other relevant external events, such as
+the machine in state S causes the machine state to change               the phone calls in our example. Let ~ denote the "hap-
+to S'. In our example, the set C consists of all the                    pened before" relation for ~. In our example, we had A
+commands Pi requests resource and P~ releases resource,                     B, but A-~ B. It is obvious that no algorithm based
+and the state consists of a queue of waiting request                    entirely upon events in 0 °, and which does not relate
+commands, where the request at the head of the queue                    those events in any way with the other events i n ~ , can
+is the currently granted one. Executing a request com-                  guarantee that request A is ordered before request B.
+mand adds the request to the tail of the queue, and                          There are two possible ways to avoid such anomalous
+executing a release command removes a command from                      behavior. The first way is to explicitly introduce into the
+'he queue. 7                                                            system the necessary information about the ordering
+     Each process independently simulates the execution                 --~. In our example, the person issuing request A could
+of the State Machine, using the commands issued by all                  receive the timestamp TA of that request from the system.
+the processes. Synchronization is achieved because all                  When issuing request B, his friend could specify that B
+processes order the commands according to their time-                   be given a timestamp later than TA. This gives the user
+stamps (using the relation ~ ) , so each process uses the               the responsibility for avoiding anomalous behavior.
+same sequence of commands. A process can execute a                           The second approach is to construct a system of
+command timestamped T when it has learned of all                        clocks which satisfies the following condition.
+commands issued by all other processes with timestamps
+                                                                        Strong Clock Condition. For any events a, b in O°:
+less than or equal to T. The precise algorithm is straight-
+                                                                                                   i f a --~ b then C(a} < C(b).
+forward, and we will not bother to describe it.
+     This method allows one t o implement any desired                   This is stronger than the ordinary Clock Condition be-
+form of multiprocess synchronization in a distributed                   cause ~ is a stronger relation than ---~. It is not in general
+system. However, the resulting algorithm requires the                   satisfied by our logical clocks.
+active participation of all the processes. A process must                   Let us identify ~ with some set of "real" events in
+know all the commands issued by other processes, so                     physical space-time, and let ~ be the partial ordering of
+that the failure of a single process will make it impossible            events defined by special relativity. One of the mysteries
+for any other process to execute State Machine com-                     of the universe is that it is possible to construct a system
+mands, thereby halting the system.                                      of physical clocks which, running quite independently of
+     The problem of failure is a difficult one, and it is               one another, will satisfy the Strong Clock Condition. We
+beyond the scope of this paper to discuss it in any detail.             can therefore use physical clocks to eliminate anomalous
+We will just observe that the entire concept of failure is              behavior. We now turn our attention to such clocks.
+only meaningful in the context of physical time. Without
+physical time, there is no way to distinguish a failed
+process from one which is just pausing between events.                  Physical Clocks
+A user can tell that a system has "crashed" only because
+he has been waiting too long for a response. A method                       Let us introduce a physical time coordinate into our
+which works despite the failure of individual processes                 space-time picture, and let Ci(t) denote the reading of
+                                                                        the clock Ci at physical time t.8 For mathematical con-
+or communication lines is described in [3].
+                                                                              We will assume a Newtonian space-time. If the relative motion
+    7 If each process does not strictly alternate request and release   of the clocks or gravitational effects are not negligible, then CM) must
+commands, then executing a release command could delete zero, one,      be deduced from the actual clock reading by transforming from proper
+or more than one request from the queue.                                time to the arbitrarily chosen time coordinate.
+
+562                                                                     Communications                     July 1978
+                                                                        of                                 Volume 2 l
+                                                                        the ACM                            Number 7
+venience, we assume that the clocks run continuously                       We now describe our algorithm for insuring that PC2
+rather than in discrete "ticks." (A discrete clock can be             holds. Let m be a message which is sent at physical time
+thought of as a continuous one in which there is an error             t and received at time t'. We define l,m ~ - t t - - I to be the
+of up to ½ "tick" in reading it.) More precisely, we                  total delay of the message m. This delay will, of course,
+assume that Ci(t) is a continuous, differentiable function            not be known to the process which receives m. However,
+of t except for isolated j u m p discontinuities where the            we assume that the receiving process knows some mini-
+clock is reset. Then dCg(t)/dt represents the rate at which           m u m delay tzm >_ 0 such that ~£m ~ Pro. We call ~,, = I,m
+the clock is running at time t.                                       -- #m the unpredictable delay of the message.
+    In order for the clock Cg to be a true physical clock,                 We now specialize rules I R I and 2 for our physical
+it must run at approximately the correct rate. That is, we            clocks as follows:
+must have d C i ( t ) / d t -~ 1 for all t. More precisely, we will        IR 1'. For each i, if Pi does not receive a message at
+assume that the following condition is satisfied:                     physical time t, then C/is differentiable at t and dCg(t)/dt
+                                                                      >0.
+P C I . There exists a constant x << 1
+                                                                           IR2'. (a) If Pg sends a message m at physical time t,
+                     such that for all i: [dCg(t)/dt - 1 [ < x.
+                                                                      then m contains a timestamp T m =            C/(t). (b) Upon
+For typical crystal controlled clocks, x _< 10-(~.                    receiving a message m at time t', process P/ sets C/(t')
+    It is not enough for the clocks individually to run at            equal to m a x i m u m (Cj(t' - 0), Tm + /Zm).9
+approximately the correct rate. They must be synchro-                      Although the rules are formally specified in terms of
+nized so that Cg(t) = C/(t) for all i,j, and t. More precisely,       the physical time parameter, a process only needs to
+there must be a sufficiently small constant e so that the             know its own clock reading and the timestamps of mes-
+following condition holds:                                            sages it receives. For mathematical convenience, we are
+PC2. For all i, j: [ C i ( t )   -   Cy(t)[ < •.                      assuming that each event occurs at a precise instant of
+                                                                      physical time, and different events in the same process
+If we consider vertical distance in Figure 2 to represent
+                                                                      occur at different times. These rules are then specializa-
+physical time, then PC2 states that the variation in height
+                                                                      tions of rules IR1 and IR2, so our system of clocks
+of a single tick line is less than E.
+                                                                      satisfies the Clock Condition. The fact that real events
+     Since two different clocks will never run at exactly
+                                                                      have a finite duration causes no difficulty in implement-
+the same rate, they will tend to drift further and further
+                                                                      ing the algorithm. The only real concern in the imple-
+apart. We must therefore devise an algorithm to insure
+                                                                      mentation is making sure that the discrete clock ticks are
+that PC2 always holds. First, however, let us examine
+                                                                      frequent enough so C 1 is maintained.
+how small x and • must be to prevent anomalous behav-
+                                                                           We now show that this clock synchronizing algorithm
+ior. We must insure that the system 5e of relevant physical
+                                                                      can be used to satisfy condition PC2. We assume that
+events satisfies the Strong Clock Condition. We assume
+                                                                      the system of processes is described by a directed graph
+that our clocks satisfy the ordinary Clock Condition, so
+                                                                      in which an arc from process Pi to process P/represents
+we need only require that the Strong Clock Condition
+                                                                      a communication line over which messages are sent
+holds when a and b are events in 0 ° with a 4-> b.
+                                                                      directly from Pi to P/. We say that a message is sent over
+Hence, we need only consider events occurring in differ-
+                                                                      this arc every T seconds if for any t, Pi sends at least one
+ent processes.
+                                                                      message to P / b e t w e e n physical times t and t + -r. The
+     Let # be a number such that if event a occurs at
+                                                                      diameter of the directed graph is the smallest n u m b e r d
+physical time t and event b in another process satisfies
+                                                                      such that for any pair of distinct processes P/, Pk, there
+a ~ b, then b occurs later than physical time t + bt. In
+                                                                      is a path from P / t o P~ having at most d arcs.
+other words,/~ is less than the shortest transmission time
+                                                                           In addition to establishing PC2, the following theo-
+for interprocess messages. We can always choose # equal
+                                                                      rem bounds the length of time it can take the clocks to
+to the shortest distance between processes divided by the
+                                                                      become synchronized when the system is first started.
+speed of light. However, depending upon how messages
+                                                                           THEOREM. Assume a strongly connected graph of
+in ~ are transmitted, # could be significantly larger.
+                                                                      processes with diameter d which always obeys rules IR 1'
+     To avoid anomalous behavior, we must make sure
+                                                                      and IR2'. Assume that for any message m, #m --< # for
+that for any i, j, and t: Ci(t + #) - CAt) > 0. Combining
+                                                                      some constant g, and that for all t > to: (a) PC 1 holds.
+this with PC I and 2 allows us to relate the required
+                                                                      (b) There are constants ~"and ~ such that every ~-seconds
+smallness of x and ~ to the value of # as follows. We
+                                                                      a message with an unpredictable delay less than ~ is sent
+assume that when a clock is reset, it is always set forward
+                                                                      over every arc. Then PC2 is satisfied with • = d(2x~- +
+and never back. (Setting it back could cause C I to be
+                                                                      ~) for all t > to + Td, where the approximations assume
+violated.) PCI then implies that Cg(t + #) - Cg(t) > (1               # + ~<< z.
+- x)#. Using PC2, it is then easy to deduce that Cg(t +
+                                                                           The proof of this theorem is surprisingly difficult,
+#) - C/(t) > 0 if the following inequality holds:
+                                                                      and is given in the Appendix. There has been a great
+E/(I   -   ~) _< ~.                                                   deal of work done on the problem of synchronizing
+This inequality together with PC 1 and PC2 implies that               physical clocks. We refer the reader to [4] for an intro-
+anomalous behavior is impossible.                                         :) C/(t' - 0) = lim C,(t' -   181).
+
+563                                                                   Communications                            July 1978
+                                                                      of                                        Volume 21
+                                                                      the A C M                                 Number 7
+duction to the subject. T h e methods described in the                             ti+l, to <-- t~, and that at time t[ process Pi sends a message
+literature are useful for estimating the message delays                            to process Pi+l which is received at time ti+l with an
+ktm and for adjusting the clock frequencies d C i / d t (for                       unpredictable delay less than 4. T h e n repeated applica-
+clocks which permit such an adjustment). However, the                              tion o f the inequality (3) yields the following result for
+requirement that clocks are never set backwards seems                              t >_ t n + l .
+to distinguish our situation from ones previously studied,
+                                                                                   Ct~t(t) --> Cl(tl') + (1 - ~)(t - tl') - n~.                                    (4)
+and we believe this t h e o r e m to be a new result.
+                                                                                   F r o m PC1, I R I ' and 2' we deduce that
+                                                                                   C l ( / l ' ) >" C l ( t l ) + (1 -- K)(tl' -- /1).
+Conclusion
+                                                                                   C o m b i n i n g this with (4) and using (2), we get
+    W e have seen that the concept o f " h a p p e n i n g before"
+                                                                                   Cn+a(t) > C~(tl) + (1 - x)(t - t~) - n~                                         (5)
+defines an invariant partial ordering of the events in a
+distributed multiprocess system. W e described an algo-                            for t > t n + l .
+rithm for extending that partial ordering to a s o m e w h a t                          F o r a n y two processes P and P', we can find a
+arbitrary total ordering, and showed how this total or-                            sequence of processes P -- Po, P~ . . . . . Pn+~ = P', n _< d,
+dering can be used to solve a simple synchronization                               with c o m m u n i c a t i o n arcs f r o m each Pi to Pi+~. By hy-
+problem. A future p a p e r will show how this a p p r o a c h                     pothesis (b) we can find times ti, t[ with t[ - ti <- T and
+can be extended to solve a n y synchronization problem.                            ti+l - t" <_ v, where v = # + 4. Hence, an inequality o f
+    T h e total ordering defined by the algorithm is some-                         the form (5) holds with n <_ d w h e n e v e r t >_ t~ + d('r +
+what arbitrary. It can produce a n o m a l o u s b e h a v i o r if it             v). F o r a n y i, j and any t, tl with tl > to and t ___ t~ + d(z
+disagrees with the ordering perceived by the system's                              + v) we therefore have:
+users. This can be prevented by the use of properly
+                                                                                   Ci(t) _> Cj(ta) + (1 - x)(t - tx) - d~.                                         (6)
+synchronized physical clocks. O u r t h e o r e m showed h o w
+closely the clocks can be synchronized.                                                 N o w let m be any message t i m e s t a m p e d Tin, a n d
+    In a distributed system, it is i m p o r t a n t to realize that               suppose it is sent at time t and received at time t'. W e
+the order in which events occur is only a partial ordering.                        pretend that m has a clock Cm which runs at a constant
+W e believe that this idea is useful in understanding any                          rate such that C,~(t) = tm and Cm(t') = tm +/~m. T h e n
+multiprocess system. It should help one to u n d e r s t a n d                     #0, ___t' - t implies that d C m / d t _< 1. Rule I R 2 ' (b) simply
+the basic p r o b l e m s o f multiprocessing independently of                     sets Cj(t') to m a x i m u m (Cj(t' - 0), Cm(t')). Hence, clocks
+the m e c h a n i s m s used to solve them.                                        are reset only by setting t h e m equal to other clocks.
+                                                                                        F o r a n y time tx >-- to + / ~ / ( 1 - ~), let Cx be the clock
+Appendix                                                                           having the largest value at time t~. Since all clocks run
+                                                                                   at a rate less t h a n 1 + x, we have for all i and all t >_ tx:
+Proof of the Theorem                                                               Ci(t) _< Cx(tx) + (1 + x)(t - tx).                                              (7)
+    F o r a n y i and t, let us define C~t to be a clock which
+is set equal to C~ at time t and runs at the same rate as                          W e n o w consider the following two cases: (i) Cx is the
+Ci, but is never reset. In other words,                                            clock Cq o f process Pq. (ii) Cx is the clock Cm o f a
+                                                                                   message sent at time ta by process Pq. In case (i), (7)
+                                                                                   simply becomes
+C i t ( t ') = Ci(t) +    [dCz(t)/dtldt                                     (1)
+                                                                                   El(t) -< Cq(tx) + (1 + x)(t - tx).                                             (8i)
+                                                                                   In case (ii), since Cm(tx) = Cq(tl) and d C m / d t                     _ 1, we
+for all t' >_ t. Note that
+                                                                                   have
+Ci(t') >_ Cit(t ') for all t' >__ t.                                        (2)
+                                                                                   Cx(tx) <_ Cq(tl) + (tx - tO.
+    Suppose process P~ at time tl sends a message to
+process Pz which is received at time t2 with an unpre-                             Hence, (7) yields
+dictable delay _< ~, where to <- ta _< t2. T h e n for all t ___ t2                Ci(t) <-~ Cq(/1) + (1 + K)(t -- /1).                                           (8ii)
+we have:
+                                                                                   Since tx >-- to + ~t/(1 -- X), we get
+C~(t) >_ C~(t2) + (1 - x)(t - t2)                           [by (1) and P C I ]
+> Cfftl) +/~m + (1 -- x)(t -- t2)                               [by I R 2 ' (b)]   Cq(tx --         ~/(1 -- K)) <_ Cq(tx) - ~            [by P C I ]
+=   Cl(tl) + (1 - x)(t     -   tl)   -     [(t2 - tO - ~m] + x(t2 -        t,)
+                                                                                                    ___ Cm(tx) - / z                     [by choice o f m]
+                                         >-- Cl(tl) + (1 - x ) ( t - tl) - 4.                       -< Cm(tx) - (tx - t l ) # m / V m    [tXm <-- r.t, tx - tl <_ v,,]
+                                                                                                    =Tm                                  [by definition o f Cm]
+Hence, with these assumptions, for all t >_ t2 we have:                                             = Cq(tl)                             [by IR2'(a)].
+C~(t) _> Cl(tl) + (1 - x)(t - / 1 )            -   -   4"                    (3)   Hence, Cq(tx - / L / ( 1          - x)) ___ Cq(tl), so tx - tl < - / x / ( l      -
+      NOW suppose that for i = 1, ..., n we have t, _< t ~, <                      ~) and thus ll ~ to.
+
+564                                                                                Communications                             July 1978
+                                                                                   of                                         Volume 21
+                                                                                   the ACM                                    Number 7
+    Letting tl = tx in case (i)~ we c a n c o m b i n e (8i) a n d
+(8ii) to d e d u c e that for a n y t, tx with t _> tx _> to + # /
+(1 - x) there is a process Pq a n d a time tl with tx - # /
+(1 - i¢) ~ tl "< tx such t h a t for all i:
+
+Ci(t) _< Cq(t~) + (1 + x)(t - h).                                              (9)     Programming                         J.J. Homing
+                                                                                       Languages                           Editor
+C h o o s i n g t a n d tx with t _ tx + d ( r + ~,), we c a n c o m b i n e
+(6) a n d (9) to c o n c l u d e that there exists a tl a n d a process
+Pq such that for all i:
+                                                                                       Shallow Binding in
+Cq(t 0 + (1 - x)(t - tl) - d~ -< Ci(t)                                       (10)      Lisp 1.5
+                                     <: Cq(tl) + (1 + tc)(t - t])                      Henry G. Baker, Jr.
+Letting t = t~ + d ( r + u), we get                                                    Massachusetts Institute of Technology
+d(r+p)__.t-tl_<d(r+v)+#/(1-x).
+C o m b i n i n g this with (10), we get                                                   Shallow binding is a scheme which allows the value
+                                                                                       of a variable to be accessed in a bounded amount of
+Cq(tl) + (t - tl) - x d ( r + p) - d~ -< Ci(t) _< Cq(tl)                      (11)
+                                                                                       computation. An elegant model for shallow binding in
+                      + (t - tl) + x[d(r + u) + / z / ( 1 - x)]                        Lisp 1.5 is presented in which context-switching is an
+                                                                                       environment tree transformation called rerooting.
+U s i n g the h y p o t h e s e s that x << 1 a n d / t _< ~, << r, we can
+                                                                                       Rerooting is completely general and reversible, and is
+rewrite (11) as the following a p p r o x i m a t e inequality.
+                                                                                       optional in the sense that a Lisp 1.5 interpreter will
+Cq(tl) + (t - tl) - d(tg'r + ~) ~.< Ci(t)                                     (12)     operate correctly whether or not rerooting is in-
+                                                                                       voked on every context change. Since rerooting leaves
+                                     ~' Cq(/1) + (l -- tl) -I- dKr.
+                                                                                       assoc [ v, a] invariant, for all variables v and all
+Since this h o l d s for all i, we get                                                 environments a, the programmer can have access to a
+                                                                                       rerooting primitive, shallow[], which gives him dynamic
+[Ci(t) - CAt)[ ~<d(2xr + O,                                                            control over whether accesses are shallow or deep, and
+a n d this h o l d s for all t > to + dr.                                        []    which affects only the speed of execution of a program,
+      N o t e that r e l a t i o n (11) o f the p r o o f yields an exact              not its semantics. In addition, multiple processes can be
+u p p e r b o u n d for [Ci(t) - Cj(t) l in case the a s s u m p t i o n               active in the same environment structure, so long as
+/~ + ~ << r is invalid. A n e x a m i n a t i o n o f the p r o o f                    rerooting is an indivisible operation. Finally, the
+suggests a simple m e t h o d for r a p i d l y initializing the                       concept of rerooting is shown to combine the concept of
+clocks, o r r e s y n c h r o n i z i n g t h e m i f t h e y s h o u l d go out o f   shallow binding in Lisp with Dijkstra's display for Algol
+s y n c h r o n y for a n y reason. E a c h process sends a message                    and hence is a general model for shallow binding.
+w h i c h is r e l a y e d to every o t h e r process. T h e p r o c e d u r e             Key Words and Phrases: Lisp 1.5, environment
+c a n be i n i t i a t e d b y a n y process, a n d requires less t h a n              trees, FUNARG'S, shallow binding, deep binding,
+2 d ~ + ~) seconds to effect the s y n c h r o n i z a t i o n , a s s u m i n g       multiprogramming, Algol display
+e a c h o f the messages has a n u n p r e d i c t a b l e d e l a y less                  CR Categories: 4.13, 4.22, 4.32
+t h a n ~.
+
+     A c k n o w l e d g m e n t . T h e use o f t i m e s t a m p s to o r d e r
+operations, a n d the concept o f a n o m a l o u s b e h a v i o r are
+d u e to P a u l J o h n s o n a n d R o b e r t T h o m a s .
+
+Received March 1976; revised October 1977
+
+References                                                                                  General permission to make fair use in teaching or research of all
+1. Schwartz, J.T. Relativity in lllustrations. New York U. Press, New                  or part of this material is granted to individual readers and to nonprofit
+York, 1962.                                                                            libraries acting for them provided that ACM's copyright notice is given
+2. Taylor, E.F., and Wheeler, J.A. Space-Time Physics, W.H.                            and that reference is made to the publication, to its date of issue, and
+Freeman, San Francisco, 1966.                                                          to the fact that reprinting privileges were granted by permission of the
+3. Lamport, L. The implementation of reliable distributed                              Association for Computing Machinery. To otherwise reprint a figure,
+multiprocess systems. To appear in Computer Networks.                                  table, other substantial excerpt, or the entire work requires specific
+4. Ellingson, C, and Kulpinski, R.J. Dissemination of system-time.                     permission as does republication, or systematic or multiple reproduc-
+1EEE Trans. Comm. Com-23, 5 (May 1973), 605-624.                                       tion.
+                                                                                            This research was supported by the Advanced Research Projects
+                                                                                       Agency of the Department of Defense and was monitored by the Office
+                                                                                       of Naval Research under contract number N00014-75-C-0522.
+                                                                                            Author's present address: Computer Science Department, Univer-
+                                                                                       sity of Rochester, Rochester, NY 14627.
+                                                                                       © 1978 ACM 0001-0782/78/0700-0565 $00.75
+
+565                                                                                    Communications                      July 1978
+                                                                                       of                                  Volume 21
+                                                                                       the ACM                             Number 7
+

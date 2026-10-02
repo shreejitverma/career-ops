@@ -1,0 +1,1026 @@
+     Supporting Time-Sensitive Applications on a Commodity OS
+                 Ashvin Goel, Luca Abeni, Charles Krasic, Jim Snow, Jonathan Walpole
+                          Department of Computer Science and Engineering
+                                 Oregon Graduate Institute, Portland
+                           {ashvin,luca,jsnow,krasic,walpole}@cse.ogi.edu
+
+
+Abstract                                                           This paper shows that there are three important require-
+                                                                   ments for achieving timely resource allocation: a high-
+                                                                   precision timing facility, a well-designed preemptible
+Commodity operating systems are increasingly being                 kernel and the use of appropriate scheduling techniques.
+used for serving time-sensitive applications. These ap-            Each of these requirements have been addressed in the
+plications require low-latency response from the kernel            past with specific mechanisms, but unfortunately oper-
+and from other system-level services. In this paper, we            ating systems, such as Linux, often do not support or
+explore various operating systems techniques needed to             integrate these mechanisms.
+support time-sensitive applications and describe the de-
+sign of our Time-Sensitive Linux (TSL) system. We                  This paper focuses on three specific techniques that can
+show that the combination of a high-precision timing fa-           be integrated to satisfy the constraints of time-sensitive
+cility, a well-designed preemptible kernel and the use of          applications. First, we present firm timers, an efficient
+appropriate scheduling techniques is the basis for a low-          high-resolution timer mechanism. Firm timers incorpo-
+latency response system and such a system can have low             rate the benefits of three types of timers, one-shot timers
+overhead. We evaluate the behavior of realistic time-              available on modern hardware [7], soft timers [2], and
+sensitive user- and kernel-level applications on our sys-          periodic timers to provide accurate timing with low over-
+tem and show that, in practice, it is possible to satisfy the      head. Second, we use fine-grained kernel preemptibility
+constraints of time-sensitive applications in a commod-            to obtain a responsive kernel. Finally, we use both prior-
+ity operating system without significantly compromising            ity and reservation-based CPU scheduling mechanisms
+the performance of throughput-oriented applications.               for supporting various types of time-sensitive applica-
+                                                                   tions. We have integrated these techniques in our ex-
+                                                                   tended version of the Linux kernel, which we call Time-
+                                                                   Sensitive Linux (TSL).
+1 Introduction
+                                                                   Currently, commodity systems provide coarse-grained
+                                                                   resource allocation with the goal of maximizing system
+Multimedia applications, and soft real-time applications           throughput. Such a policy conflicts with the needs of
+in general, are driven by real-world demands and are               time-sensitive applications which require more precise
+characterized by timing constraints that must be satis-            allocation. Thus, recently several approaches have been
+fied for correct operation; for this reason, we call these         proposed to improve the timing response of a commod-
+applications time-sensitive. Time-sensitive applications           ity system such as Linux [17, 22]. These approaches in-
+may require, for example, periodic execution with low              clude improved kernel preemptibility and a more generic
+jitter (e.g., soft modems [8]) or quick response to exter-         scheduling framework. However, since their focus is
+nal events such as frame capture (e.g., video conferenc-           hard real-time, they do not evaluate the performance of
+ing).                                                              non-real time applications.
+
+To support these time-sensitive applications, a general-           In contrast, TSL focuses on integrating efficient sup-
+purpose operating system (OS) must respect the appli-              port for time-sensitive applications in a commodity OS
+cation’s timing constraints. To do so, resources must              without significantly degrading the performance of tradi-
+be allocated to the application at the appropriate times.          tional applications. Hence, one of the main contributions
+                                                                   of this paper is to show through experimental evaluation
+    This work was partially supported by DARPA/ITO under the In-
+formation Technology Expeditions, Ubiquitous Computing, Quorum,    that using the above techniques it is possible to provide
+and PCES programs and by Intel.                                    good performance to time-sensitive applications as well
+as to throughput-oriented applications.                     SRT recognizes that the timing behavior of an appli-
+                                                            cation depends on shared system services such as the
+The rest of the paper is organized as follows. Section 2    X server and thus modifies the X server to prioritize
+investigates the factors that contribute to poor temporal   graphics rendering based on the scheduling parameters
+response in commodity systems. Section 3 describes the      of tasks. We use a simpler priority-assignment protocol
+techniques that we have used to implement TSL. Sec-         to achieve the same effect without requiring any modifi-
+tion 4 evaluates the behavior of several time-sensitive     cations to the X server.
+applications and presents overheads of TSL. Finally, in
+Section 5, we state our conclusions.                        A different approach for providing real-time perfor-
+                                                            mance is used by systems such as RTLinux [4], which
+                                                            decrease timing unpredictability in the system by run-
+1.1   Related Work                                          ning Linux as a background process over a small real-
+                                                            time executive. This solution provides good real-time
+                                                            performance, but does not provide it to Linux applica-
+The scheduling problem has been extensively studied by      tions. Also, native real-time threads use a different and
+the real-time community [10, 19]. However, most of the      less evolved application binary interface (ABI) as com-
+scheduling analysis is based on an abstract mathemati-      pared to the Linux interface and do not have access to
+cal model that ignores practical systems issues such as     Linux device drivers.
+kernel non-preemptibility and interrupt processing over-
+head. Recently, many different real-time algorithms         An accurate timing mechanism is crucial for supporting
+have been implemented in Linux and in other general-        time-sensitive applications. Thus most of the existing
+purpose kernels. For example, Linux/RK [17] imple-          real-time kernels or real-time extensions to Linux pro-
+ments Resource Reservations in the Linux kernel, and        vide high resolution timers. The high resolution timers
+RED Linux [22] provides a generic real-time scheduling      concept was proposed by RT-Mach [18] and has subse-
+framework. These kernels tackle the practical systems       quently been used by several other systems [17]. In a
+issues mentioned above with techniques similar to the       general-purpose operating system, the overhead of such
+techniques presented in this paper. For example, kernel     timers can affect the performance of throughput-oriented
+preemptibility is used by Timesys Linux and MontaVista      applications. This overhead is caused by the increased
+Linux [12]. However, while these kernels work well for      number of interrupts generated by the fine-grained tim-
+time-sensitive applications, their performance overhead     ing mechanism and can be mitigated by the soft-timer
+on throughput-oriented applications is not clear.           mechanism [2]. Thus, our firm-timer implementation
+                                                            uses soft timers.
+The SMaRT [16] and Linux-SRT [6] kernels share our
+goal of supporting time-sensitive applications on com-      Finally, the Nemesis operating system [9] is designed for
+modity OSs. Before implementing SMaRT, Nieh, et             multimedia and other time-sensitive applications. How-
+al. [15] showed that tuning the time-sharing or the real-   ever, its structure and API is very different from the stan-
+time priorities of applications required a great deal of    dard programming environment provided by operating
+experimentation in SVR4 Unix and often lead to un-          systems such as Linux. Our goal is to minimize changes
+predictable results. They showed empirically, similar to    to the programming environment to encourage the use
+our priority-assignment protocol, that assigning a higher   of time-sensitive applications in a commodity environ-
+real-time priority to the X server improved the perfor-     ment.
+mance of video. Later, Nieh implemented the SMaRT
+real-time scheduler on Solaris that dynamically balances
+between the needs of different jobs by giving propor-
+tional shares to each job and a bias that improves the      2 Time-Sensitive Requirements
+responsiveness of interactive and real-time jobs. This
+scheduler complements our approach of using priori-
+ties or proportion-period scheduling, as appropriate, for   To satisfy a time-sensitive application’s temporal con-
+time-sensitive tasks.                                       straints, resources must be allocated at “appropriate”
+                                                            times. These appropriate times are determined by events
+Linux-SRT supports multiple real-time scheduling poli-      of interest to the application, such as readiness of a video
+cies and implements a timing mechanism that is more         frame for display. In response to these events, the appli-
+accurate than standard Linux. However, it doesn’t incor-    cation is scheduled or activated. Hence, we view the
+porate kernel preemption or discuss the issue of time-      time-line of the application as a sequence of such events
+sensitive performance under heavy system load. Linux-       and the corresponding activations. For example, Fig-
+ure 1 shows an event and its activation. It depicts the                           kernels, a thread entering the kernel becomes non-
+execution sequence in a system after a wall-clock time                            preemptible and must either yield the CPU or exit
+event. We call the latency between the event and its ac-                          the kernel before an activation can occur. The solu-
+tivation, kernel latency. Kernel latency should be low in                         tion for improving kernel response is to reduce the
+a time-sensitive system. As the figure shows, kernel la-                          size of such non-preemptible sections as described
+tency has three components that we call timer latency,                            in Section 3.2.
+preemption latency and scheduling latency. To reduce
+these components of kernel latency, there are three re-                      CPU Scheduling Algorithm: The scheduling problem
+quirements: 1) an accurate timing mechanism, 2) a re-                           for providing precise allocations has been exten-
+sponsive kernel and 3) an appropriate CPU scheduling                            sively studied in the literature but most of the work
+algorithm. These requirements are described below.                              relies on some strict assumptions such as full pre-
+                                                                                emptibility of tasks. A responsive kernel with an
+           Timer Latency   Preemption Latency Scheduling Latency                accurate timing mechanism enables implementa-
+                                                                      Time      tion of such CPU scheduling strategies because
+                                                                                it makes the assumptions more realistic and im-
+                            Interrupt        Another application
+                            Handler             scheduled                       proves the accuracy of scheduling analysis. In this
+Wall−clock time    Timer Interrupt       Scheduler   Application scheduled      paper, we use two different real-time scheduling
+  event                                                   (activation)          algorithms: a proportion-period scheduler and a
+                                                                                priority-based scheduler.
+Figure 1: Execution sequence after wall-clock time ex-                            The proportion-period scheduler provides tempo-
+piration event.                                                                   ral protection to tasks. With proportion-period, we
+                                                                                  model application behavior by identifying a charac-
+                                                                                  teristic delay that the application can tolerate. For
+Timing Mechanism: An accurate timing mechanism is                                 example, soft modems, which use the main proces-
+    crucial for reducing latency since timer resolution                           sor to execute modem functions, require computa-
+    is the largest source of latency in an operating sys-                         tional processing at least every 16 ms or else mo-
+    tem such as Linux [1]. Such a mechanism can be                                dem audio and other multimedia audio applications
+    implemented efficiently by using two techniques,                              can get impaired [8]. Then, we allocate a fixed pro-
+    one-shot timers available on most common mod-                                 portion of the CPU every delay period to each task
+    ern hardware and soft timers [2]. These techniques                            in the application. Alternatively, we assign priori-
+    are complementary and can be combined together.                               ties to all tasks in some application-specific order
+    One-shot timers can provide high accuracy, but, un-                           for use with the priority scheduler.
+    like periodic timers, they require reprogramming
+    at each activation. On an x86 machine, one-shot
+                                                                             While each of these requirements have been addressed
+    timers can be generated using the on-chip CPU Ad-
+                                                                             in the past, they have generally been applied to specific
+    vanced Programmable Interrupt Controller (APIC).
+                                                                             problems in limited environments. When applied in iso-
+    This timer has very high resolution and can be re-
+                                                                             lation in the context of a general-purpose system, they
+    programmed cheaply in a few CPU cycles.
+                                                                             fail to provide good time-sensitive performance. For ex-
+      Soft timers check and run expired timers at strategic                  ample, a high resolution timer mechanism is not useful
+      points in the kernel and help in reducing the num-                     to user-level applications without a responsive kernel.
+      ber of hardware generated timer interrupts and the                     This probably explains why soft timers [2] did not export
+      number of user-kernel context switches. We call the                    their functionality to the user level through the standard
+      combination of these two mechanisms, firm timers.                      POSIX API. Conversely, a responsive kernel without ac-
+      In Section 4.3, we show that the overhead of firm                      curate timing has only a few applications. For example,
+      timers is small.                                                       the low-latency Linux kernel [13] provides low latency
+                                                                             only when an external interrupt source such as an audio
+Responsive Kernel: An accurate timing mechanism is                           card is used.
+    not sufficient for reducing latency. For example,
+    even if a timer interrupt is generated by the hard-                      Similarly, a scheduler that provides good theoretical
+    ware at the correct time, the activation could occur                     guarantees is not effective when the kernel is not re-
+    much later because the kernel is unable to interrupt                     sponsive or its timers are not accurate. Conversely, a
+    its current activity. This problem occurs because                        responsive kernel with an accurate timing mechanism is
+    either the interrupt might be disabled or the ker-                       unable to handle a large class of time-sensitive appli-
+    nel is in a non-preemptible section. In traditional                      cations without an effective scheduler. Unfortunately,
+these solutions have generally not been integrated: on        with three different approaches for implementing timers:
+one hand, real-time research has developed good sched-        one-shot timers, soft timers and periodic timers.
+ulers and analyzed them from a mathematical point of
+view, and on the other hand, there are real systems that      Traditionally, commodity operating systems have imple-
+provide a responsive kernel but provide simplistic sched-     mented their timing mechanism with periodic timers.
+ulers that are only designed to be fast and efficient [12].   These timers are normally implemented with periodic
+Real-time operating systems integrate these solutions for     timer interrupts. For example, on Intel x86 machines,
+time-sensitive tasks but tend to ignore the performance       these interrupts are generated by the Programmable In-
+overhead of their solutions on throughput-oriented ap-        terval Timer (PIT), and on Linux, the period of these
+plications [17]. Our goal is to support both types of ap-     interrupts is 10 ms. As a result, the maximum timer
+plications well.                                              latency is 10 ms. This latency can be reduced by re-
+                                                              ducing the period of the timer interrupt but this solution
+It is worth noting that latency due to system services,       increases system overhead because the timer interrupts
+such as the X server for graphical display [21] on a          are generated more frequently.
+Linux system, has the same components of kernel la-
+tency described above. In fact, the simple scheduling         To reduce the overhead of timers, it is necessary to
+models presented above assume that tasks are indepen-         move from a periodic timer interrupt model to a one-
+dent. In a real application, tasks can be interdependent      shot timer interrupt model where interrupts are gener-
+which can cause priority inversion problems [15]. For         ated only when needed. Consider two tasks with periods
+example, in Section 4.2.1 we show that a multimedia           5 and 7 ms. With periodic timers and a period of 1 ms,
+player that uses the X server for display can perform         the maximum timer latency would be 1 ms. In addition,
+sub-optimally due to priority inversion, even if the ker-     in 35 ms, 35 interrupts would be generated. With one-
+nel allocates resources correctly. The X server operates      shot timers, interrupts will be generated at 5 ms, 7 ms,
+on client requests in an event-driven manner and the han-     10 ms, etc., and the total number of interrupts in 35 ms is
+dling of each event is non-preemptible and generally in       11. Also, the timer latency will be close to the interrupt
+FIFO order. As a result, time-sensitive clients expecting     service time, which is relatively small. Hence, one-shot
+service from the server observe latencies that depend on      timers avoid unnecessary interrupts and reduce timer la-
+the time to service previous client requests: the perfor-     tency.
+mance of time-sensitive applications depends on not just
+kernel support for such applications but also the design
+of other system services. Thus in Section 3.3, we en-         3.1.1 Firm Timers Design
+hance the priority scheduler with techniques that solve
+priority inversion.
+                                                              Firm timers, at their core, use one-shot timers for effi-
+In the next section, we present Time-Sensitive Linux          cient and accurate timing. One-shot timers generate a
+(TSL) that provides accurate timers, a responsive ker-        timer interrupt at the next timer expiry. At this time,
+nel, and time-sensitive scheduling algorithms to support      expired timers are dispatched and then finally the timer
+the requirements highlighted above.                           interrupt is reprogrammed for the next timer expiry.
+                                                              Hence, there are two main costs associated with one-
+                                                              shot timers, timer reprogramming and fielding timer in-
+                                                              terrupts. Unlike periodic timers, one-shot timers have
+3 Implementing Time-Sensitive Linux                           to be continuously reprogrammed for each timer event.
+                                                              More importantly, as the frequency of timer events in-
+                                                              creases, the interrupt handling overhead grows until it
+We propose three specific techniques, firm timers,
+                                                              limits timer frequency. To overcome these challenges,
+fine-grained kernel preemptibility and proportion-period
+                                                              firm timers use inexpensive reprogramming available
+CPU scheduling for reducing the three components of
+                                                              on modern hardware and combine soft timers (origi-
+kernel latency. We have integrated these techniques in
+                                                              nally proposed by Aron and Druschel [2]) with one-shot
+the Linux kernel to implement TSL.
+                                                              timers to reduce the number of hardware generated timer
+                                                              interrupts. Below, we discuss these points in more detail.
+3.1   Firm Timers
+                                                              While timer reprogramming on traditional hardware has
+                                                              been expensive (and has thus encouraged using periodic
+Firm timers provide an accurate timing mechanism              timers), it has become inexpensive on modern hardware
+with low overhead by exploiting the benefits associated       such as Intel Pentium II and later machines. For ex-
+ample, reprogramming the standard programmable in-            changed dynamically. With a zero value, we obtain one-
+terval timer (PIT) on Intel x86 is expensive because it re-   shot timers (or hard timers) and with a large value, we
+quires several slow out instructions on the ISA bus. In       obtain soft timers. A choice in between leads to our hy-
+contrast, our firm-timers implementation uses the APIC        brid firm timers approach. This choice depends on the
+one-shot timer present in newer Intel Pentium class ma-       timing accuracy needed by applications.
+chines. This timer resides on-chip and can be repro-
+grammed in a few cycles without any noticeable perfor-
+mance penalty.
+                                                              3.1.2 Firm Timers Implementation
+Since timer reprogramming is inexpensive, the key over-
+head for the one-shot timing mechanism in firm timers         Firm timers in TSL maintain a timer queue for each pro-
+lies in fielding interrupts. Interrupts are asynchronous      cessor. The timer queue is kept sorted by timer expiry.
+events that cause an uncontrolled context switch and re-      The one-shot APIC timer is programmed to generate an
+sult in cache pollution. To avoid interrupts, firm timers     interrupt at the next timer expiry event. When the APIC
+use soft timers, which poll for expired timers at strategic   timer expires, the interrupt handler checks the timer
+points in the kernel such as at system call, interrupt, and   queue and executes the callback function associated with
+exception return paths. At these points, the working set      each expired timer in the queue. Expired timers are re-
+in the cache is likely to be replaced anyway and hence        moved while periodic timers are re-enqueued after their
+polling and dispatching timers does not cause significant     expiration field is incremented by the value in their pe-
+additional overhead. In essence, soft timers allow volun-     riod field. The APIC timer is then reprogrammed to gen-
+tary switching of context at “convenient” moments.            erate an interrupt at the next timer event.
+While soft timers reduce the costs associated with inter-     The APIC is set by writing a value into a register which
+rupt handling, they introduce two new problems. First,        is decremented at each memory bus cycle until it reaches
+there is a cost in polling or checking for timers at each     zero and generates an interrupt. Given a 100 MHz mem-
+soft-timer point. Later, in Section 4.3.2, we analyze this    ory bus available on a modern machine, a one-shot timer
+cost in detail and show that it can be amortized if a cer-    has a theoretical accuracy of 10 nanoseconds. However,
+tain percentage of checks result in the firing of timers.     in practice, the time needed to field timer interrupts is
+Second, this polling approach introduces timer latency        significantly higher and is the limiting factor for timer
+when the checks occur infrequently or the distribution of     accuracy.
+the checks and the timer deadlines are not well matched.
+                                                              Soft timers are enabled by using a non-zero timer over-
+Firm timers avoid the second problem by combining             shoot value, in which case, the APIC timer is set an over-
+one-shot timers with soft timers by exposing a system-        shoot amount after the next timer event. Our current im-
+wide timer overshoot parameter. With this parameter,          plementation uses a single global overshoot value. It is
+the one-shot timer is programmed to fire an overshoot         possible to extend this implementation so that each timer
+amount of time after the next timer expiry (instead of        or an application using this timer can specify its desired
+exactly at the next timer expiry). In some cases, an in-      overshoot or timing accuracy. In this case, only applica-
+terrupt, system call, or exception may happen after a         tions with tighter timing constraints cause the additional
+timer has expired but before the one-shot APIC timer          interrupt cost of more precise timers. The overhead in
+generates an interrupt. At this point, the timer expira-      this alternate implementation involves keeping an addi-
+tion is handled and the one-shot APIC timer is again re-      tional timer queue sorted by the timer expiry plus over-
+programmed an overshoot amount of time after the next         shoot value.
+timer expiry event. When soft-timers are effective, firm
+timers repeatedly reprogram the one-shot timer for the        The data structures for one-shot timers are less efficient
+next timer expiry but do not incur the overhead associ-       than for periodic timers. For instance, periodic timers
+ated with fielding interrupts.                                can be implemented using calendar queues [5] which op-
+                                                              erate in O(1) time, while one-shot timers require priority
+The timer overshoot parameter allows making a trade-          heaps which require O(log(n)) time, where n is the num-
+off between accuracy and overhead. A small value of           ber of active timers. This difference exists because peri-
+timer overshoot provides high timer resolution but in-        odic timers have a natural bucket width (in time) that is
+creases overhead since the soft timing component of firm      the period of the timer interrupt. Calendar queues need
+timers are less likely to be effective. Conversely, a large   this fixed bucket width and derive their efficiency by pro-
+value decreases timer overhead at the cost of increased       viding no ordering to timers within a bucket. One-shot
+maximum timer latency. The overshoot value can be             fine-grained timers have no corresponding bucket width.
+To derive the data structure efficiency benefits of pe-          interrupt in Figure 1 is disabled, the timer task can only
+riodic timers, firm timers combine the periodic tim-             enter the ready queue when the interrupt is re-enabled.
+ing mechanism with the one-shot timing mechanism for             Another, potentially more significant reason is that an-
+timers that need a timeout longer than the period of the         other thread may be executing in a critical section in
+periodic timer interrupt. A firm timer for a long timeout        the kernel. For example, the timer task upon entering
+uses a periodic timer to wake up at the last period be-          the ready queue will be scheduled only when the other
+fore the timer expiration and then sets the one-shot APIC        thread exits its non-preemptible critical section.
+timer. Consequently, our firm timers approach only has
+active one-shot timers within one tick period. Since the         The length of non-preemptible sections in a kernel de-
+number of such timers, n, is decreased, the data structure       pends on the strategy that the kernel uses to guarantee
+implementation becomes more efficient. Note that oper-           the consistency of its internal structures and on the inter-
+ating systems generally perform periodic activity such as        nal organization of the kernel. Traditional commodity
+time keeping, accounting and profiling at each periodic          kernels disable preemption for the entire period of time
+tick interrupt and thus the dual wakeup does not add any         when a thread is in the kernel, i.e., when an interrupt
+additional cost. An additional benefit of this approach is       fires or for the duration of a system call, except before
+that timer drift in firm timers is limited to a small fraction   certain well-known long operations are invoked by the
+of the period of the periodic timer interrupt assuming, as       kernel. For example, they generally allow preemption
+in Linux, that the periodic interrupt is synchronized to         before invoking disk I/O operations. Unfortunately, with
+the global NTP protocol while the APIC timer is not.             this structure, preemption latency under standard Linux
+                                                                 can be greater than 30 ms [1].
+The firm timer expiration times are specified as CPU
+clock cycle values. In an x86 processor, the current time        One approach that reduces preemption latency is explicit
+in CPU cycles in stored in a 64 bit register. Timer expira-      insertion of preemption points at strategic points inside
+tion values can be stored as 64 bit quantities also but this     the kernel so that a thread in the kernel explicitly yields
+choice involves expensive 64 bit time conversions from           the CPU to the scheduler when it reaches these preemp-
+CPU cycles to memory cycles needed for programming               tion points. In this way, the size of non-preemptible
+the APIC timer. A more efficient alternative for time            sections is reduced. The choice of preemption points
+conversion is to store the expiration times as 32 bit quan-      depends on system call paths and has to be manually
+tities. However, this approach leads to quick roll over on       placed after careful auditing of system code. This ap-
+modern CPUs. For example, on a two GHz processor,                proach is used by some real-time versions of Linux, such
+32 bits roll over every second. Fortunately, firm timers         as RED Linux [17] and by Andrew Morton’s low-latency
+are still able to use 32 bit expiration times because they       project [13]. Preemption latency in such a kernel de-
+use periodic timers for long timeouts and use one-shot           creases to the maximum time between two preemption
+timer expiration values only within a periodic tick.             points.
+
+We want to provide the benefits of the firm timer ac-            Another approach, used in most real-time systems, is
+curate timing mechanism to standard user-level appli-            to allow preemption anytime the kernel is not access-
+cations. These applications use the standard POSIX               ing shared data structures. To support this fine level of
+interface calls such as nanosleep(), pause(),                    kernel preemptibility, shared kernel data must be explic-
+setitimer(), select() and poll(). We have                        itly protected using mutexes or spinlocks. The Linux
+modified the implementation of these system calls in             preemptible kernel project [11] uses this approach and
+TSL to use firm timers without changing the interface            disables kernel preemption only when a spinlock is held
+of these calls. As a result, unmodified applications auto-       or an interrupt handler is executing to protect the consis-
+matically get increased timer accuracy in our system as          tency of shared kernel data structures. In a preemptible
+shown in Section 4.2.                                            kernel, preemption latency is determined by the maxi-
+                                                                 mum amount of time for which a spinlock is held inside
+                                                                 the kernel and the maximum time taken by interrupt ser-
+3.2   Fine-Grained Kernel Preemptibility                         vice routines.
+
+                                                                 The preemptible kernel approach can have high preemp-
+A kernel is responsive when its non-preemptible sec-             tion latency when spinlocks are held for a long time.
+tions, which keep the scheduler from being invoked to            To address this problem, a third approach combines ex-
+schedule a task, are small. There are two main reasons           plicit preemption with the preemptible kernel approach
+why the scheduler may not be able to run. One is that            by releasing (and reacquiring) spin-locks at strategic
+interrupts might be disabled. For example, if the timer          points in long code sections that access shared data
+structures within spinlocks. This approach is used by          effectively implemented using well known results from
+Robert Love’s lock-breaking preemptible kernel patch           real-time scheduling research [10, 19].
+for Linux [11].
+                                                               We implemented a proportion-period CPU scheduler in
+Our previous evaluation [1] shows that these approaches        Linux by using real-time scheduling techniques (EDF
+work fairly well for reducing preemption latency and           priority assignment) and by allowing a task to execute
+should be incorporated in the design of any responsive         as a real-time task for a time Q every period T. The re-
+kernel. As expected, the combined preemption approach          served time Q is equal to the product of the task’s pro-
+is slightly superior to the first two approaches and, con-     portion P and its period T, and the end of each period is
+sequently, we have incorporated Robert Love’s lock-            used as a deadline. After executing for a time Q, the task
+breaking preemptible kernel patch in TSL for improv-           is blocked (or scheduled as a non real-time task) until its
+ing kernel responsiveness. Our experiments with real           next period. When two tasks have the same deadline, the
+applications on TSL in Section 4.2 show that a respon-         one with the smallest remaining capacity is scheduled to
+sive kernel complements an accurate timing mechanism           reduce the average finishing time.
+to help improve time-sensitive application performance.
+                                                               The proportion-period model and its variants have been
+                                                               implemented and used extensively in the past [9]. While
+3.3   CPU Scheduling                                           several of these schedulers are more sophisticated that
+                                                               ours, the main focus of this paper is to show that these
+                                                               schedulers can be implemented accurately in TSL and
+The CPU scheduling algorithm should ensure that time-          hence can improve the accuracy of scheduling analysis.
+sensitive tasks obtain their correct allocation with low
+scheduling latency. We use a combination of the
+proportion-period and priority models, described in Sec-
+tion 2, to schedule time-sensitive applications. The           3.3.2 Priority CPU Scheduling
+proportion-period model provides temporal protection
+to applications and allows balancing the needs of time-        In the priority model, real-time priorities are assigned
+sensitive applications with non-real time applications         to time-sensitive tasks based on application needs [10].
+but requires specification of proportion and period            Since the fixed priority model does not provide tempo-
+scheduling parameters of each task. The priority model         ral protection, TSL schedules fixed priority tasks in the
+has a simpler programming interface and provides com-          background with respect to proportion-period tasks. The
+patibility with applications based on a POSIX sched-           only exception to this rule is with shared server tasks be-
+uler, but assumes that the timing needs of tasks are well-     cause they can cause priority inversion, and we must use
+behaved.                                                       a proper resource sharing protocol to bound its effects.
+                                                               In general, priority inversion occurs when an application
+                                                               is composed of multiple tasks that are interdependent.
+3.3.1 Proportion-Period CPU Scheduling                         For example, consider a simple example of a video ap-
+                                                               plication consisting of a client and an X server. Let us
+For a single independent task, the simplest scheduling         assume that the client has been assigned the highest pri-
+solution is to assign the highest priority to the task. How-   ority because it is time-sensitive. It displays graphics by
+ever, with this solution, a misbehaving task that does not     requesting services from the X server. When it needs to
+yield the CPU can starve all other tasks in the system.        display a video frame, it sends the frame to the server
+A commodity time-sensitive system should provide tem-          and then blocks waiting for the display to complete. If
+poral protection to tasks so that misbehaved tasks that        the X server has a priority lower than the client’s priority,
+consume “too much” execution time do not affect the            then it can be preempted by another task with a medium
+schedule of other tasks.                                       priority. Hence the medium priority task is delaying the
+                                                               server and thus delaying the high-priority client task.
+The proportion-period allocation model automatically
+provides temporal protection because each task is allo-        We use a variant of the priority ceiling protocol [19]
+cated a fixed proportion of the CPU at each task period.       called the highest locking priority (HLP) protocol to
+The period of a task is related to some application-level      cope with priority inversion. The HLP protocol works
+delay requirement of the application, such as the period       as follows: when a task acquires a resource, it automat-
+or the jitter requirements of a task. The proportion is the    ically gets the highest priority of any task that can ac-
+amount of CPU allocation required every period for cor-        quire this resource. In the example above, the display is
+rect task execution. The proportion-period model can be        the shared resource and thus the X server must have the
+highest priority among all time-sensitive clients access-              proportion-period scheduler. Our experiments focus on
+ing it. In this way, the X server cannot be preempted by               evaluating the behavior of realistic time-sensitive appli-
+the medium priority task.                                              cations running on a loaded general-purpose environ-
+                                                                       ment, and were run on a 1.5 GHz Pentium-4 Intel pro-
+The HLP protocol is very general and works with across                 cessor with 512 MB of memory.
+multiple servers. Interestingly, this protocol handles
+the FIFO ordering problem in server queues mentioned
+in Section 3. Since servers have the highest priority                  4.1   Micro Benchmarks
+among all their potential clients, they are able to serve
+each request immediately after it is enqueued and thus
+the queue size is never more than one and the queuing                  Before evaluating the impact of the latency reduction
+strategy is not relevant. After servicing the request, the             techniques used in TSL on real applications, we per-
+next highest-priority client is scheduled and the latency              formed micro-benchmarks for evaluating the compo-
+caused by the server is minimized.                                     nents of kernel latency, as described in Section 2. These
+                                                                       components consist of timer latency, preemption latency
+                                                                       and scheduling latency. We evaluated the first two com-
+3.3.3 TSL Scheduling Model                                             ponents in isolation by running a time-sensitive process
+                                                                       that needs to sleep for a specified amount of time (using
+                                                                       the nanosleep() system call) and measures the time
+If fixed priority tasks are the only ones accessing the X
+                                                                       that it actually sleeps. In our first set of experiments,
+server, then the server can be scheduled with the maxi-
+                                                                       we evaluated timer latency and showed that it is 10 ms
+mum fixed priority, but in the background with respect
+                                                                       in standard Linux while firm timers reduce it to a few
+to the proportion-period tasks. If, on the other hand,
+                                                                       microseconds on TSL.
+proportion-period tasks require access to the X server,
+then it must be scheduled with the highest priority in                 Next, we evaluated preemption latency when a num-
+the system. This is the exception to the rule of schedul-              ber of different system loads are run in the background.
+ing fixed priority tasks in the background with respect                We compared preemption latency under Linux, An-
+to proportion-period tasks. Due of this exception, the                 drew Morton’s Linux with explicit preemption [13] and
+shared server can jeopardize the proportion-period guar-               Robert Love’s preemptible kernel and lock-breaking
+antee. Hence, the server must be “trusted”, i.e., its exe-             preemptible kernels [11]. The first interesting result was
+cution time must be known or at least bounded.                         that on standard Linux the worst case preemption latency
+                                                                       can be larger than 100 ms (when the kernel copies large
+Using real-time terminology, the shared server causes
+                                                                       amounts of data between kernel and user space) but in
+blocking time on proportion-period tasks. If this block-
+                                                                       the common case preemption latency is less than 10 ms
+ing time is known, it can be accounted in the guarantee
+                                                                       and is generally hidden by timer latency. However, when
+of proportion-period tasks [19, 3]. Otherwise, the only
+                                                                       firm timers are used, preemption latency becomes more
+safe thing to do is to leave some “unreserved CPU time”.
+                                                                       visible, and it is easy for latencies to be larger than 5 ms.
+Hence, the admission test for proportion-period tasks is
+                                                                       Using the explicit preemption and kernel preemptibility
+not             , but                     . We have found
+                                                                       techniques described in Section 3.2, preemption latency
+that                 is a reasonable value and works well
+                                                                       can be greatly reduced, and thus TSL provides a maxi-
+in practice.1
+                                                                       mum kernel latency of less than 1 ms on our test machine
+                                                                       even when the system is heavily loaded. The full details
+                                                                       of these experiments and more results are presented in
+                                                                       our previous paper [1], which we have briefly summa-
+4 Evaluation                                                           rized here for the reader’s convenience.
+
+This section describes the results of experiments we
+                                                                       4.2   Latency in Real Applications
+performed to evaluate 1) the behavior of time-sensitive
+applications running on TSL, and 2) the overheads of
+TSL. In these experiments TSL is derived from Linux                    After evaluating kernel latency in isolation through
+version 2.4.16. It incorporates our firm timers, Robert                micro-benchmarks, we performed experiments on two
+Love’s lock-breaking preemptible kernel patch and our                  real applications, mplayer and our proportion-period
+   1 Note that if the blocking times are unknown it is impossible to   scheduler which is a kernel-level application. We choose
+provide a hard guarantee.                                              audio/video synchronization skew as the latency met-
+ric for mplayer. The latency metric for the proportion-      not shown here, mplayer compensates for Linux’s 10 ms
+period scheduler is maximum error in the allocation and      timer resolution, and hence the skew under Linux with-
+period boundary.                                             out any competing load lies between -5 ms to 5 ms. Fig-
+                                                             ure 2(b) shows that the skew for TSL, when X is run at
+                                                             a non-real time priority, is still as large as 35 ms. How-
+4.2.1 Mplayer                                                ever, in this case, mplayer does not have to compensate
+                                                             for coarse timer resolution and thus most skew points lie
+                                                             close to 0 ms. Finally, Figure 2(c) shows that the skew
+Mplayer [14] is an audio/video player that can handle
+                                                             for TSL improves considerably and is less than 250 us
+several different media formats. Mplayer synchronizes
+                                                             when the X server runs at real-time priority. The real-
+audio and video streams by using time-stamps that are        time priority value of X is the same as the priority as-
+associated with the audio and video frames. The au-
+                                                             signed to mplayer.
+dio card is used as a timing source and when a video
+frame is decoded, its time-stamp is compared with the        These figures show that TSL works well on a non-kernel
+time-stamp of the currently playing audio sample. If the     CPU load as long as the HLP protocol, described in Sec-
+video time-stamp is smaller than the audio time-stamp        tion 3.3.2, is used to assign priorities to time-sensitive
+then the video frame is late and the video is immediately    tasks and to server tasks with the shared resources. Note
+displayed. Otherwise, the system sleeps until the time       that Linux with the X server at real-time priority still has
+difference between the video and audio time-stamps and       a skew between -5 ms to 5 ms because of the timer reso-
+then displays the video.                                     lution (not shown here).
+On a responsive kernel with sufficient available CPU ca-     As a result of this experiment, the rest of the experiments
+pacity, audio/video synchronization can be achieved by       in this section are run with both mplayer and X at real-
+simply sleeping for the correct amount of time. Unfor-       time priority to avoid any user-level priority inversion
+tunately, if the kernel is unresponsive or has a coarse      effects.
+timing mechanism, mplayer will not be able to sleep for
+the correct amount of time leading to poor audio/video
+synchronization and high jitter in the inter-frame display
+times. Synchronization skew and display jitter are cor-
+related and hence this paper only presents results for au-   Kernel CPU Load The second experiment compares
+dio/video synchronization skew.                              the audio/video skew in mplayer between Linux and
+                                                             TSL when the background load copies a large 8 MB
+We compare the audio/video skew of mplayer between           memory buffer to a file with a single write system
+standard Linux and TSL under three competing loads:          call. Figure 3(a) shows that the audio/video skew is
+1) non-kernel CPU load, 2) kernel CPU load, and 3)           as large as 90000 s for Linux. In this case, the ker-
+file-system load. For non-kernel load, a user-level CPU      nel moves the data from the user to the kernel space
+stress test is run in the background. For kernel CPU         in a non-preemptible section. Figure 3(b) shows that
+load, a large memory buffer is copied to a file, where       the maximum skew is less than 400 s for TSL. This
+the kernel uses CPU to move data from the user to the        improvement occurs as a result of improved kernel pre-
+kernel space. Standard Linux does this activity in a non-    emptibility for large write calls in TSL.
+preemptible section. This load spends 90% of its exe-
+cution time in kernel mode. For the file system load,
+a large directory is copied recursively and the file sys-
+tem is flushed multiple times to create heavy file system    File System Load The third experiment compares the
+activity. In each of these tests, mplayer is run for 100     audio/video skew in mplayer between Linux and TSL
+seconds at real-time priority.                               when the background load repeatedly copies a com-
+                                                             piled Linux kernel sources directory recursively and then
+                                                             flushes the file system. This directory has 13000 files
+Non-kernel CPU load Figure 2 shows the audio/video           and 180 MB of data and is stored on the Linux ext2
+skew in mplayer on Linux and on TSL when a CPU               file system. The kernel uses DMA for transferring disk
+stress test is the competing load. This competing load       data. Figure 4(a) shows that the skew under Linux can be
+runs an infinite loop consuming as much CPU as possi-        as high as 12000 s while Figure 4(b) shows that skew is
+ble. Figure 2(a) shows that for standard Linux the maxi-     less than 500 us under TSL. This result shows that TSL
+mum skew is large and ranges from -5 ms to 50 ms when        can provide low latencies even under heavy file-system
+the X server is run at a non-real time priority. Although    and disk load.
+                                                                                                                                              Audio/Video Synchronization                                                                                                                   Audio/Video Synchronization                                                                                                                                                            Audio/Video Synchronization
+                                                       60000                                                                                                                                                                                                 40000                                                                                                                                                                                   250
+
+
+
+
+Difference Between Video and Audio Timestamps (usec)                                                                                                                                                  Difference Between Video and Audio Timestamps (usec)                                                                                                                                    Difference Between Video and Audio Timestamps (usec)
+                                                                                                                                                                                                                                                             35000
+                                                       50000
+                                                                                                                                                                                                                                                                                                                                                                                                                                                     200
+                                                                                                                                                                                                                                                             30000
+                                                       40000
+
+                                                                                                                                                                                                                                                             25000
+                                                                                                                                                                                                                                                                                                                                                                                                                                                     150
+                                                       30000
+
+                                                                                                                                                                                                                                                             20000
+
+                                                       20000
+                                                                                                                                                                                                                                                                                                                                                                                                                                                     100
+                                                                                                                                                                                                                                                             15000
+
+                                                       10000
+                                                                                                                                                                                                                                                             10000
+                                                                                                                                                                                                                                                                                                                                                                                                                                                      50
+                                                           0
+                                                                                                                                                                                                                                                              5000
+
+
+                                                       -10000                                                                                                                                                                                                    0                                                                                                                                                                                     0
+                                                                0                                                     500                  1000           1500          2000       2500        3000                                                                  0       500         1000            1500                                                           2000    2500   3000                                                                0     500        1000              1500               2000          2500   3000
+                                                                                                                                                  Video Frame Number                                                                                                                             Video Frame Number                                                                                                                                                                   Video Frame Number
+
+
+
+
+                                                                    a) Linux, X server non-real time                                                                                                                                                                     (b) TSL, X server non-real time                                                                                                                                                        (c) TSL, X server real-time
+
+                                                       Background load is a CPU stress test that run an empty loop. Note that the three figures have different scales, and
+                                                       that the maximum skew in Figure (c) is much smaller than the maximum skew in the other two cases.
+
+                                                                                                                                                  Figure 2: Audio/Video Skew on Linux and on TSL with user-level CPU load.
+
+
+                                                                                                                                                                               Audio/Video Synchronization                                                                                                                                                                                                           Audio/Video Synchronization
+                                                                                                                               90000                                                                                                                                                                                                                          400
+                                                                                                                                                                                                                                                                           Firm Timers                                                                                                                                                                                                       Firm Timers
+
+
+
+
+                                                                       Difference Between Video and Audio Timestamps (usec)                                                                                                                                                                            Difference Between Video and Audio Timestamps (usec)
+                                                                                                                               80000
+                                                                                                                                                                                                                                                                                                                                                              350
+
+                                                                                                                               70000
+                                                                                                                                                                                                                                                                                                                                                              300
+                                                                                                                               60000
+
+                                                                                                                                                                                                                                                                                                                                                              250
+                                                                                                                               50000
+
+                                                                                                                               40000                                                                                                                                                                                                                          200
+
+
+                                                                                                                               30000
+                                                                                                                                                                                                                                                                                                                                                              150
+
+                                                                                                                               20000
+                                                                                                                                                                                                                                                                                                                                                              100
+                                                                                                                               10000
+
+                                                                                                                                                                                                                                                                                                                                                               50
+                                                                                                                                  0
+
+
+                                                                                                                              -10000                                                                                                                                                                                                                            0
+                                                                                                                                       0                 500                1000           1500                                                               2000            2500              3000                                                                0          500      1000                                                                  1500         2000                 2500                    3000
+                                                                                                                                                                                   Video Frame Number                                                                                                                                                                                                                                                 Video Frame Number
+
+
+
+
+                                                                                                                                                                               (a) Linux                                                                                                                                                                                                                                                              (b) TSL
+
+                                                       Background load copies a 8 MB buffer from user level to a file with a single write call. Note that the two figures
+                                                       have different scales, and that the maximum skew in Figure (b) is much smaller than in Figure (a).
+
+                                                                                                                                                    Figure 3: Audio/Video Skew on Linux and on TSL with kernel CPU load.
+
+                                                                                                                                                                               Audio/Video Synchronization                                                                                                                                                                                                           Audio/Video Synchronization
+                                                                                                                              120000                                                                                                                                                                                                                          500
+
+
+
+
+                                                                       Difference Between Video and Audio Timestamps (usec)                                                                                                                                                                            Difference Between Video and Audio Timestamps (usec)
+                                                                                                                                                                                                                                                                                                                                                              450
+                                                                                                                              100000
+                                                                                                                                                                                                                                                                                                                                                              400
+
+                                                                                                                               80000                                                                                                                                                                                                                          350
+
+
+                                                                                                                                                                                                                                                                                                                                                              300
+                                                                                                                               60000
+
+                                                                                                                                                                                                                                                                                                                                                              250
+
+                                                                                                                               40000
+                                                                                                                                                                                                                                                                                                                                                              200
+
+
+                                                                                                                               20000                                                                                                                                                                                                                          150
+
+
+                                                                                                                                                                                                                                                                                                                                                              100
+                                                                                                                                  0
+                                                                                                                                                                                                                                                                                                                                                               50
+
+
+                                                                                                                              -20000                                                                                                                                                                                                                            0
+                                                                                                                                       0                 500                1000           1500                                                               2000            2500              3000                                                                0          500      1000                                                                  1500         2000                 2500                    3000
+                                                                                                                                                                                   Video Frame Number                                                                                                                                                                                                                                                 Video Frame Number
+
+
+
+
+                                                                                                                                                                               (a) Linux                                                                                                                                                                                                                                                              (b) TSL
+
+                                                       Background load repeatedly copies a compiled Linux kernel sources directory recursively and then flushes the file
+                                                       system. Note that the two figures have different scales, and that the maximum skew in Figure (b) is much smaller
+                                                       than in Figure (a).
+
+                                                                                                                                                         Figure 4: Audio/Video Skew on Linux and TSL with file-system load.
+Comparison with Linux-SRT We also performed the                duce noise in the system that can cause large allocation
+previous experiments on Linux-SRT [6], which im-               fluctuations even when the input progress signal can be
+proves support for real-time applications by providing         captured perfectly and the controller is well-tuned.
+finer-grained timing than standard Linux, a reservation
+scheduler, and a modification to the X server to prioritize    The proportion-period scheduler implementation on
+graphics rendering based on the scheduling parameters          TSL uses firm-timers for implementing period bound-
+of tasks. Figure 5 shows the results of the experiments.       aries and proportion policing. To evaluate the accuracy
+For the non-kernel CPU load, the audio/video skew in           of this scheduler when multiple time-sensitive applica-
+Linux-SRT, when the X server was run at real-time pri-         tions are scheduled together, we ran two time-sensitive
+ority, was generally less than 2 ms although the worst         processes with proportions of 40% and 20% and periods
+case latency is 7 ms. In this test, latency is dominated       of 8192 s and 512 s respectively.2 These processes
+by timer latency, which is 1 ms on Linux-SRT. With             were run first on an unloaded system to verify the cor-
+the kernel CPU load test, the worst case latency was           rectness of the scheduler. Then, we evaluated the sched-
+60 ms, while the file-system test produced worst case          uler behavior when the same processes were run with
+latencies of 30 ms. These latter tests stress kernel pre-      competing file system load (described in Section 4.2.1).
+emption while Linux-SRT is a non-preemptive kernel.            In this experiment each process runs a tight loop that
+These results show that real-time scheduling and more          repeatedly invokes the gettimeofday system call to
+precise timers are insufficient for time-sensitive applica-    measure the current time and stores this value in an ar-
+tions, and that a responsive kernel is also required.          ray. The scheduler behavior is inferred at the user-level
+                                                               by simply measuring the time difference between suc-
+                                                               cessive elements of the array.
+4.2.2 Proportion-Period Scheduler
+                                                               Table 1 shows the maximum (not the average) deviation
+                                                               in the proportion allocated and the period boundary for
+As explained earlier, the proportion-period sched-             each of the two processes over the entire experiment.
+uler provides temporal protection when multiple time-          This table shows that the proportion-period scheduler al-
+sensitive tasks are run together. Our original motivation      locates resources with a very low deviation of less than
+for implementing the TSL system was to provide an ac-          25 s on a lightly loaded system. Under heavy file sys-
+curate implementation of a proportion-period scheduler.        tem load the results show larger deviations. These de-
+We use this scheduler to provide a fine-grained reser-         viations occur because execution time is “stolen” by the
+vation mechanism for a higher-level feedback-based             kernel interrupt handling code which runs at a higher
+real-rate scheduler [20]. The problem with standard            priority than user-level processes in Linux. The maxi-
+proportion-period scheduling is that it is difficult to cor-   mum period deviation of 534 s gives a lower bound on
+rectly estimate a thread’s proportion and period require-      the latency tolerance of time-sensitive applications. For
+ments in a general-purpose environment. To address             example, soft modems require periodic processing every
+this problem, the real-rate scheduler uses an application-     4 ms to 16 ms [8] and thus could be supported on TSL at
+specific progress rate metric in time-sensitive tasks to       the application level even under heavy file system load.
+automatically assign correct allocations to such tasks.
+For example, the progress of a producer or consumer of         Figure 1 shows that while the maximum amount of time
+a bounded buffer can be inferred by measuring the fill-        stolen is 490 s and 20 s for tasks 1 and 2, this time
+level of the bounded buffer. If the buffer is full, the con-   is over different periods. In particular, the interrupt han-
+sumer is falling behind and needs more resources while         dling code steals a maximum of 4-6% allocation time
+the producer needs to be slowed down.                          from the proportion-period processes. Note that this
+                                                               stolen time is due to interrupts other than the APIC timer
+The accuracy of allocating resources using a feedback          interrupts since we maintain precise CPU cycle counter
+controller depends, among other factors, on the accu-          times for accounting purposes.
+racy of actuating proportions. There are three sources
+of inaccuracy in our proportion-period scheduler im-           Currently, we provide the value of the stolen time to
+plementation on standard Linux: 1) the period bound-           proportion-period applications or our feedback sched-
+aries are quantized to multiples of the timer resolution       uler so that they can deal with it, for example by increas-
+or 10 ms, 2) the policing of proportions is also limited       ing thread allocations. This choice was motivated by
+to the same value because timers have to be used to im-            2 The current proportion-period scheduler allows task periods that
+plement policing, and 3) heavy loads cause long non-           are multiples of 512 s. While this period alignment restriction is not
+preemptible paths and thus large jitter in period bound-       needed for a proportion-period scheduler, it simplifies feedback-based
+aries and proportion policing. These inaccuracies intro-       adjustment of task proportions.
+                                8000                                                                             60000                                                                             30000
+
+                                7000
+                                                                                                                 50000                                                                             25000
+
+
+
+
+      Audio/Video Skew (usec)                                                          Audio/Video Skew (usec)                                                           Audio/Video Skew (usec)
+                                6000
+                                                                                                                 40000                                                                             20000
+                                5000
+
+                                4000                                                                             30000                                                                             15000
+
+                                3000
+                                                                                                                 20000                                                                             10000
+                                2000
+                                                                                                                 10000                                                                              5000
+                                1000
+
+                                  0                                                                                  0                                                                                 0
+                                       0    500   1000    1500    2000   2500   3000                                     0   500    1000    1500    2000   2500   3000                                     0   500   1000    1500    2000   2500   3000
+                                                   Video Frame Number                                                                Video Frame Number                                                               Video Frame Number
+
+
+
+                                           (a) User-level CPU load                                                           (b) Kernel CPU load                                                               (c) File-system load
+
+      Figure 5: Audio/Video Skew on Linux-SRT with user-level CPU load, kernel CPU load and file-system load.
+
+
+                                                                                                                                   No Load                                                 File System Load
+                                                                                                                  Max Proportion             Max Period           Max Proportion                                 Max Period
+                                                                                                                    Deviation                Deviation              Deviation                                    Deviation
+                                                                Thread 1
+                                                   Proportion: 40%, 3276.8 s                                       0.3% ( 25 s)                   5 s             6% ( 490 s)                                        534 s
+                                                           Period: 8192 s
+                                                            Thread 2
+                                                   Proportion: 20%, 102.4 s                                        0.7% ( 3 s)                   10 s              4% ( 20 s)                                        97 s
+                                                            Period: 512 s
+
+
+Table 1: Deviation in proportion and period when two processes are run under the proportion-period scheduler in
+TSL.
+
+
+the idea that the feedback scheduler should be informed                                                                                      we expect that more preemption will occur in TSL is
+about scheduling “errors” as much as possible, which                                                                                         when firm timers are used, since firm timers can cause
+was especially important because, before TSL, these er-                                                                                      preemption at a finer granularity. Hence, we discuss this
+rors were significantly larger. In the future, we plan                                                                                       cost later when we present the overhead of firm timers.
+to investigate improving the performance of proportion-
+period scheduling in the presence of heavy file system                                                                                       We measured the cost of the additional preemption
+load by explicitly scheduling interrupt processing.                                                                                          checks in TSL by running a set of benchmarks that are
+                                                                                                                                             known to stress preemption latency in Linux [1]. In
+                                                                                                                                             particular, we ran three separate tests, a memory access
+4.3                             System Overhead                                                                                              test, a fork test and a file-system access test. Note that
+                                                                                                                                             these tests are designed to stress preemption checks and
+                                                                                                                                             thus measure their worst-case overhead. We expect that
+In this section, we focus on the performance overheads                                                                                       these checks will have a smaller impact on real appli-
+of TSL. There are two main sources of overhead in TSL                                                                                        cations. The memory test sequentially accesses a large
+as compared to standard Linux: 1) the cost of executing                                                                                      integer array of 128 MB and thus produces several page
+code at the newly inserted preemption points, and 2) the                                                                                     faults in succession. The fork test creates 512 processes
+cost of executing firm timers.                                                                                                               as quickly as possible. The file-system test repeatedly
+                                                                                                                                             copies data from a 2 MB user buffer to a file that is 8 MB
+                                                                                                                                             long and flushes the buffer cache. By running these
+4.3.1 Checking for Preemption                                                                                                                tests, we expect to hit the various additional preemption
+                                                                                                                                             checks that exist in TSL as compared to Linux. We mea-
+At each preemption point, there is a cost associated                                                                                         sured the ratio of the completion times of these tests un-
+with checking for preemption, and then if scheduling is                                                                                      der TSL and under Linux in single user mode. Since no
+needed, there is a cost for executing preemption. We                                                                                         other process is running, these tests do not cause addi-
+do not explicitly measure the second cost because it de-                                                                                     tional preemption and thus we are able to evaluate the
+pends on the workload. However, one instance where                                                                                           cost of checking the additional preemption points. Firm
+timers were disabled in this experiment because we did       vide accurate timing but can generate multiple interrupts
+not want to measure the cost of checking for soft timers.    within each 10 ms period. Then we will evaluate the
+                                                             performance of firm timers for applications that require
+The memory test under TSL has an overhead of                 tighter timing than standard Linux can support.
+      percent while the fork test has an overhead of
+              percent. The file system test did not have     In the following experiments, we measure the execu-
+a significant overhead (in terms of confidence intervals).   tion time of a throughput-oriented application when one
+These tests indicate that the overhead of checking for       or more time-sensitive processes are run in the back-
+preemption points in TSL compared to standard Linux          ground to stress the firm timers mechanism. We imple-
+is very low.                                                 ment a time-sensitive process as a simple periodic task
+                                                             that wakes up on a signal generated by a firm timer (us-
+                                                             ing the setitimer() system call), measures the cur-
+                                                             rent time and then immediately goes to sleep each pe-
+4.3.2 Firm Timers
+                                                             riod. In the rest of this section, we refer to this task as
+                                                             a timer process. For the throughput application, we se-
+The second cost in TSL is associated with executing firm     lected povray, a ray-tracing application and used it to
+timers. Firm timers provide an accurate timing mecha-        render a standard benchmark image called skyvase.
+nism which allows high frequency timer programming.          We chose povray because it is a compute intensive job
+However, increasing the timer frequency can increase         with a large memory footprint. Thus our experiments
+system overhead because each timer event can cause a         account for the effects of cache pollution due to the fine-
+one-shot timer interrupt, which results in cache pollu-      grained timer interrupts. The performance overhead of
+tion. To mitigate this overhead, our firm timers imple-      firm timers is defined as the ratio of the time needed
+mentation combines one-shot (or hard) timers and soft        by povray to render the image in TSL versus the time
+timers. In this section, we present experiments to high-     needed to render the same image in standard Linux.
+light the advantages of firm timers as compared to hard
+timers and show that the overhead of firm timers on
+throughput-based applications is small even when firm        Comparison with Standard Linux We first compare
+timers are used heavily.                                     the performance overhead of firm timers on TSL with
+                                                             standard timers running on Linux. To do so, we run
+The cost of firm timers can be broken into three parts:      timer processes with a 10 ms period because this period
+1) costs associated with hard timers exclusively, 2) costs   is supported by the tick interrupt in Linux. As explained
+that hard and soft timers have in common, and 3) costs       above, we expect additional overhead in the firm timers
+associated with soft timers exclusively. The first cost      case because, unlike with the periodic timers in Linux,
+occurs due to interrupt handling and the resulting cache     the expiration times of the firm timers are not aligned.
+pollution. The second cost lies in manipulating and dis-     To stress the firm timers mechanism and clearly estab-
+patching timers from the timer queue and executing pre-      lish the performance difference, we ran two experiments
+emption for an expired timer thread. The third cost is       with a large number of 20 and 50 timers processes.
+in checking for soft timers. Note that the cost of exe-
+cuting preemption is present in both cases and thus the      Figure 6 shows the performance overhead of firm timers
+experiments presented below account for this cost when       as compared to standard Linux timers when 20 timer
+firm timers are used. Based on this breakup, it should       processes are running simultaneously. This figure shows
+be obvious that the soft timing component of firm timers     the overhead of TSL with hard timers, firm timers with
+will have lower overhead than hard timers if the cost for    different overshoot values (0 s, 50 s, 100 s, 500 s)
+checking for timer expiry is less than the additional cost   and pure soft timers. Each experiment was run 8 times
+of interrupt handling in the pure hard timer case. This      and the 95% confidence intervals are shown at the top
+relation is derived in more detail below.                    of each bar. The figure shows that pure soft timers have
+                                                             an insignificant overhead compared to standard Linux
+We will first compare the performance overhead of firm       while hard and firm timers have a 1.5 percent overhead.
+timers under TSL versus standard timers in Linux. This       In this case, increasing the overshoot parameter of firm
+comparison is performed using multiple applications          timers produces only a small improvement.
+that each require 10 ms periodic timing. This case is
+favorable to Linux because the periodic timing mecha-        Figure 7 shows the results of the same experiment but
+nism in Linux synchronizes all the timers and generates      with 50 timers. Once again soft timers have an insignif-
+one timer interrupt for all the threads, although at the     icant overhead. In addition, the decrease in overhead
+expense of timer latency. In contrast, firm timers pro-      of firm timers with increasing overshoot is more pro-
+                                             povray with 20, 10 ms period timers                                                               povray with 20, 1 ms period timers
+
+
+
+
+                                                                                                     Improvement in Finishing Times (%)
+                              1.02                                                                                                        10
+
+
+
+
+Normalized Finishing Times
+                                                                                                                                          8
+                             1.015
+                                                                                                                                          6
+                              1.01
+                                                                                                                                          4
+
+                             1.005
+                                                                                                                                          2
+
+                                1                                                                                                         0
+
+                                                                                                                                          -2
+                             0.995                                                                                                             hard   firm 0   firm 50 firm 100 firm 500
+                                     linux    hard   firm 0 firm 50 firm 100 firm 500   soft
+
+
+
+                                                                                               Figure 8: Comparison between hard and firm timers with
+Figure 6: Overhead of firm timers in TSL as compared
+                                                                                               different overshoot values on TSL.
+to standard Linux with 20 timer processes.
+
+                                                                                               Overhead at High Frequencies We also performed
+                                             povray with 50, 10 ms period timers               the same experiment but with periodic processes run-
+                              1.02                                                             ning at higher frequencies to simulate time-sensitive ap-
+
+
+
+
+Normalized Finishing Times
+                                                                                               plications that have periodic timing requirements tighter
+                             1.015
+                                                                                               than standard Linux can support. Figure 8 shows the im-
+                              1.01                                                             provement in time to render the image when 20 periodic
+                                                                                               processes are run with a period of 1 ms. We do not com-
+                             1.005                                                             pare these results with Linux because Linux does not
+                                                                                               support 1 ms timer accuracy. Similarly, pure soft timers
+                                1
+                                                                                               are not shown in this figure because they do not guaran-
+                             0.995                                                             tee that each timer fires every 1 ms. This figure shows
+                                     linux    hard   firm 0 firm 50 firm 100 firm 500   soft
+                                                                                               the improvement in finishing time of povray with firm
+                                                                                               timers with different overshoot values compared to hard
+                                                                                               timers. The benefit of the firm timers mechanism for
+Figure 7: Overhead of firm timers in TSL as compared                                           improving throughput becomes more obvious with in-
+to standard Linux with 50 timer processes.                                                     creasing overshoot when the process periods are made
+                                                                                               shorter. For example, there is an 8% improvement with
+                                                                                               a 500 s overshoot value while the corresponding im-
+                                                                                               provement in Figures 6 and 7 is 0.5% and 1.6%.
+nounced in this case. The reason is that with increas-
+ing number of timers, timers are more likely to fire due
+to soft timers than the more expensive hardware APIC
+timer.                                                                                         Discussion The previous experiments show that pure
+                                                                                               hard timers have lower overhead in some cases and firm
+Interestingly, in Figure 7, the povray program com-                                            timers have lower overhead in other cases. This result
+pletes faster on TSL with 500 s firm-timer overshoot                                           can be explained by the fact that there is a cost asso-
+than on a standard Linux kernel. The reason for this ap-                                       ciated with checking whether a soft timer has expired.
+parent discrepancy is that the standard Linux scheduler                                        Thus, the soft timers mechanism is effective in reducing
+does not scale well with large numbers of processes. On                                        overhead when enough of these checks result in the fir-
+Linux, all 50 processes are woken at the same time (at                                         ing of a soft timer. Otherwise the firm-timer overhead as
+the periodic timer interrupt boundary) and thus Linux                                          compared to pure hard timers will be higher.
+has to schedule 50 processes at the same time. In com-
+parison, on a firm timers kernel the 50 timers have pre-                                       The previous behavior can be explained as follows. Let
+cise 10 ms expiration times and are not synchronized.                                              be the total number of timers that must fire in a
+Hence, the scheduler generally has to schedule one or                                          given interval of time,         the number of hard timers
+a small number of processes when a firm timer expires.                                         that fire,     the number of soft timers that fire (hence,
+In this case, the overhead of the scheduler on standard                                                          ) and      the number of checks for soft
+Linux dominates the overhead of the firm timers mecha-                                         timers expirations. Let        be the cost for firing a hard
+nism in TSL.                                                                                   timer,     be the cost of firing a soft timer, and    be the
+cost of checking if some soft timer has expired. Note           5 Conclusions
+that we described the components of these costs in the
+beginning of this section. The total cost of firing firm
+timers is                          . If pure hard timers        This paper describes the design and implementation of a
+are used then the cost is       . Hence, firm timers re-        Time-Sensitive Linux (TSL) system that can support ap-
+duce overhead if                                  . After       plications requiring fine-grained resource allocation and
+substituting                , this equation simplifies to       low-latency response. The three key techniques that we
+                          .                                     have investigated in the context of TSL are firm timers
+                                                                for accurate timing, fine-grained kernel preemptibility
+Hence, when the ratio of the number of the soft timers          for improving kernel responsiveness and proportion-
+that fire to the number of soft timer checks is suffi-          period scheduling for providing precise allocations to
+ciently large (i.e., it is larger than            ), then       tasks. Our experiments show that integrating these tech-
+firm timers are effective in reducing the overhead of           niques helps provide allocations to time-sensitive tasks
+one-shot timers. From our experiments, we have ex-              with a variation of less than 400 us even under heavy
+trapolated that                 s,        s, and                CPU, disk and file system load. We show that the over-
+        s, hence the firm timers mechanism becomes ef-          head of TSL on throughput-oriented applications is low
+fective when                                   , or when        and thus such a system is truly a general-purpose system
+more than 2.1% of the soft timer checks result in the fir-      since it can be used effectively for both time-sensitive
+ing of a soft timer.                                            and traditional interactive and long-running batch appli-
+                                                                cations.
+Note that the number of checks           depends on the
+amount of interrupts and system calls that occur in the         Although the first results presented in this paper are
+machine, whereas the number of soft timers that fire            promising, TSL still need further investigation, since
+depends on how the checks and the timers’ deadlines             there are open issues related to interrupt service times,
+are distributed in time and the overshoot value. Aron           fine-grained accounting of time, latencies caused by net-
+and Druschel’s original work on soft timers [2] studied         work processing, and firm timers performance. For
+these distributions for a number of workloads. Their            firm timers in particular, we are interested in investi-
+results show that for many workloads the distributions          gating whether real workloads commonly lead to the
+are such that checks often occur close to deadlines (thus                     condition under which firm timers are ef-
+increasing         ), although how close is very work-          fective.
+load dependent. Firm timers have the benefit of assuring
+low timer latency even for workloads with poor distri-
+butions, yet retaining the performance benefits of soft
+timers when the workload permits.                               Acknowledgments
+Note that soft timer checks are normally placed at ker-
+nel exit points where kernel critical sections end and          Andrew Black, Wu-chi Feng and Wu-chang Feng pro-
+where the scheduler function can be invoked. The use            vided many useful suggestions on the initial draft of the
+of a preemptible kernel design in TSL reduces the gran-         paper. We would like to thank the reviewers, especially
+ularity of non-preemptible sections in the kernel and po-       our shepherd, Timothy Roscoe, for taking the time and
+tentially allows more frequent soft timer checks at the         suggesting numerous improvements to the paper.
+end of spinlocks and hence can provide better timing ac-
+curacy. The key issue here is the overhead of this ap-
+proach, which depends on the ratio            , i.e., whether
+sufficient additional soft timers fire as a result of the ad-   References
+ditional soft checks. While our current firm timer imple-
+mentation does not check for timers at the end of each           [1] Luca Abeni, Ashvin Goel, Charles Krasic, Jim Snow,
+spinlock, we plan to evaluate this approach in the future.           and Jonathan Walpole. A measurement-based analysis
+                                                                     of the real-time performance of the Linux kernel. In Real
+                                                                     Time Technology and Applications Symposium (RTAS),
+                                                                     September 2002.
+                                                                 [2] Mohit Aron and Peter Druschel. Soft timers: Efficient
+                                                                     microsecond software timer support for network process-
+                                                                     ing. ACM Transactions on Computer Systems, August
+                                                                     2000.
+ [3] T. P. Baker. Stack-based scheduling of realtime pro-      [20] David Steere, Ashvin Goel, Joshua Gruenberg, Dy-
+     cesses. Journal of Real-Time Systems, pages 67–99,             lan McNamee, Calton Pu, and Jonathan Walpole.
+     1991.                                                          A feedback-driven proportion allocator for real-rate
+ [4] Michael Barabanov and Victor Yodaiken.       Real-time         scheduling. In Operating Systems Design and Implemen-
+     Linux. Linux Journal, March 1996.                              tation, February 1999.
+                                                               [21] The X window system. http://www.x.org.
+ [5] Randy Brown. Calendar queues: A fast O(1) priority
+     queue implementation for the simulation event set prob-   [22] Yu-Chung and Kwei-Jay Lin. Enhancing the real-time
+     lem. CACM, 31(10):1220–1227, October 1988.                     capability of the Linux kernel. In IEEE Real Time Com-
+                                                                    puting Systems and Applications, October 1998.
+ [6] Stephan Childs and David Ingram. The Linux-SRT inte-
+     grated multimedia system: Bringing QoS to the desktop.
+     In Real-Time Technology and Applications Symposium,
+     May 2001.
+ [7] Intel Corporation, editor. Pentium Pro Family Devel-
+     oper’s Manual, chapter 7.4.15. Intel, December 1995.
+ [8] Michael B. Jones and Stefan Saroiu. Predictability re-
+     quirements of a soft modem. In ACM SIGMETRICS Con-
+     ference on Measurement and Modeling of Computer Sys-
+     tems, Cambridge, MA, June 2001.
+ [9] Ian M. Leslie, Derek McAuley, Richard Black, Timothy
+     Roscoe, Paul T. Barham, David Evers, Robin Fairbairns,
+     and Eoin Hyden. The design and implementation of an
+     operating system to support distributed multimedia ap-
+     plications. IEEE Journal of Selected Areas in Communi-
+     cations, 14(7):1280–1297, 1996.
+[10] C. L. Liu and J. Layland. Scheduling algorithm for mul-
+     tiprogramming in a hard real-time environment. Journal
+     of the ACM, 20(1):46–61, Jan 1973.
+[11] Robert Love. The Linux kernel preemption project.
+     http://kpreempt.sf.net.
+[12] Montavista Software - Powering the embedded revolu-
+     tion. http://www.mvista.com.
+[13] Andrew Morton.    Linux scheduling latency.
+     http://www.zip.com.au/~akpm/linux/
+     schedlat.html.
+[14] Mplayer - Movie player for linux.      http://www.
+     mplayerhq.hu.
+[15] Jason Nieh, James G. Hanko, J. Duane Northcutt, and
+     Gerard A. Wall. SVR4 UNIX scheduler unacceptable for
+     multimedia applications. In NOSSDAV, November 1993.
+[16] Jason Nieh and Monica Lam. The design, implementa-
+     tion and evaluation of SMART: A scheduler for multi-
+     media applications. In Symposium on Operating Systems
+     Principles, October 1997.
+[17] Shui Oikawa and Raj Rajkumar. Linux/RK: A portable
+     resource kernel in Linux. In IEEE Real-Time Systems
+     Symposium, December 1998. Work-In-Progress Session.
+[18] S. Savage and H. Tokuda. RT-Mach timers: Exporting
+     time to the user. In USENIX 3rd Mach Symposium, April
+     1993.
+[19] Lui Sha, Raghunathan Rajkumar, and John Lehoczky.
+     Priority inheritance protocols: An approach to real-
+     time synchronization. IEEE Transactions on Computers,
+     39(9):1175–1184, September 1990.
+

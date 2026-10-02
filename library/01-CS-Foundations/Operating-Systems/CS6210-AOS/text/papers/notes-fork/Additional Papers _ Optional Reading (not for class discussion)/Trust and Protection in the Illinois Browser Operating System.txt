@@ -1,0 +1,1203 @@
+           Trust and Protection in the Illinois Browser Operating System
+
+                                   Shuo Tang, Haohui Mai, Samuel T. King
+                                  University of Illinois at Urbana-Champaign
+
+
+
+
+                        Abstract                                      However, not all attacks on web apps, browsers, and
+                                                                   operating systems are equally virulent. At the top of the
+Current web browsers are complex, have enormous
+                                                                   computer stack, attacks on web apps, such as XSS, oper-
+trusted computing bases, and provide attackers with easy
+                                                                   ate within current browser security policies that contain
+access to modern computer systems. In this paper we in-
+                                                                   the damage to the vulnerable web app. Moving down
+troduce the Illinois Browser Operating System (IBOS),
+                                                                   the computer stack, attacks on browsers can cause more
+a new operating system and a new browser that re-
+                                                                   damage because a successful attack gives the attacker ac-
+duces the trusted computing base for web browsers. In
+                                                                   cess to browser data for all web apps and access to other
+our architecture we expose browser-level abstractions
+                                                                   resources on the system. At the lowest layers of the
+at the lowest software layer, enabling us to remove al-
+                                                                   computer stack, attacks on libraries, shared system ser-
+most all traditional OS components and services from
+                                                                   vices, and operating systems are the most serious attacks
+our trusted computing base by mapping browser abstrac-
+                                                                   because attackers can access arbitrary states and events,
+tions to hardware abstractions directly. We show that this
+                                                                   giving them complete control of the system.
+architecture is flexible enough to enable new browser se-
+curity policies, can still support traditional applications,          Overall, these trends indicate that vulnerabilities
+and adds little overhead to the overall browsing experi-           higher in the computer stack are more common, but vul-
+ence.                                                              nerabilities lower in the computer stack provide attack-
+                                                                   ers with more control and are more damaging. In this
+                                                                   paper we focus on preventing and containing attacks on
+1   Introduction                                                   browsers, libraries, system services, and operating sys-
+                                                                   tems – the lower layers of the computer stack.
+Web-based applications (web apps), browsers, and op-
+erating systems have become popular targets for attack-               Current research efforts into more secure web
+ers of computer systems. Vulnerabilities in web apps               browsers help improve the security of browsers, but
+are widespread and increasing. For example, cross-site             remain susceptible to attacks on lower layers of the
+scripting (XSS), which is effectively a form of script in-         computer stack. The OP web browser [26], Gazelle
+jection into a web app, recently overtook the ubiquitous           [52], Chrome [11], and ChromeOS [25] propose new
+buffer overflow as the most common security vulnerabil-            browser architectures for separating the functionality
+ity [50]. Vulnerabilities in web browsers are less com-            of the browser from security mechanisms and policies.
+mon than web app vulnerabilities, but still occur often.           However, these more secure web browsers are all built
+For example, in 2009 Internet Explorer, Chrome, Safari,            on top of commodity operating systems and include
+and Firefox had 349 new security vulnerabilities [4], and          complex user-mode libraries and shared system services
+attackers exploit browsers commonly [53, 37, 42, 41, 4].           within their trusted computing base (TCB). Even kernel
+Vulnerabilities in libraries, system services, and oper-           designs with strong isolation between OS components
+ating systems are less common than vulnerabilities in              (e.g., microkernels [24, 27, 28] and information-flow ker-
+browsers, but are still problematic for modern systems.            nels [18, 57, 33]) still have OS services that are shared
+For example, glibc, GTK+, X, and Linux had 114 new                 by all applications, which attackers can compromise and
+security vulnerabilities in 2009 [1], and in 2009 the most         still cause damage. Here are a few ways that an attacker
+commonly attacked vulnerability was a remote code ex-              can still cause damage to more secure web browsers built
+ecution bug in the Windows kernel [4].                             on top of traditional OSes:
+
+
+                                                               1
+  • A compromised Ethernet driver can send sensitive                  • IBOS is the first system to improve browser and OS
+    HTTP data (e.g., passwords or login cookies) to any                 security by making browser-level abstractions first-
+    remote host or change the HTTP response data be-                    class OS abstractions, providing a clean separation
+    fore routing it to the network stack.                               between browser functionality and browser security.
+
+  • A compromised storage module can modify or steal                  • We show that having low-layer software expose
+    any browser related persistent data.                                browser abstractions enables us to remove almost
+                                                                        all traditional OS components from our TCB, in-
+  • A compromised network stack can tamper with any                     cluding device drivers and shared OS services, al-
+    network connection or send sensitive HTTP data to                   lowing IBOS to withstand a wide range of attacks.
+    an attacker.
+                                                                      • We demonstrate that IBOS can still support tradi-
+  • A compromised window manager can draw any                           tional applications that interact with the browser and
+    content on top of a web page to deploy visual at-                   shared OS services without compromising the secu-
+    tacks, such as phishing.                                            rity of our system.
+   In this paper we describe IBOS, an operating sys-
+tem and a browser co-designed to reduce drastically the           2     The IBOS architecture
+TCB for web browsers and to simplify browser-based
+systems. Our key insight is that our lowest-layer soft-           This paper presents the design and implementation of
+ware can expose browser-level abstractions, rather than           the IBOS operating system and browser that reduce the
+general-purpose OS abstractions, to provide vastly im-            TCB for browsing drastically. Our primary goals are to
+proved security properties for the browser without affect-        enforce today’s browser security policies with a small
+ing the TCB for traditional applications. Some examples           TCB, without restricting functionality, and without slow-
+of browser abstractions are cookies for persistent storage,       ing down performance. To withstand attacks, IBOS must
+hypertext transfer protocol (HTTP) connections for net-           ensure any compromised component (1) cannot tamper
+work I/O, and tabs for displaying web pages. To support           with data it should not have access to, (2) cannot leak
+traditional applications, we build UNIX-like abstractions         sensitive information to third parties, and (3) cannot ac-
+on top of our browser abstractions.                               cess components operating on behalf of different web
+   IBOS improves on past approaches by removing typi-             sites.
+cally shared OS components and system services from                  In this section we discuss the design principles that
+our browser’s TCB, including device drivers, network              guide our design and the overall system architecture. In
+protocol implementations, the storage stack, and win-             Section 4 we discuss the security policies and mecha-
+dow management software. All of these components run              nisms we use.
+above a trusted reference monitor [9], which enforces our
+security policies. These components operate on browser-
+level abstractions, allowing us to map browser security           2.1     Design principles
+policies down to the lowest-level hardware directly and           We embrace microkernel [27], Exokernel [19], and
+to remove drivers and system services from our TCB.               safety kernel design principles in our overall architec-
+   This architecture is a stark contrast to current systems       ture. By combining these principles with our insight
+where all applications layer application-specific abstrac-        about exposing browser abstractions at the lowest soft-
+tions on top of general-purpose OS abstractions, inherit-         ware layer we hope to converge on a more trustworthy
+ing the cruft needed to implement and access these gen-           browser design. Five key principles guide our design:
+eral OS abstractions. By exposing application-specific
+abstractions at the OS layer, we can cut through complex              1. Make security decisions at the lowest layer of soft-
+software layers for one particular application without af-               ware. By pushing our security decisions to the low-
+fecting traditional applications adversely, which still run              est layers we hope to avoid including the millions
+on top of general OS abstractions and still inherit cruft.               of lines of library and OS code in our TCB.
+We choose to illustrate this principle using a web browser
+because browsers are used widely and have been prone                  2. Use controlled sharing between web apps and tra-
+to security failures recently. Our goal is to build a sys-               ditional apps. Sharing data between web apps and
+tem where a user can visit a trusted web site safely, even               traditional apps is a fundamental functionality of
+one or more of the components on the system have been                    today’s practical systems and should be supported.
+compromised.                                                             However, this sharing should be facilitated through
+   Our contributions are:                                                a narrow interface to prevent misuse.
+
+
+                                                              2
+         localhost        maps.com      bing.com        uiuc.edu       implementing browser abstractions. The key browser
+   Traditional                                                         abstractions that the browser API managers implement
+                         Web Page      Web Page        Web Page
+   Applications          Instance      Instance        Instance        are HTTP requests, cookies and local storage for stor-
+                                                                       ing persistent data, and tabs for displaying user-interface
+   UNIX Layer                                                          (UI) content. Web apps use these abstractions directly
+ Browser abstractions                                                  to implement browser functionality, and traditional ap-
+          UI                 Storage           Net. Processes          plications (traditional apps) use a UNIX layer to access
+                                                                       UNIX-like abstractions on top of these browser abstrac-
+   Mouse/KBD Driver             …                  NIC Driver
+                                                                       tions.
+                        Reference Monitor
+
+   L4                     IBOS Kernel              Net. Manager        2.2.1   The IBOS kernel
+ Hardware
+                Video          …        Mouse/KBD        NIC           Our IBOS kernel is the software TCB for the browser and
+                                                                       includes resource management functionality and a refer-
+Figure 1: Overall IBOS architecture. Our system con-                   ence monitor for security enforcement. The IBOS kernel
+tains user-mode drivers, browsers API managers, web                    also handles many traditional OS tasks such as manag-
+page instances, and traditional processes. To manage the               ing global resources, creating new processes, and man-
+interactions between these components, we use a refer-                 aging memory for applications. To facilitate message
+ence monitor that runs within our IBOS kernel. Shaded                  passing, the IBOS kernel includes the L4Ka::Pistachio
+regions make up the TCB.                                               [8] message passing implementation and MMU manage-
+                                                                       ment functions. All messages pass through our reference
+                                                                       monitor and are subjected to our overall system security
+                                                                       policy. Section 4 describes the policies that the IBOS
+ 3. Maintain compatibility with current browser secu-                  kernel enforces and the mechanisms it uses to implement
+    rity policies. Our primary goal is to improve the                  these policies.
+    enforcement of current browser policies without
+    changing current web-based applications.
+                                                                       2.2.2   Network, storage, and UI managers
+ 4. Expose enough browser states and events to enable
+    new browser security policies. In addition to en-                  The IBOS network subsystem handles HTTP requests
+    forcing current browser policies, we would like our                and socket calls for applications. To handle HTTP re-
+    architecture to adapt easily to future browser poli-               quests, network processes check a local cache to see if
+    cies.                                                              the request can be serviced via the cache, fetch any cook-
+                                                                       ies needed for the request, format the HTTP data into a
+ 5. Avoid rule-based OS sandboxing for browser com-                    TCP stream, and transform that TCP stream into a series
+    ponents. Fundamentally, rule-based OS sandbox-                     of Ethernet frames that are sent to the NIC driver. Socket
+    ing is about restricting unused or overly permis-                  network processes export a basic socket API and simply
+    sive interfaces exposed by today’s operating sys-                  transform TCP streams to Ethernet frames for transmis-
+    tems. However, sandboxing systems can be com-                      sion across the network. Only traditional apps can access
+    plex (the Ubuntu 10.04 SELinux reference policy                    our socket network processes. The IBOS kernel manages
+    uses over 104K lines of policy code) and difficult to              global states, like port allocation.
+    implement correctly [23, 51]. If our architecture re-                 The IBOS storage manager maintains persistent stor-
+    quires OS sandboxing for browser components then                   age for key-value data pairs. The browser uses the stor-
+    we should rethink the architecture.                                age manager to store HTTP cookies and HTML5 local
+                                                                       storage objects, and the basic object store includes op-
+                                                                       tional parameters, such as Path and Max-Age, to ex-
+2.2     Overall architecture                                           pose cookie properties to the reference monitor. The
+                                                                       storage manager uses several different namespaces to
+Figure 1 shows the overall IBOS architecture. The IBOS                 isolate objects from each other. Web apps and net-
+architecture uses a basic microkernel approach with a                  work processes share a namespace based on the origin
+thin kernel for managing hardware and facilitating mes-                (the <protocol, domain name, port> tuple of
+sage passing between processes. The system includes                    a uniform resource locator) that they originate from,
+user-mode device drivers for interacting directly with                 and web apps and traditional apps share a “localhost”
+hardware devices, such as network interface cards (NIC),               namespace, which is separate from the HTTP names-
+and browser API managers for accessing the drivers and                 pace. All other drivers and managers have their own pri-
+
+
+                                                                   3
+vate namespaces to access persistent data.                        complete discussion of this policy and others, plus exper-
+   The IBOS UI manager plays the role of the window               imental results showing how current browsers implement
+manager for the system. However, rather than implement            them, please see a recent paper by Singh, et al. [47].
+the browser UI components on top of the traditional win-             The primary security policy that all modern browsers
+dow motif, we opted for a tabbed browser motif. Basic             implement is the SOP. The SOP acts as a non-
+browser UI widgets, called the browser chrome, are dis-           interference policy for the web. Loosely speaking, the
+played at the top of the screen. IBOS displays web pages          SOP provides isolation for web pages and states that
+in tabs and the user can have any number of tabs open for         come from different origins – origins are used as labels
+web apps. There is a tab for basic browser configuration          for browser access control policies. If the browser has a
+and administration, and a tab that is shared by traditional       web page open from uiuc.edu and from attacker.
+apps. If traditional apps wish to implement the window            com, the SOP should ensure that these two web pages are
+motif, they can do so within the tab. The main advan-             isolated from each other. Unfortunately, Chrome, IE8,
+tage of our browser-based motif is that it enables IBOS           Safari, and Firefox all enforce the SOP using a number
+to bypass the extra layers of indirection traditional win-        of checks scattered throughout the millions of lines of
+dow managers put between applications and the under-              browser code and current browsers have had trouble im-
+lying graphics hardware, exposing browser UI elements             plementing the SOP correctly [14].
+and events directly to the IBOS kernel. We discuss the               In a browser, a frame is a container that encapsulates
+security implications of our design decision in more de-          a HTML document and any material included in that
+tail in Section 4.8.                                              HTML document. Web pages are frames, and web de-
+                                                                  velopers can embed additional frames within web pages
+                                                                  – these frames are called iframes. Developers can
+2.2.3   Web apps, traditional apps, and plugins                   include iframes from the same origin as the hosting
+The IBOS system supports two different types of pro-              frame, or from a different origin. Each frame is labeled
+cesses: web page instances and traditional processes. A           with the origin of the main HTML document used to pop-
+web page instance is a process that is created for each in-       ulate the frame, meaning that a cross-origin iframe has
+dividual web page a user visits. Each time the user clicks        a different label than the hosting web page.
+on a link or types a uniform resource locator (URL) into             In general HTML documents include references to
+the address bar, the IBOS kernel creates a new web page           network objects that the browser will download and dis-
+instance. Web page instances are responsible for issuing          play to form the web page. These network objects can
+HTTP requests, parsing HTML, executing JavaScript,                be images, JavaScript, and CSS. Browsers can download
+and rendering web content to a tab. Traditional processes         these objects from any domain and the browser labels
+can execute arbitrary instructions, and the key difference        them with the origin of the hosting frame. For exam-
+between a web page instance and a traditional processes           ple, if a page from uiuc.edu includes a script from
+is that the IBOS kernel gives them different security la-         foo.com, that script runs with full uiuc.edu per-
+bels, which the kernel uses for access control decisions.         missions and can access any of the states in that web
+Web page instances are labeled with the origin of the             page. Browsers can also download HTML documents
+HTTP request used to initiate the new web page, and tra-          and XML HTTP requests (used for Ajax), but the SOP
+ditional processes are labeled as being from “localhost.”         dictates that these objects must come from the same ori-
+These two processes interact via the storage subsystem            gin as the hosting frame.
+since both types of processes can access “localhost” data.
+   In general, plugins are external applications that             4     IBOS security policies and mechanisms
+browsers use to render non-HTML content. One com-
+mon example of a plugin is the Flash player that enables          Our primary goal is to enforce browser security policies
+browsers to play Flash content. In IBOS, plugins run as           from within our IBOS kernel. This section describes the
+traditional processes, except that they are launched by           mechanisms that the IBOS kernel uses to enforce the
+the browser and the system gives them access to browser           SOP. We also discuss policies and mechanisms for en-
+states and events through a standard plugin programming           forcing UI interactions, and we describe a custom policy
+interface, called the NPAPI [2].                                  engine that lets web sites further restrict current policies.
+
+                                                                  4.1    Threat model and assumptions
+3   Current browser policies
+                                                                  Our primary goal is to ensure that the IBOS kernel up-
+In this section we give a brief introduction to the same-         holds our security policies even if one or more of the sub-
+origin policy (SOP) for browser security. For a more              systems have been compromised. In our threat model,
+
+
+                                                              4
+                                               uiuc.edu             Figure 2 shows the flow of how a web page instance
+                    Web Page Instance                            fetches data from the network. The user visits a page
+                                                                 hosted at uiuc.edu and this web page includes an im-
+                                        (9)     (1)              age from foo.com. To download the image, (1) the web
+                            (2)                                  page instance will make an HTTP request that the IBOS
+        Storage                       foo.com & uiuc.edu
+                                                                 kernel forwards to an appropriate network process. The
+                                                                 network process forms a HTTP request, which includes
+      NIC Drivers             (4)
+                                    Network Process
+                                                                 setting up HTTP headers, (2) fetching cookies from the
+                                        (8)     (3)              storage subsystem, (3) requesting a free local TCP port
+      (6)     (5)     (7)                                        to transform this request into TCP/IP packets and Ether-
+                                    Network Manager
+                                                                 net frames, and (4) sending it to network manager. The
+            NIC                               DMA buffers        network manager notifies the Ethernet driver which (5)
+                                                                 programs the NIC to transmits the packet out to the net-
+                                                                 work. When the NIC receives a reply for the request, (6)
+Figure 2: This figure enlarges the right half of Figure 1
+                                                                 it notifies the Ethernet driver. The driver subsequently
+and shows how our IBOS subsystems interact when a
+                                                                 (7) notifies the network manager, which (8) forwards the
+web page instance from uiuc.edu issues a network
+                                                                 packet to the appropriate network process. The network
+request to foo.com. Subsystems are shown in boxes
+                                                                 process then parses the data and (9) passes the resulting
+and solid and dotted arrows represent IBOS messages for
+                                                                 HTTP reply and data to the original web page instance.
+outgoing and incoming data respectively. The reference
+monitor (which is not shown here) checks all these mes-
+sages to enforce security properties.                            4.3   IBOS labels
+                                                                 To enforce access control decisions, the IBOS kernel la-
+                                                                 bels web page instances, traditional processes, and net-
+we assume that an attacker controls a web site and can           work processes. IBOS labels specify the resources that
+serve arbitrary data to our browser, or that the system          a process can access or messages it can receive. Each
+contains a malicious traditional app. We also assume that        web page instance has one label, which is the origin of
+this malicious data or traditional app can compromise            the main HTML document. Each traditional process is
+one or more of the components in our system. These               labeled as being from “localhost” when they are created.
+susceptible components include all drivers, browser API          Each network process has an origin label for the network
+managers, web page instances, and traditional processes.         resources it handles and has an origin label for the web
+Once the attacker takes control of these components, we          page instances that are allowed to access it. IBOS la-
+assume that he or she can execute arbitrary instructions         bels the processes upon creation, and keeps the labels
+as a result of the attack. We focus on maintaining the in-       unchanged throughout the processes’ life-cycle.
+tegrity and confidentiality of the data in our browser. In          An important point is that the IBOS kernel infers the
+other words, we would like the user to be able to open a         origin labels for web page instances and network pro-
+web page on a trusted web server, and interact with this         cesses automatically by extracting related information
+web page securely, even if everything on the client sys-         from the messages passed among them. By inferring la-
+tem outside of our TCB has been compromised. Avail-              bels rather than relying on processes to label themselves,
+ability is an important, but separate, aspect of browser         the IBOS kernel ensures that it has the correct label in-
+security that we do not address in this paper.                   formation, even if a process is compromised.
+   In our system we trust the layers upon which we built            The newUrl and fetchUrl IBOS system calls are the
+IBOS. These layers include the IBOS kernel and the un-           two requests that cause the kernel to label processes. The
+derlying hardware. Like all other browsers, IBOS pred-           newUrl system call is used by web page instances and the
+icates security decisions based on domain names, so we           UI manager use to navigate the browser to a new URL.
+trust domain name servers to map domain names to IP              The newUrl system call consists of two arguments: a
+addresses correctly. Compromising any of these trusted           URL and a byte array for HTTP POST data. When the
+layers compromises the security of IBOS.                         IBOS kernel receives a newUrl request it will create a
+                                                                 new web page instance and set the label for this web page
+4.2    IBOS work flow                                            instance by parsing the origin out of the URL argument
+                                                                 of the newUrl request. When servicing newUrl requests,
+This section describes a web page instance making a net-         the IBOS kernel will reuse old web page instances (to
+work request to help illustrate the security mechanisms          reduce process startup times), but only when the origin
+that IBOS uses.                                                  labels match for the old web page instance and the URL
+
+
+                                                             5
+argument.                                                         SI 1: Drivers cannot access DMA buffers directly.
+   Web page instances use the fetchUrl system call to is-         SI 2: Devices can only access validated DMA buffers.
+sue HTTP and HTTPS requests to fetch network objects,
+such as images. The fetchUrl system call has two ar-                 In our approach, we use a split driver architecture
+guments: a URL and HTTP header information. When                  where we separate the management of device control reg-
+a web page instance issues a fetchUrl system call, the            isters from the use of device buffers (SI 1). For example,
+IBOS kernel uses the origin of the web page instance              our Ethernet driver never has access to transmit or re-
+(set by the original newUrl call) and the origin of the           ceive buffers directly. Instead, it knows the physical ad-
+fetchUrl URL argument to find a network process with              dresses where the IBOS kernel stores these buffers, and
+these same labels, or creates a new network processes             it programs the NIC to use them. By separating these
+and labels it accordingly if an existing network process          two functions we can interpose on the communications
+cannot be found.                                                  between them to ensure that IBOS upholds browser secu-
+   More details about how we use these labels for access          rity policies, even if an attacker completely compromises
+control decisions are described in the remainder of this          a shared driver.
+section.                                                             Using this split architecture, processes fill in device-
+                                                                  specific buffers for DMA transfers, and the IBOS ker-
+4.4    Security invariants                                        nel infers when drivers initiate DMA transfers to ensure
+                                                                  that the driver instructs the device to use a verified DMA
+For all of our subsystems, we use security invariants that        buffer (SI 2). Fortunately, DMA buffers tend to use
+are assertions on all interactions between subsystems that        well-defined interfaces, like Ethernet frames for Ether-
+check basic security properties. The key to our security          net drivers, so the IBOS kernel can readily glean security
+invariants is that we can extract security relevant infor-        relevant information from these DMA buffers before the
+mation from messages automatically, and provide high              device accesses them. Unfortunately, the interface be-
+assurance that the system maintains the security policy           tween drivers and devices is device-specific, so the IBOS
+without having to understand how each individual sub-             kernel must have a small state machine for each device
+system is implemented. Using these security invariants,           to properly infer DMA transfers. However, we found this
+we remove from the TCB almost all of the components               state machine to be quite small for the devices that we use
+found in modern commodity operating systems, includ-              in IBOS.
+ing device drivers.                                                  In IBOS we implement a driver for the e1000 NIC, a
+   The ideal security invariant is complete, implementa-          VESA BIOS Extensions driver for our video card, and
+tion agnostic, executes quickly, and requires only a small        drivers for the mouse and keyboard.
+amount of code in the IBOS kernel. A complete invariant
+can infer all of the states needed to ensure the high-level
+security policy, and an implementation agnostic invari-           4.6    Storage invariants
+ant can infer states without relying on the specific imple-
+                                                                  The primary invariant we strive to enforce in the storage
+mentation of individual subsystems. The IBOS kernel
+                                                                  manager is:
+evaluates invariants in the kernel and inline with mes-
+sages, so security invariants should execute quickly and
+                                                                  SI 3: All of our key-value pairs maintain confidentiality
+require little code to implement. In our design we strive
+                                                                       and integrity even if the storage stack itself becomes
+to make the appropriate trade offs among these proper-
+                                                                       compromised.
+ties to improve security without making the system slow
+or increasing our TCB significantly. The base security
+                                                                     To enforce this invariant, our IBOS kernel encrypts
+invariant we have is:
+                                                                  all objects before passing them to the storage subsystem.
+SI 0: All components can only perform their designated            To encrypt data, the IBOS kernel maintains separate en-
+     functions.                                                   cryption keys for all of the namespaces on the IBOS sys-
+                                                                  tem. These namespaces include separate namespaces for
+   For example, the UI subsystem can never ask for                HTTP cookies based on the domain of the cookie, sep-
+cookie data or the storage manager cannot impersonate             arate namespaces for web page instances based on the
+a network process to send synthesized attack HTTP data            origin of the page, separate namespaces for each of our
+to a web page instance.                                           subsystems, and a separate namespace for all traditional
+                                                                  apps. When the IBOS kernel passes a request to the stor-
+                                                                  age manager it will append the security labels, a copy
+4.5    Driver invariants
+                                                                  of the key from the key-value pair, and a hash of the
+The two driver invariants the IBOS kernel enforces are:           contents to the payload before encrypting the data and
+
+
+                                                              6
+passing it to the storage subsystem. When the IBOS ker-           the IP address and TCP port against the label of the send-
+nel retrieves this data, it can decrypt the data and check        ing network process (SI 6). Also, the IBOS kernel checks
+the labels and integrity of the information. By using en-         cookies before passing them to the network process to
+cryption, the IBOS kernel does not need to implement              ensure that all of the origin labels adhere to cookie stan-
+security invariants for any of our storage drivers, and our       dards. By performing these checks, the IBOS kernel en-
+storage subsystem is free to make data persistent using           sures that the NIC sends outgoing network requests to
+any mechanisms it sees fit, such as the network (like in          the proper host and that the request can only include data
+our implementation) or via a disk-based storage system.           that would be available to the server anyway.
+   Our current implementation does not make any efforts              To enforce the SOP, the IBOS kernel inspects HTTP
+to avoid an attacker that deletes objects or replays old          data before forwarding it to the appropriate web page
+storage data. For web applications this limitation has            instance and drops any HTML documents from differ-
+only a small effect because the cookie standards do not           ent origins (SI 7). To inspect data, the kernel uses the
+require browsers to keep cookies persistently and be-             content sniffing algorithm from Chrome [10] to identify
+cause web applications often limit the lifetime of cookies        HTML documents so the kernel can check to make sure
+using expiration dates, which are also part of the cookie         that the origin of HTML documents and the origin of the
+standard. However, if this limitation did become prob-            web page instance match. This countermeasure prevents
+lematic, we could apply the principles learned from dis-          compromised web page instances from peering into the
+tributed or secure file systems to provide stronger guar-         contents of a cross-origin HTML document, thus pre-
+antees.                                                           venting the compromised web page instance from read-
+                                                                  ing sensitive information included in the HTML docu-
+4.7    Network process invariants                                 ment.
+                                                                     To help isolate web page instances from each other,
+Our IBOS kernel maintains five main invariants for net-           we also label network processes with the origin of the
+work processes:                                                   web page instance (SI 8). This second label is used only
+                                                                  for network access control decisions and does not affect
+SI 4: The kernel must route network requests from web
+                                                                  the cookie policy, which is predicated on the origin of
+     page instances to the proper network process.
+                                                                  the network request. To access network processes, the
+SI 5: The kernel must route Ethernet frames from the
+                                                                  origin of the web page instance must match the origin of
+     NIC to the proper network processes.
+                                                                  this second label. By using this second label, the IBOS
+SI 6: Ethernet frames from network processes to the
+                                                                  kernel isolates network requests from different web page
+     NIC must have an IP address and TCP port that
+                                                                  instances to the same origin. As a result of this isolation,
+     matches the origin of the network process.
+                                                                  a web page instance that is served a malicious network
+SI 7: HTTP data from network processes to web page
+                                                                  resource (e.g., a malicious ad [41]) that compromises a
+     instances must adhere to the SOP.
+                                                                  network process remains isolated from other web page
+SI 8: Network processes for different web page in-
+                                                                  instances. If an attacker can compromise a network pro-
+     stances must remain isolated.
+                                                                  cess, IBOS limits the damage to the web page instance
+   To help enforce these invariants, IBOS puts all net-           that included the malicious content.
+work processes in their own protection domains. If a web
+page instance makes a HTTP request, the kernel will ex-           4.8    UI invariants
+tract the origin from the request message and either route
+this request to an existing network process that has the          The three UI invariants that the IBOS kernel enforces are:
+same label, or it will create a new network process and
+label the network process with the origin of the HTTP             SI 9: The browser chrome and web page content dis-
+request. Likewise, the kernel inspects incoming Ether-                 plays are isolated.
+net frames to extract the origin and TCP port informa-            SI 10: Only the current tab can access the screen,
+tion, and routes these frames to the appropriately labeled             mouse, and keyboard.
+network process. By putting network processes in their            SI 11: The URL of the current tab is displayed to the
+own protection domains, the kernel naturally ensures that              user.
+network requests from web page instances and Ethernet
+frames from the NIC are routed to the correct network                The key mechanisms that our UI subsystem uses to
+process (SI 4) (SI 5).                                            provide isolation are to use a frame buffer video driver
+   To ensure that the NIC sends outgoing Ethernet frames          and page protections to isolate portions of the screen (SI
+to the correct host, the IBOS kernel checks all outgoing          9). Our video driver uses a section of memory, called
+Ethernet frames before sending them to the NIC to check           a frame buffer, for writing to the screen. Processes
+
+                                                              7
+  Kernel                                                         inconsistency was interposing on mouse and keyboard
+                                                                 clicks to infer which tab the user clicked on, and also
+    UI                                                           performing optical character recognition on the address
+         …                                                       bar to determine the address that the UI manager is dis-
+ Web Page                                                        playing. However, tracking this level of detail would re-
+ Instances                                                       quire far too much implementation specific information
+     uiuc.edu                                                    and would require the IBOS kernel to track additional
+  Current
+ Web Page
+                                                                 events like a user switching the order of tabs.
+ Instance                                                           Our approach for the IBOS kernel is to use the kernel
+                                                                 display area to display the URL for the currently visi-
+      Page                                                       ble web page instance (SI 11). The kernel derives the
+ Protection
+                                                                 URL from the label of the currently visible web page
+                                                                 instance, providing high assurance that the URL the ker-
+Figure 3: IBOS display isolation. This figure shows how          nel displays matches the URL of the visible web page
+IBOS divides the display into three main parts: a bar at         instance without tracking implementation specific states
+the top for the kernel, a bar for browser chrome, and the        and events in the UI manager. Although this security in-
+rest for displaying web page content. The IBOS kernel            variant appears simple, it is something that modern web
+enforces this isolation using page protections and without       browsers have had trouble getting right [13].
+relying on a window manager.
+
+                                                                 4.9    Web page instances and iframes
+write pixel values to this frame buffer and the graph-           The IBOS kernel creates a new web page instance each
+ics card displays these pixels. Although our mechanism           time a user clicks on a link or types a new URL in the
+makes heavy use of the software rastering available in Qt        address bar. To enforce the SOP on iframes, we run
+Framework[3], our experiences and anecdotal evidence             cross-origin iframes in separate web page instances.
+from the Qt developers shows that software rastering can         This separation allows us to fully track the SOP using
+perform roughly as fast as native X drivers running on           kernel visible entities. To facilitate communication be-
+Linux [7]. The key advantage of our approach is that             tween web page instances and the iframes that they
+the IBOS kernel can use standard page-protection mech-           host, we marshal postMessage calls between the two.
+anisms to isolate portions of the screen. Although our              Our current display isolation primitives are coarse
+current implementation does not support hardware accel-          grained and we rely on the web page instance to manage
+eration, we believe that our techniques will work because        cross-origin iframe displays even though iframes
+the IBOS kernel can interpose on standardized accelera-          run in separate protection domains. However, current
+tion hardware/software interfaces, such as OpenGL and            display policies allow web page instances to draw over
+DirectX.                                                         cross-origin iframes that they host, so this design deci-
+   To provide screen isolation, we divide up the screen          sion has no impact on current browser policies. One po-
+into three horizontal portions (Figure 3). At the top, we        tential shortcoming of this display management approach
+reserve a small bar that only the IBOS kernel can access.        is that compromised web page instances can read the dis-
+We use the next section of the screen for the UI subsys-         play data for embedded iframes. Fortunately, many
+tem to draw the browser chrome. Finally, we provide              sites with sensitive information, like facebook.com
+the remainder of the screen to the web page instance. To         and gmail.com, use frame busting techniques [34] to
+ensure that only one web page instance can write to the          prevent cross-origin sites from embedding them, which
+screen at any given time, we only map the frame buffer           the IBOS kernel can enforce.
+memory region into the currently active web page in-
+stance and we only route mouse and keyboard events to            4.10    Custom policies
+this currently active web page instance (SI 10).
+   To switch tabs, the UI subsystem notifies the IBOS            Our main focus of this project is being able to enforce
+kernel about which tab is the current tab, and the IBOS          current browser policies from the lowest layer of soft-
+kernel updates the frame buffer page table entries ap-           ware. However, we also want to create an architecture
+propriately. However, a malicious UI manager could               that exposes enough browser states and events to en-
+switch tabs arbitrarily and cause the address bar and the        able novel browser security policies. Attacks such as
+tab content to become out of sync (e.g., shows a page            XSS operate within traditional browser policies and can
+from attacker.com, but claims the page comes from                be difficult to prevent without relying on the HTML or
+uiuc.edu). One alternative we considered for this UI             JavaScript engine implementations. Although our archi-
+
+
+                                                             8
+tecture cannot prevent XSS, our goal is to prevent these             System                                           LOC
+types of attacks from causing damage.                                IBOS                                            42,044
+   One mechanism we implement in IBOS is to give                        IBOS Kernel                                   8,905
+a web server the ability to create its own more re-                     L4Ka::Pistachio                              33,139
+                                                                     Firefox on Linux                           > 5,684,639
+strictive security policy to prevent attacks from sending
+                                                                        Firefox 3.5                                2,171,267
+sensitive information to third-party hosts. In our cus-
+                                                                        GTK+ 2.18                                    489,502
+tom policy, we allow web sites to specify a server-side                 glibc 2.11                                   740,314
+policy file that IBOS retrieves to restrict network ac-                 X.Org 7.5                                    653,276
+cesses for a web page instance, similar to Tahoma man-                  Linux kernel 2.6.31                        1,630,280
+ifests [15]. For example, assume that a bank website                 ChromeOS                                   > 4,407,066
+located at http://www.bank.com creates a policy                         Chrome browser kernel 4.1.249                714,348
+file at http://www.bank.com/.policy that spec-                          GTK+ 2.18                                    489,502
+ifies the online bank system can only access resources                  glibc 2.11                                   740,314
+from www.bank.com or data.bank.com. IBOS re-                            ChromeOS kernel & services (May 2010)      2,462,902
+trieves the policy file and automatically applies a more
+                                                                 Table 1: Estimation of LOC of TCBs for IBOS, Firefox
+restrictive policy for the online bank web application.
+                                                                 on Linux, and ChromeOS. LOC counts are also shown
+This restrictive policy prevents an attacker from sending
+                                                                 for some major components that are included in the TCB.
+stolen information to a third-party host, providing an ad-
+ditional layer of protection for the web application.
+
+                                                                 6     Evaluation
+5   Implementation
+                                                                 This section describes our evaluation of IBOS. In our
+The implementation of IBOS is divided into three parts:          evaluation, we analyze the security of IBOS by measur-
+the IBOS kernel, IBOS messaging passing interfaces,              ing the number of lines of code (LOC) in the IBOS TCB
+and IBOS subsystems. The IBOS kernel is implemented              and comparing it with other systems, and by looking at
+on top of the L4Ka::Pistachio microkernel and runs on            recent bugs in comparable systems and counting vulner-
+X86-64 uniprocessor and SMP platforms. We modi-                  abilities that IBOS is susceptible to. We also revisit the
+fied L4Ka to improve its support for SMP systems. The            example attacks we discussed in the introduction, and we
+IBOS kernel schedules processes based on a static prior-         measure the performance.
+ity scheduling algorithm.
+   The IBOS kernel provides three basic APIs (i.e.,
+send(), recv(), and poll()) to facilitate message
+                                                                 6.1     TCB
+passing. Applications use send() and recv() for                  In IBOS, our goal is to minimize the TCB for web
+communication and call poll() to wait for new mes-               browsers and to simplify browser-based systems. To
+sages. The IBOS kernel intercepts all messages and au-           quantitatively evaluate our effort, we count the LOC in
+tomatically extracts the semantics from them, like cre-          the IBOS TCB and compare it against the TCB for Fire-
+ating a new web page instance or forwarding cookies to           fox and ChromeOS. IBOS supports fewer hardware ar-
+network processes. Then the kernel inspects the seman-           chitectures, platforms, device drivers and features, such
+tics to make sure they conform to all security invariants        as browser extensions, than Firefox running on Linux
+and policies that we described in previous sections.             and ChromeOS. For a fair comparison, we only count
+   The IBOS subsystems implements APIs for web                   source code that is used for running above Linux and on
+browsers and traditional applications. They are built on         the X86-64 platform. Also, we omit all device drivers
+top of an IBOS-specific uClibc [6] C library, lwIP [17]          from our counts except for the drivers we implement in
+TCP/IP stack and the Qt Framework [3]. The web                   IBOS.
+browser also uses an IBOS-specific WebKit [5] to parse              Table 1 shows the result of LOC counts in the TCB for
+and render web pages.                                            these three systems, measured by SLOCCount [54]. For
+   To support traditional apps, we use our uClibc and Qt         Firefox and ChromeOS, our counts are conservative be-
+implementations to provide access to browser abstrac-            cause we only count the major components that make up
+tions using the UNIX-like abstractions of the C runtime,         the TCB for each system – there are likely more compo-
+and GUI support from Qt. We use a few Qt sample pro-             nent that are also in the TCB for these systems. Because
+grams for testing and we implement one plugin. Our plu-          the IBOS TCB has only around 42K LOC, it is possible
+gin is a PDF viewer that uses the Ghostscript PDF ren-           to formally verify or manually review the entire IBOS
+dering engine with bindings for Qt.                              TCB. And in fact, one L4 type microkernel has already
+
+
+                                                             9
+       Affected Component       Num.     Prevented                    Memory exploitation: an attacker could use a memory
+       Linux kernel overall      21       20 (95%)                 corruption bug to deploy a remote code execution attack.
+           File system           12      12 (100%)                 For Chrome, if the bug is in its rendering engine, Chrome
+           Network stack          5       5 (100%)                 contains the attack. However, bugs in the browser kernel
+           Other                  4        3 (75%)
+                                                                   give attackers access to the entire browser. For IBOS,
+       X Server                   2       2 (100%)
+                                                                   bugs in either the rendering engine or other service com-
+       GTK+ & glibc               5       5 (100%)
+       Overall                   28      27 (96 %)
+                                                                   ponents are contained as they are all out of the TCB.
+                                                                      XSS: browsers rely on careful sanitization and correct
+Table 2: OS and library vulnerabilities. This table shows          processing of different encodings to prevent XSS attacks.
+the number of vulnerabilities that IBOS prevents.                  For both Chrome and IBOS, it is infeasible to eliminate
+                                                                   XSS attacks, but they both contain the attacks in the af-
+                                                                   fected web apps.
+                                                                      SOP circumvention: Chrome runs contents in frames
+been formally verified [32].                                       from different origins in a single address space and uses
+                                                                   scattered “if” and “else” statements to enforce the same-
+6.2    OS and library vulnerabilities                              origin policy. This logic can be sometime subverted. In
+                                                                   IBOS, we run iframes in different web page instances to
+To evaluate the security impact of IBOS’s reduced TCB,             provide strong isolation and check cross-origin access in
+we obtained a list of 74 vulnerabilities found in the Linux        the IBOS kernel.
+kernel, X Server, GTK+, and glibc this year so far (as                Sandbox bypassing: Chrome uses sandboxing tech-
+of Sep. 18, 2010) [1] to see how the IBOS architecture             niques, such as SELinux, to limit the rendering engine’s
+handles them. Out of the 74 vulnerabilities, 20 are re-            authority. However, rule-based sandboxing is complex
+lated to unsupported hardware architectures and devices,           and can be bypassed in some scenarios. In IBOS, we
+and 26 cause denial-of-service, which is out-of-scope for          designed browser abstractions to restrict the authority of
+this paper. For the remaining 28, we classify them based           each subsystem, which are immune to this kind of prob-
+on the subsystem the vulnerability lies in to determine if         lem naturally.
+IBOS is susceptible to these vulnerabilities.                         Interface spoofing: browsers are sometime vulnerable
+   Table 2 shows IBOS is able to prevent 27 of 28 vul-             to visual attacks in which a malicious website can use
+nerabilities (96%). The only vulnerability we miss is              complex HTTP redirection or even replicate the “look
+a memory corruption vulnerability in the e1000 Ether-              and feel” of victim websites to deploy phishing. Chrome
+net driver. Normally IBOS is not susceptible to bugs in            uses a blacklist-based filter to warn users of malicious
+device drivers, but this particular bug resulted from the          websites. In IBOS, the IBOS kernel separates the dis-
+driver not accounting properly for Ethernet frames larger          play of different web page instances and uses the labels
+than 1500 bytes, and this type of logic is what our NIC            of web page instances to display the correct URL in the
+verification state machine uses, so we counted this bug            top of the screen to give the user a visual cue of which
+against IBOS.                                                      website he or she is visiting.
+                                                                      UI design flaw: some security concerns arise because
+                                                                   of careless implementation, such as showing users’ pass-
+6.3    Browser vulnerabilities
+                                                                   words in plain text. Both Chrome and IBOS are vulnera-
+To evaluate security improvements that IBOS makes                  ble to this type of problem.
+for browsers themselves, we compared how well                         Misc: some vulnerabilities could not easily be classi-
+IBOS could contain or prevent vulnerabilities found in             fied and mostly have low security severity. This is the
+Google’s Chrome browser. For this evaluation, we ob-               category for those remaining bugs.
+tained a list of 295 publicly visible bugs with the “se-              In Table 3, we show the detailed results of the analysis
+curity” label in Chrome’s bug tracker. Out of the 295              of the 175 vulnerabilities, broken down by the classifi-
+bugs, 42 cause denial-of-service such as a simple crash or         cations above. We examined each of them to determine
+100% CPU utilization. IBOS does not address denial-of-             whether Chrome contains the threats in the affected com-
+service or resource management currently. An additional            ponents, and whether IBOS contains or eliminates the at-
+78 are either invalid, duplicate, not actually security is-        tacks. The table shows IBOS successfully protects users
+sues, or related to features that IBOS does not have, such         from 135 of the 175 vulnerabilities (77%).
+as browser extensions. For the remaining 175 bugs, we                 The largest portion of bugs are browser implementa-
+examined each of them to the best of our knowledge and             tion flaws that cause memory corruption and allow re-
+classified them into the following seven categories and            mote code execution. Chrome does a fairly good job
+compared how Chrome and IBOS handle those cases:                   containing most of them when they are in the rendering
+
+
+                                                              10
+                                                                                            Chrome              IBOS
+      Category              Example                                                 Num.   Contained   Contained or eliminated
+      Memory exploitation   A bug in layout engine leads to remote code execution    82    71 (86%)           79 (96%)
+      XSS                   XSS issue due to the lack of support for ISO-2022-KR     14    12 (87%)          14 (100%)
+      SOP circumvention     XMLHttpRequest allows loading from another origin        21      0 (0%)          21 (100%)
+      Sandbox bypassing     Sandbox bypassing due to directory traversal             12      0 (0%)          12 (100%)
+      Interface spoofing    Two pages merge together in certain situation             6      0 (0%)           6 (100%)
+      UI design flaw        Plain-text information leak due to autosuggest           17      0 (0%)            0 (0%)
+      Misc                  Geolocation events fire after document deletion          22      0 (0%)           3 (14%)
+      Overall                                                                        175   83 (46%)          135 (77%)
+
+
+Table 3: Browser vulnerabilities. This table shows the number of Chrome vulnerabilities that Chrome itself contains
+and IBOS contains or eliminates.
+
+
+engine. However, Chrome is unable to contain exploits                  mechanism to defend against replay attacks.
+in the browser kernel. A good example is a bug in the                     A Compromised window manager cannot affect other
+HTTP chunked encoding module in the browser kernel,                    subsystems in IBOS. In IBOS, the role of window man-
+which opens the possibility for a remote attacker to inject            ager is simplified to only draw the browser chrome. It
+code. In IBOS, the TCP/IP and HTTP stack is pushed out                 can change some potentially sensitive information, such
+of the TCB, and is replicated and isolated according to                web page titles. However, the IBOS kernel displays the
+browser security policies. Thus, IBOS is able to contain               URL of the current tab in the kernel display area, provid-
+this bug. The three memory corruption bugs IBOS could                  ing users with some visual cues as to the provenance of
+not contain were from bugs in Chrome’s message pass-                   the displayed web content.
+ing system. Because the IBOS message passing logic
+resides within our TCB, we counted these bugs as bugs
+that IBOS would have missed.                                           6.5     Performance
+                                                                       To evaluate the performance implication of IBOS’s ar-
+6.4     Motivation revisited                                           chitecture, we compare its browsing experience to other
+                                                                       web browsers running in Linux. All experiments were
+In the introduction, we listed some examples of attacks                carried out on a 2.33GHz Intel Core 2 Quad CPU
+that an attacker can use to still cause damage to modern               Q8200 with 4GB of memory, a 320GB 7200RPM Sea-
+secure web browsers by exploiting code in their TCB.                   gate ST3320613 SATA hard drive and an Intel PRO/1000
+We revisit these examples again to argue that IBOS can                 NIC connected to 1000 Mbps Ethernet. For Linux, we
+prevent them.                                                          used Ubuntu 9.10 with kernel version 2.6.31-16-generic
+   A compromised Ethernet driver cannot access the                     (x86-64).
+DMA buffers used by the device. Even if an attacker                       We use page load latency to represent browsing ex-
+exploits the Ethernet driver, he or she still cannot tamper            perience. Page load latency is defined as the elapsed
+with network packets because the driver does not have                  time between initial URL request and the DOM onload
+access to DMA buffers and because the IBOS kernel val-                 event. We compare IBOS with Firefox 3.5.9, Chrome
+idates all transmit and receive buffers that the driver sets.          for Linux 4.1.249. We also ported most of the IBOS
+   A compromised storage module has little impact on                   browser components to Linux platform (noted as IBOS-
+data confidentiality and integrity. The IBOS kernel en-                Linux) to focus on the performance impact of our IBOS
+crypts all data with secret keys that only the IBOS ker-               kernel architecture. In IBOS, we statically allocate pro-
+nel has access to. Stored objects are tagged with a hash               cessors for subsystems as follows: the kernel and device
+and origin information so that the IBOS kernel is able                 drivers run on CPU0, network processes run on CPU1,
+to detect tampered data. The only thing a compromised                  web page instances run on CPU2, and all other compo-
+storage module can do is delete objects.                               nents run on CPU3. IBOS, IBOS-Linux, and Chrome all
+   A compromised network stack is constrained as well.                 use a same version of WebKit from February 2010 with
+In IBOS, every network process runs a complete net-                    just-in-time JavaScript compilation and HTTP pipelining
+work stack. A compromised network process cannot                       enabled. For the WebKit-based browsers, we instrument
+send users’ data to a third party host as the IBOS ker-                them to measure the time in between the initial URL re-
+nel ensures it can only communicate with the expected                  quest and the DOM onload event. For Firefox, we use
+host. Network processes do have the ability to modify or               an extension that measures these same events. To reduce
+replay HTTP requests, but the web server might have a                  noise introduced by our network connection, we load
+
+
+                                                                  11
+3,000                               11
+                                    00
+                                    11IBOS
+                                    00                                                     chitecture will not slow down the browsing speed signif-
+                                  11
+                                  0011IBOS−Linux
+                                    00
+                                    00
+                                    11Firefox         11
+                                                      00                                   icantly for the web sites we tested.
+2,500                             00
+                                  11
+                                  00
+                                  11
+                                  11
+                                  00
+                                   11
+                                   00
+                                  00
+                                  1111
+                                    00
+                                       Chrome
+                                                      11
+                                                      00
+                                   11
+                                   00
+                                  00
+                                  1111
+                                    00
+                                   00
+                                   11                                                      7     Additional related work
+2,000                             11
+                                  0011
+                                    00
+                                   11
+                                   00
+                                  11
+                                  0011
+                                    00
+                                   11
+                                   00
+                                  11
+                                  00
+              0
+              1                     11
+                                    00
+1,500         0
+              1
+              0
+              1
+                                   11
+                                   00
+                                  11
+                                  0011
+                                    00
+                                   11
+                                   00
+                                  11
+                                  0011
+                                    00                    01
+              1
+              0
+              0
+              1
+              1
+              0
+              1
+              0
+                                   00
+                                   11
+                                  11
+                                  00
+                                  00
+                                  11
+                                  11
+                                  00
+                                  11
+                                  00
+                                    11
+                                    00
+                                   00
+                                   11
+                                    00
+                                    11
+                                   00
+                                   11
+                                    00
+                                    11
+                                   00
+                                   11
+                                    00
+                                    11
+                                                           0101                            7.1    Alternative kernel architectures
+
+                                                              0101
+1,000
+              0
+              1                    11
+                                   00
+                                  11
+                                  0011
+                                    00                                                     Operating systems designed to reduce the trusted com-
+                                    11 0 1    1
+                                              0
+         10
+         0
+              1
+              0
+              1
+              0
+              1
+              0 00
+                11 11
+                   00 00
+                      11
+                     11
+                     00  00
+                         11
+                        11
+                        0000
+                          11
+                         00
+                         11   00
+                              11
+                                   11
+                                   00
+                                  00
+                                  11
+                                  0000
+                                   00
+                                   11
+                                  11
+                                  00
+                                  1100
+                                    11
+                                   11
+                                   00
+                                         1
+                                         0
+                                         0
+                                         1  1
+                                            0 0
+                                              1
+                                              1
+                                              0                               0101         puting base for applications are not new. For example,
+
+                11 00
+                   11
+              0
+              1       1
+                      0   11
+                          00 11
+                             00
+                              11
+                              00
+                               11
+                               00   11
+                                    00      1
+                                            0
+         0
+         1 1         1
+                     0
+                     11
+                     00  00
+                         11        11
+                                   00
+                                  00
+                                  11     0
+                                         1    1
+                                              0
+                                                                 0101
+ 500
+                        00
+                        11
+                   11 00
+                      11
+         0
+         1 0
+           1  1
+              0       0
+                      1   00
+                          11 00
+                             11
+                              00
+                              11
+                               11
+                               00   00
+                                    11   1
+                                         0  1
+                                            0
+              1 00
+              0    00
+                     1
+                     0
+                     00
+                     11  00
+                         11
+                        00
+                        11         00
+                                   11
+                                  00
+                                  11        101
+                                                                                 01
+         0
+         1 10
+           0  1       1
+                      0   11
+                          00 11
+                             00
+                              11
+                              00
+                               11
+                               00   00
+                                    11   1
+                                         0  0                                              several recent OSes propose using information flow to
+                     1
+                     0
+                     11
+                     00  11
+                         00
+                        11
+                        00         11
+                                   00
+                                  11
+                                  00          0
+                                              1
+   0     10
+         0 10 1
+        Google0
+              1
+              Maps
+                     0
+                     1
+                      00
+                      11
+                      0
+                      1
+                     00
+                     11
+                      0
+                      1  11
+                         00
+                        00
+                        11
+                      Bing
+                          00
+                          11 00
+                             11
+                              00
+                              11
+                          11 00
+                          00 1100
+                               11
+                              00
+                              11
+                                    00
+                                    11
+                                   00
+                                   11
+                                  11
+                                  0000
+                                    11   0
+                                         1  1
+                                            0
+                                            10
+                                            0 1
+                             Craigslist CS@Illinois Wikipedia           Facebook
+                                                                                           allow applications to specify information flow policies
+                                                                                           that are enforced by a thin kernel [18, 57, 33]; KeyKOS
+Figure 4: Page load latencies for IBOS and other web                                       [12], EROS [45], and seL4 [32] provide capability sup-
+browsers. All latencies are shown in milliseconds.                                         port using a small kernel; and Microkernels [24, 27, 28]
+                                                                                           push typical OS components into user space. In IBOS,
+                                                                                           we apply these principles to a new application – the web
+                                                                                           browser – and include support for user interface com-
+each web site using a fresh web page/browser instance                                      ponents and window manager operations. Also, these
+with an empty cache 15 times and report the average of                                     previous approaches support general purpose security
+the five shortest page load latency times.                                                 mechanisms, like information flow and capabilities, and
+   In Figure 4, we present the page load latency times                                     shared resources and device drivers are part of the TCB.
+for six popular websites and show the standard devia-                                      The IBOS security policy is specific to web browsers,
+tions with the error bars. Overall, Chrome has the short-                                  and although this is less general, we can track this pol-
+est page load latencies due to its effective optimization                                  icy to hardware abstractions and can remove drivers and
+techniques. For maps.google.com, IBOS, IBOS-                                               other shared components from our TCB.
+Linux, and Chrome out-perform Firefox, possibly due                                           Both Exokernels [19, 31] and L4 [27] rethink low-
+to optimization in the WebKit engine for this particular                                   layer software abstractions. In both projects, they ad-
+site. For www.bing.com, sfbay.craigslist.                                                  vocate exposing abstractions that are close to the under-
+org and cs.illinois.edu, IBOS, IBOS-Linux,                                                 lying hardware to enable applications to customize for
+and Firefox show roughly the same results. IBOS has the                                    improved performance. In IBOS we build on these pre-
+fastest loading time for craigslist. Craigslist                                            vious works – in fact we use the L4Ka::Pistachio L4 [8]
+is a simple web site with few HTTP requests and with a                                     MMU abstractions and message passing implementation
+large number of HTML elements. We hypothesize that                                         directly. However, the key difference between our work
+the small performance improvement is due to the simpli-                                    and L4 and Exokernel is that we expose high-level ap-
+fied IBOS software stack.                                                                  plication abstractions at our lowest layer of software, not
+   Both en.wikipedia.org/wiki/Main_Page                                                    low-level hardware abstractions. Our focus is on making
+and www.facebook.com have more HTTP requests                                               web browsers more secure and the system software we
+than any of the other sites, and we observe slower page                                    use to accomplish this improved security.
+load latencies for IBOS than for other browsers. For
+these experiments IBOS performs slower than IBOS-
+                                                                                           7.2    Browser security
+Linux. Because we use the IBOS components in Linux,
+we believe that this performance difference occurs from                                    A number of recent papers have proposed new browser
+overhead in the IBOS kernel. To test this hypothesis, we                                   architectures including SubOS [29, 30], safe web pro-
+ran a number of micro benchmarks on the two systems                                        grams [44], OP [26], Chrome [11, 43], Gazelle [52], and
+and we believe that the overhead is due to contention for                                  ServiceOS [38]. Although the browser portion of IBOS
+spinlocks in the L4 IPC implementation. The net effect                                     does resemble some of these works, they all run on top of
+of this contention is that heavy use of network processes                                  commodity OSes and include complex libraries and win-
+requires heavy use of IPC, which adds latency to all IPC                                   dow managers in their TCB, something that IBOS avoids
+messages and slows down the overall system. However,                                       by focusing on the OS architecture of our system.
+the IBOS-Linux results for these experiments show that                                        The webOS from Palm [40] and the upcoming
+this slow down is not fundamental and can be fixed with                                    ChromeOS from Google [25] run a web browser on top
+a more mature kernel implementation.                                                       of a Linux kernel. ChromeOS includes kernel harden-
+   Overall, the page load latency experiments show that                                    ing using trusted boot, mandatory access controls, and
+even with a prototype implementation of IBOS, our ar-                                      sandboxing mechanisms for reducing the attack surface
+
+
+                                                                                      12
+of their system. However, ChromeOS and IBOS have                     7.4    Secure window managers
+fundamentally different design philosophies. ChromeOS
+starts with a large and complex system and tries to re-              A number of recent projects have looked at reducing the
+move and restrict the unused and unneeded portions of                TCB for window managers. For example DoPE [21] and
+the system. In contrast, IBOS starts with a clean slate              Nitpicker [22] move widget rendering from the server
+and only adds to our system functionality needed for                 to the client, leaving the server to only manage shared
+our browser. Although our approach does require im-                  buffers. CMW [56], EWS [46], and TrustGraph [39] also
+plementing from scratch low-level software and fitting               use clients for rendering, but are able to apply capabili-
+device drivers to a new driver model, the end result has 2           ties and mandatory access control policies to application
+to 3 orders of magnitude fewer lines of code in the TCB,             user-interface elements. In IBOS, we deprecate the gen-
+while still retaining nearly all of the same functionality.          eral window notion of modern computer systems in favor
+                                                                     of the simpler browser chrome and tab motif, allowing
+   In the Tahoma browser [15], the authors propose using             us to track our security policies down to the underlying
+virtual machine monitors (VMMs) to enable web appli-                 graphics hardware on our system.
+cations to specify code that runs on the client. Tahoma
+uses server-side manifests to specify the security pol-
+icy for the downloaded code and the VMM enforces                     8     Conclusions
+this security policy. Tahoma does expose a few browser
+abstractions from their VMM to help manage UI ele-                   In this paper, we presented IBOS, an operating system
+ments and network connections, but operates mostly on                and web browser co-designed to reduce drastically the
+hardware-level abstractions. Because Tahoma operates                 trusted computing base for web browsers and to sim-
+on hardware-level abstractions, Tahoma is unable to pro-             plify browsing systems. To achieve this improvement,
+vide full backwards-compatible web semantics from the                we built IBOS with browser abstractions as first-class OS
+VMM and more fine-grained protection for browsers,                   abstractions and removed traditional shared system com-
+such as isolating iframes embedded in a web applica-                 ponents and services from its TCB. With our new archi-
+tion. Also, many modern VMMs use a full-blown com-                   tecture, we showed that IBOS enforced traditional and
+modity OS in a privileged virtual machine or host OS for             novel security policies, and we argued that the overall
+driver support, leaving tens of millions of lines of code            system security and usability could withstand successful
+in the TCB potentially.                                              attacks on device drivers, browser components, or tradi-
+                                                                     tional applications. Our experimental results showed that
+                                                                     IBOS added little overhead when compared to today’s
+                                                                     high-performance browsers running on fast and mature
+                                                                     commodity operating systems.
+7.3    Device driver security
+                                                                     Acknowledgment
+Device driver security has focused on three main topics.             We would like to thank Brad Chen, Steve Gribble, and
+First, several projects focus on restricting driver access to        Hank Levy for their feedback on our security analy-
+I/O ports and device access to main memory via DMA.                  sis. We would also like to thank our shepherd Nickolai
+For example, RVM uses a software-only approach to re-                Zeldovich, Anthony Cozzie, and Matt Hicks who pro-
+strict DMA access of devices [55], SVA prevents the OS               vided valuable feedback on this paper. This research
+from accessing driver registers via memory mapped I/O                was funded in part by NSF grants CNS 0834738 and
+through memory safety checks [16], and Mungi [35] re-                CNS 0831212, grant N0014-09-1-0743 from the Office
+lies on using a hardware IOMMU to limit which mem-                   of Naval Research, AFOSR MURI grant FA9550-09-01-
+ory regions are accessible from devices. Second, sys-                0539, and by a grant from the Internet Services Research
+tem designers isolate drivers from the rest of the system.           Center (ISRC) of Microsoft Research.
+This isolation can be achieved by running drivers in user-
+mode, which has been a staple of Microkernel systems
+[24, 36, 28], using software to protect the OS from ker-             References
+nel drivers [20, 58], or by using page table protections              [1] CVE - Common Vulnerabilities and Exposures (CVE). http:
+within the OS [49, 48]. The driver security architec-                     //cve.mitre.org.
+ture in IBOS differs from these approaches because our                [2] Gecko plugin API reference. https://developer.
+system provides fine-grained protection for individual re-                mozilla.org/en/Gecko_Plugin_API_Reference.
+quests within a shared driver in addition to isolating the            [3] Qt - A Cross-platform application and UI.   http://qt.
+driver from the rest of the system.                                       nokia.com/.
+
+
+                                                                13
+ [4] Symantec internet security threat report april 2010.                     [21] F ESKE , N., AND H ÄRTIG , H. DOpE - a window server for real-
+     http://www.symantec.com/business/theme.                                       time and embedded systems. In RTSS ’03: Proceedings of the
+     jsp?themeid=threatreport.                                                     24th IEEE International Real-Time Systems Symposium (Wash-
+                                                                                   ington, DC, USA, 2003), IEEE Computer Society, p. 74.
+ [5] The WebKit Open Source Project. http://webkit.org/.
+                                                                              [22] F ESKE , N., AND H ELMUTH , C. A Nitpicker’s guide to a
+ [6] uClibc. http://www.uclibc.org/.                                               minimal-complexity secure GUI. In ACSAC ’05: Proceedings
+ [7] Qt labs blogs: So long and thanks for the blit, 2008.                         of the 21st Annual Computer Security Applications Conference
+     http://labs.trolltech.com/blogs/2008/10/                                      (Washington, DC, USA, 2005), IEEE Computer Society, pp. 85–
+     22/so-long-and-thanks-for-the-blit/.                                          94.
+
+ [8] L4Ka::Pistachio microkernel, 2010.       http://l4ka.org/                [23] G ARFINKEL , T. Traps and Pitfalls: Practical Problems in Sys-
+     projects/pistachio.                                                           tem Call Interposition Based Security Tools. In Proceedings of
+                                                                                   the 2003 Network and Distributed System Security Symposium
+ [9] A NDERSON , J. P. Computer security technology planning study.                (NDSS) (February 2003).
+     Tech. rep., HQ Electronic Systems Division (AFSC), October
+                                                                              [24] G OLUB , D., D EAN , R., F ORIN , A., AND R ASHID , R. Unix
+     1972. ESD-TR-73-51.
+                                                                                   as an Application Program. In Proceedings of the 1990 USENIX
+[10] BARTH , A., C ABALLERO , J., AND S ONG , D. Secure content                    Summer Conference (1990).
+     sniffing for web browsers or how to stop papers from reviewing           [25] G OOGLE I NC . Chromium OS, 2010.               http://www.
+     themselves. In Proceedings of the IEEE Symposium on Security                  chromium.org/chromium-os.
+     and Privacy (May 2009).
+                                                                              [26] G RIER , C., TANG , S., AND K ING , S. T. Secure web brows-
+[11] BARTH , A., JACKSON , C., R EIS , C., AND T HE                                ing with the OP web browser. In Proceedings of the 2008 IEEE
+     G OOGLE C HROME T EAM.          The security archi-                           Symposium on Security and Privacy (May 2008), pp. 402–416.
+     tecture of the chromium browser, 2008.      http:
+                                                                              [27] H ÄRTIG , H., H OHMUTH , M., L IEDTKE , J., W OLTER , J., AND
+     //crypto.stanford.edu/websec/chromium/
+                                                                                   S CH ÖNBERG , S. The performance of µ-kernel-based systems. In
+     chromium-security-architecture.pdf.
+                                                                                   SOSP ’97: Proceedings of the sixteenth ACM Symposium on Op-
+[12] B OMBERGER , A. C., F RANTZ , W. S., H ARDY, A. C., H ARDY,                   erating Systems Principles (New York, NY, USA, 1997), ACM,
+     N., L ANDAU , C. R., AND S HAPIRO , J. S. The KeyKOS nanok-                   pp. 66–77.
+     ernel architecture. In Proceedings of the Workshop on Micro-             [28] H ERDER , J. N., B OS , H., G RAS , B., H OMBURG , P., AND
+     kernels and Other Kernel Architectures (Berkeley, CA, USA,                    TANENBAUM , A. S. MINIX 3: a highly reliable, self-repairing
+     1992), USENIX Association, pp. 95–112.                                        operating system. SIGOPS Oper. Syst. Rev. 40, 3 (2006), 80–89.
+[13] C HEN , S., M ESEGUER , J., S ASSE , R., WANG , H. J., AND               [29] I OANNIDIS , S., AND B ELLOVIN , S. M. Building a secure web
+     WANG , Y.-M. A systematic approach to uncover security flaws                  browser. In Proceedings of the FREENIX Track: 2001 USENIX
+     in GUI logic. In Proceedings of the 2007 IEEE Symposium on                    Annual Technical Conference (June 2001).
+     Security and Privacy (May 2007), pp. 71–85.
+                                                                              [30] I OANNIDIS , S., B ELLOVIN , S. M., AND S MITH , J. Sub-
+[14] C HEN , S., ROSS , D., AND WANG , Y.-M. An analysis of                        operating systems: A new approach to application security. In
+     browser domain-isolation bugs and a light-weight transparent de-              SIGOPS European Workshop (September 2002).
+     fense mechanism. In Proceedings of the 14th ACM Conference on            [31] K AASHOEK , M. F., E NGLER , D. R., G ANGER , G. R.,
+     Computer and Communications Security (CCS) (2007), pp. 2–11.                  B RICE ÑO , H. M., H UNT, R., M AZI ÈRES , D., P INCKNEY, T.,
+[15] C OX , R. S., H ANSEN , J. G., G RIBBLE , S. D., AND L EVY,                   G RIMM , R., JANNOTTI , J., AND M ACKENZIE , K. Application
+     H. M. A safety-oriented platform for web applications. In Pro-                performance and flexibility on exokernel systems. In SOSP ’97:
+     ceedings of the 2006 IEEE Symposium on Security and Privacy                   Proceedings of the sixteenth ACM symposium on Operating sys-
+     (May 2006), pp. 350–364.                                                      tems principles (New York, NY, USA, 1997), ACM, pp. 52–65.
+
+[16] C RISWELL , J., G EOFFRAY, N., AND A DVE , V. Memory safety              [32] K LEIN , G., E LPHINSTONE , K., H EISER , G., A NDRONICK , J.,
+     for low-level software/hardware interactions. In Proceedings of               C OCK , D., D ERRIN , P., E LKADUWE , D., E NGELHARDT, K.,
+     the Eighteenth Usenix Security Symposium (August 2009).                       KOLANSKI , R., N ORRISH , M., S EWELL , T., T UCH , H., AND
+                                                                                   W INWOOD , S. seL4: formal verification of an os kernel. In
+[17] D UNKELS , A., W OESTENBERG , L., M ANSLEY, K.,                               SOSP ’09: Proceedings of the ACM SIGOPS 22nd symposium
+     AND M ONOSES , J.            lwIP embedded TCP/IP stack.                      on Operating systems principles (New York, NY, USA, 2009),
+     http://savannah.nongnu.org/projects/lwip/, 2004.                              ACM, pp. 207–220.
+[18] E FSTATHOPOULOS , P., K ROHN , M., VAN D E B OGART, S.,                  [33] K ROHN , M., Y IP, A., B RODSKY, M., C LIFFER , N.,
+     F REY, C., Z IEGLER , D., KOHLER , E., M AZI ÈRES , D.,                      K AASHOEK , M. F., KOHLER , E., AND M ORRIS , R. Informa-
+     K AASHOEK , F., AND M ORRIS , R. Labels and event processes                   tion flow control for standard OS abstractions. In SOSP ’07: Pro-
+     in the asbestos operating system. In SOSP ’05: Proceedings of                 ceedings of twenty-first ACM Symposium on Operating Systems
+     the Twentieth ACM Symposium on Operating Systems Principles                   Principles (New York, NY, USA, 2007), ACM, pp. 321–334.
+     (New York, NY, USA, 2005), ACM, pp. 17–30.                               [34] L AWRENCE , E.       Combating clickjacking with x-
+[19] E NGLER , D. R., K AASHOEK , M. F., AND J R ., J. O. Exok-                    frame-options, March 2010.    http://blogs.msdn.
+     ernel: an operating system architecture for application-level re-             com/b/ieinternals/archive/2010/03/30/
+     source management. In Proceedings of the 1995 Symposium on                    combating-clickjacking-with-x-frame-options.
+     Operating Systems Principles (December 1995), pp. 251–266.                    aspx.
+
+[20] E RLINGSSON , U., A BADI , M., V RABLE , M., B UDIU , M., AND            [35] L ESLIE , B., AND H EISER , G. Towards untrusted device drivers.
+     N ECULA , G. C. Xfi: software guards for system address spaces.               Tech. rep., UNSW-CSE-TR-0303, 2003.
+     In OSDI ’06: Proceedings of the 7th symposium on Operating               [36] L E VASSEUR , J., U HLIG , V., S TOESS , J., AND G OTZ , S. Un-
+     systems design and implementation (Berkeley, CA, USA, 2006),                  modified Device Driver Reuse and Improved System Dependabil-
+     USENIX Association, pp. 75–88.                                                ity via Virtual Machines. In Proceedings of the 2004 Symposium
+
+
+                                                                         14
+     on Operating Systems Design and Implementation (OSDI) (De-               [53] WANG , Y.-M., B ECK , D., J IANG , X., ROUSSEV, R., V ER -
+     cember 2004).                                                                 BOWSKI , C., C HEN , S., AND K ING , S. Automated Web Pa-
+                                                                                   trol with Strider HoneyMonkeys: Finding Web sites that exploit
+[37] M OSHCHUK , A., B RAGIN , T., G RIBBLE , S. D., AND L EVY,
+                                                                                   browser vulnerabilities. In Proceedings of the 2006 Network and
+     H. M. A crawler-based study of spyware on the web. In Pro-
+                                                                                   Distributed System Security Symposium (NDSS) (February 2006).
+     ceedings of the 2006 Network and Distributed System Security
+     Symposium (NDSS) (February 2006).                                        [54] W HEELER , D. SLOCcount, 2009. http://www.dwheeler.
+                                                                                   com/sloccount/.
+[38] M OSHCHUK , A., AND WANG , H. J. Resource Management for
+     Web Applications in ServiceOS. Tech. rep., Microsoft Research,           [55] W ILLIAMS , D., R EYNOLDS , P., WALSH , K., S IRER , E. G.,
+     May 2010.                                                                     AND S CHNEIDER , F. B. Device driver safety through a reference
+                                                                                   validation mechanism. In OSDI 08: Proceedings of the 8th sym-
+[39] O KHRAVI , H., AND N ICOL , D. M. Trustgraph: Trusted graphics
+                                                                                   posium on operating systems design and implementation (2008).
+     subsystem for high assurance systems. In ACSAC ’09: Proceed-
+     ings of the 2009 Annual Computer Security Applications Con-              [56] W OODWARD , J. P. Security requirementes for systems high and
+     ference (Washington, DC, USA, 2009), IEEE Computer Society,                   compartemented mode workstations. Tech. rep., MITRE Corp.,
+     pp. 254–265.                                                                  1987. MTR 9992.
+[40] PALM I NC . webOS, 2010. http://opensource.palm.                         [57] Z ELDOVICH , N., B OYD -W ICKIZER , S., KOHLER , E., AND
+     com.                                                                          M AZI ÈRES , D. Making information flow explicit in HiStar.
+                                                                                   In OSDI ’06: Proceedings of the 7th symposium on Operating
+[41] P ROVOS , N., M AVROMMATIS , P., R AJAB , M. A., AND M ON -                   systems design and implementation (Berkeley, CA, USA, 2006),
+     ROSE , F. All your iFRAMEs point to us. In Proceedings of the
+                                                                                   USENIX Association, pp. 263–278.
+     17th Usenix Security Symposium (July 2008), pp. 1–15.
+                                                                              [58] Z HOU , F., C ONDIT, J., A NDERSON , Z., BAGRAK , I., E N -
+[42] P ROVOS , N., M C NAMEE , D., M AVROMMATIS , P., WANG , K.,                   NALS , R., H ARREN , M., N ECULA , G., AND B REWER , E.
+     AND M ODADUGU , N. The ghost in the browser: Analysis of                      Safedrive: safe and recoverable extensions using language-based
+     Web-based malware. In Proceedings of the 2007 Workshop on                     techniques. In OSDI ’06: Proceedings of the 7th symposium
+     Hot Topics in Understanding Botnets (HotBots) (April 2007).                   on Operating systems design and implementation (Berkeley, CA,
+[43] R EIS , C., AND G RIBBLE , S. D. Isolating web programs in mod-               USA, 2006), USENIX Association, pp. 45–60.
+     ern browser architectures. In Proceedings of the 2009 EuroSys
+     conference (2009).
+[44] R EIS , C., G RIBBLE , S. D., AND L EVY, H. M. Architec-
+     tural principles for safe web programs. In Proceedings of the
+     Sixth Workshop on Hot Topics in Networks (HotNets) (November
+     2007).
+[45] S HAPIRO , J. S., S MITH , J. M., AND FARBER , D. J. EROS:
+     a fast capability system. In SOSP ’99: Proceedings of the sev-
+     enteenth ACM symposium on Operating systems principles (New
+     York, NY, USA, 1999), ACM, pp. 170–185.
+[46] S HAPIRO , J. S., VANDERBURGH , J., N ORTHUP, E., AND C HIZ -
+     MADIA , D. Design of the EROS trusted window system. In Pro-
+     ceedings of the 13th conference on USENIX Security Symposium
+     (Berkeley, CA, USA, 2004), USENIX Association, pp. 12–12.
+[47] S INGH , K., M OSHCHUK , A., WANG , H. J., AND L EE , W. On
+     the incoherencies in web browser access control policies. In Pro-
+     ceedings of the IEEE Symposium on Security and Privacy (May
+     2010).
+[48] S WIFT, M. M., A NNAMALAI , M., B ERSHAD , B. N., AND
+     L EVY, H. M. Recovering Device Drivers. In Proceedings of
+     the 2004 Symposium on Operating Systems Design and Imple-
+     mentation (OSDI) (December 2004).
+[49] S WIFT, M. M., B ERSHAD , B. N., AND L EVY, H. M. Improv-
+     ing the reliability of commodity operating systems. In SOSP ’03:
+     Proceedings of the nineteenth ACM symposium on Operating sys-
+     tems principles (New York, NY, USA, 2003), ACM, pp. 207–222.
+[50] S YMANTEC I NC . Symantec global Internet security threat report:
+     Trends for 2008, April 2009. http://www.symantec.com/
+     business/theme.jsp?themeid=threatreport.
+[51] TAN , L., Z HANG , X., M A , X., X IONG , W., AND Z HOU , Y. Au-
+     toISES: Automatically inferring security specifications and de-
+     tecting violations. In Proceedings of the 17th USENIX Security
+     Symposium (USENIX Security ’08) (July-August 2008).
+[52] WANG , H. J., G RIER , C., M OSHCHUK , A., K ING , S. T.,
+     C HOUDHURY, P., AND V ENTER , H. The multi-principal OS
+     construction of the Gazelle web browser. In Proceedings of the
+     2009 USENIX Security Symposium (August 2009).
+
+
+                                                                         15
+

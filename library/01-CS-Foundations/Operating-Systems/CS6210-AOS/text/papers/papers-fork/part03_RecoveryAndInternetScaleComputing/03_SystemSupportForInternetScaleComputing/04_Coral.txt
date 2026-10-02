@@ -1,0 +1,976 @@
+                         Democratizing content publication with Coral
+                           Michael J. Freedman, Eric Freudenthal, David Mazières
+                                           New York University
+                              http://www.scs.cs.nyu.edu/coral/
+
+Abstract                                                             stream bandwidth utilization and improve the latency for
+                                                                     local users accessing the mirror.
+CoralCDN is a peer-to-peer content distribution network
+                                                                        This paper describes CoralCDN, a decentralized, self-
+that allows a user to run a web site that offers high
+                                                                     organizing, peer-to-peer web-content distribution net-
+performance and meets huge demand, all for the price of
+                                                                     work. CoralCDN leverages the aggregate bandwidth of
+a cheap broadband Internet connection. Volunteer sites
+                                                                     volunteers running the software to absorb and dissipate
+that run CoralCDN automatically replicate content as
+                                                                     most of the traffic for web sites using the system. In so do-
+a side effect of users accessing it. Publishing through
+                                                                     ing, CoralCDN replicates content in proportion to the con-
+CoralCDN is as simple as making a small change to the
+                                                                     tent’s popularity, regardless of the publisher’s resources—
+hostname in an object’s URL; a peer-to-peer DNS layer
+                                                                     in effect democratizing content publication.
+transparently redirects browsers to nearby participating
+                                                                        To use CoralCDN, a content publisher—or some-
+cache nodes, which in turn cooperate to minimize load on
+                                                                     one posting a link to a high-traffic portal—simply ap-
+the origin web server. One of the system’s key goals is
+                                                                     pends “.nyud.net:8090” to the hostname in a URL.
+to avoid creating hot spots that might dissuade volunteers
+                                                                     Through DNS redirection, oblivious clients with unmod-
+and hurt performance. It achieves this through Coral,
+                                                                     ified web browsers are transparently redirected to nearby
+a latency-optimized hierarchical indexing infrastructure
+                                                                     Coral web caches. These caches cooperate to transfer data
+based on a novel abstraction called a distributed sloppy
+                                                                     from nearby peers whenever possible, minimizing both
+hash table, or DSHT.
+                                                                     the load on the origin web server and the end-to-end la-
+                                                                     tency experienced by browsers.
+1 Introduction                                                          CoralCDN is built on top of a novel key/value indexing
+The availability of content on the Internet is to a large de-        infrastructure called Coral. Two properties make Coral
+gree a function of the cost shouldered by the publisher. A           ideal for CDNs. First, Coral allows nodes to locate nearby
+well-funded web site can reach huge numbers of people                cached copies of web objects without querying more dis-
+through some combination of load-balanced servers, fast              tant nodes. Second, Coral prevents hot spots in the in-
+network connections, and commercial content distribu-                frastructure, even under degenerate loads. For instance,
+tion networks (CDNs). Publishers who cannot afford such              if every node repeatedly stores the same key, the rate of
+amenities are limited in the size of audience and type of            requests to the most heavily-loaded machine is still only
+content they can serve. Moreover, their sites risk sudden            logarithmic in the total number of nodes.
+overload following publicity, a phenomenon nicknamed                    Coral exploits overlay routing techniques recently pop-
+the “Slashdot” effect, after a popular web site that period-         ularized by a number of peer-to-peer distributed hash ta-
+ically links to under-provisioned servers, driving unsus-            bles (DHTs). However, Coral differs from DHTs in sev-
+tainable levels of traffic to them. Thus, even struggling            eral ways. First, Coral’s locality and hot-spot prevention
+content providers are often forced to expend significant             properties are not possible for DHTs. Second, Coral’s
+resources on content distribution.                                   architecture is based on clusters of well-connected ma-
+   Fortunately, at least with static content, there is an easy       chines. Clusters are exposed in the interface to higher-
+way for popular data to reach many more people than                  level software, and in fact form a crucial part of the DNS
+publishers can afford to serve themselves—volunteers can             redirection mechanism. Finally, to achieve its goals, Coral
+mirror the data on their own servers and networks. In-               provides weaker consistency than traditional DHTs. For
+deed, the Internet has a long history of organizations with          that reason, we call its indexing abstraction a distributed
+good network connectivity mirroring data they consider to            sloppy hash table, or DSHT.
+be of value. More recently, peer-to-peer file sharing has               CoralCDN makes a number of contributions. It enables
+demonstrated the willingness of even individual broad-               people to publish content that they previously could not or
+band users to dedicate upstream bandwidth to redistribute            would not because of distribution costs. It is the first com-
+content the users themselves enjoy. Additionally, orga-              pletely decentralized and self-organizing web-content dis-
+nizations that mirror popular content reduce their down-             tribution network. Coral, the indexing infrastructure, pro-
+
+
+                                                                 1
+vides a new abstraction potentially of use to any applica-                                    Coral                                   Coral
+                                                                                             dns srv                                 dns srv
+tion that needs to locate nearby instances of resources on                                   http prx       Coral          Coral
+                                                                                                                                     http prx
+the network. Coral also introduces an epidemic clustering                                                  dns srv        dns srv
+                                                                                   Coral                   http prx       http prx
+algorithm that exploits distributed network measurements.                         dns srv
+Furthermore, Coral is the first peer-to-peer key/value in-                        http prx                                               8, 11
+dex that can scale to many stores of the same key without                                      4                 4
+hot-spot congestion, thanks to a new rate-limiting tech-                                                                   9      Coral
+                                                                                              Coral
+nique. Finally, CoralCDN contains the first peer-to-peer                                                                         dns srv
+                                                                                             dns srv                            http prx
+DNS redirection infrastructure, allowing the system to                                                                3
+inter-operate with unmodified web browsers.                                                  http prx
+                                                                                                              2           www.x.com 7
+   Measurements of CoralCDN demonstrate that it al-                                          www.x.com                   .nyud.net/
+lows under-provisioned web sites to achieve dramatically                                       .nyud.net
+                                                                                                               5                    10
+higher capacity, and its clustering provides quantitatively                                                            1 6
+                                                                                                              Resolver        Browser
+better performance than locality-unaware systems.
+   The remainder of this paper is structured as follows.
+Section 2 provides a high-level description of CoralCDN,                        Figure 1: Using CoralCDN, the steps involved in resolving a
+and Section 3 describes its DNS system and web caching                          Coralized URL and returning the corresponding fi le, per Sec-
+components. In Section 4, we describe the Coral index-                          tion 2.2. Rounded boxes represent CoralCDN nodes running
+ing infrastructure, its underlying DSHT layers, and the                         Coral, DNS, and HTTP servers. Solid arrows correspond to
+clustering algorithms. Section 5 includes an implementa-                        Coral RPCs, dashed arrows to DNS traffi c, dotted-dashed arrows
+tion overview and Section 6 presents experimental results.                      to network probes, and dotted arrows to HTTP traffi c.
+Section 7 describes related work, Section 8 discusses fu-
+ture work, and Section 9 concludes.
+                                                                                     web sites. All relative links and HTTP redirects are
+                                                                                     automatically Coralized.
+2 The Coral Content Distribution Network
+The Coral Content Distribution Network (CoralCDN) is                            2.2 System Overview
+composed of three main parts: (1) a network of coop-
+erative HTTP proxies that handle users’ requests,1 (2) a                        Figure 1 shows the steps that occur when a client accesses
+network of DNS nameservers for nyucd.net that map                               a Coralized URL, such as http://www.x.com.
+clients to nearby Coral HTTP proxies, and (3) the under-                        nyud.net:8090/, using a standard web browser. The
+lying Coral indexing infrastructure and clustering machin-                      two main stages—DNS redirection and HTTP request
+ery on which the first two applications are built.                              handling—both use the Coral indexing infrastructure.
+
+2.1 Usage Models                                                                  1. A client sends a DNS request for www.x.com.
+                                                                                     nyud.net to its local resolver.
+To enable immediate and incremental deployment, Coral-                            2. The client’s resolver attempts to resolve the host-
+CDN is transparent to clients and requires no software or                            name using some Coral DNS server(s), possibly
+plug-in installation. CoralCDN can be used in a variety of                           starting at one of the few registered under the .net
+ways, including:                                                                     domain.
+                                                                                  3. Upon receiving a query, a Coral DNS server probes
+   • Publishers. A web site publisher for x.com can
+                                                                                     the client to determines its round-trip-time and last
+     change selected URLs in their web pages to “Cor-
+                                                                                     few network hops.
+     alized” URLs, such as http://www.x.com.
+                                                                                  4. Based on the probe results, the DNS server checks
+     nyud.net:8090/y.jpg.
+                                                                                     Coral to see if there are any known nameservers
+   • Third-parties. An interested third-party—e.g., a                                and/or HTTP proxies near the client’s resolver.
+     poster to a web portal or a Usenet group—can Coral-                          5. The DNS server replies, returning any servers found
+     ize a URL before publishing it, causing all embedded                            through Coral in the previous step; if none were
+     relative links to use CoralCDN as well.                                         found, it returns a random set of nameservers and
+   • Users. Coral-aware users can manually construct                                 proxies. In either case, if the DNS server is close to
+     Coralized URLs when surfing slow or overloaded                                  the client, it only returns nodes that are close to itself
+     1 While Coral’s HTTP proxy defi nitely provides proxy functionality,
+                                                                                     (see Section 3.1).
+it is not an HTTP proxy in the strict RFC2616 sense; it serves requests           6. The client’s resolver returns the address of a Coral
+that are syntactically formatted for an ordinary HTTP server.                        HTTP proxy for www.x.com.nyud.net.
+
+                                                                            2
+ 7. The client sends the HTTP request http://www.                    • nodes(level , count, [target], [services]): Returns
+    x.com.nyud.net:8090/ to the specified proxy.                       count neighbors belonging to the node’s cluster as
+    If the proxy is caching the file locally, it returns the           specified by level . target, if supplied, specifies the
+    file and stops. Otherwise, this process continues.                 IP address of a machine to which the returned nodes
+ 8. The proxy looks up the web object’s URL in Coral.                  would ideally be near. Coral can probe target and
+ 9. If Coral returns the address of a node caching the                 exploit network topology hints stored in the DSHT
+    object, the proxy fetches the object from this node.               to satisfy the request. If services is specified, Coral
+    Otherwise, the proxy downloads the object from the                 will only return nodes running the particular service,
+    origin server, www.x.com (not shown).                              e.g., an HTTP proxy or DNS server.
+10. The proxy stores the web object and returns it to the            • levels(): Returns the number of levels in Coral’s hi-
+    client browser.                                                    erarchy and their corresponding RTT thresholds.
+11. The proxy stores a reference to itself in Coral,
+    recording the fact that is now caching the URL.                   The next section describes the design of CoralCDN’s
+                                                                   DNS redirector and HTTP proxy—especially with regard
+2.3 The Coral Indexing Abstraction                                 to their use of Coral’s DSHT abstraction and clustering
+                                                                   hierarchy—before returning to Coral in Section 4.
+This section introduces the Coral indexing infrastructure
+as used by CoralCDN. Coral provides a distributed sloppy           3 Application-Layer Components
+hash table (DSHT) abstraction. DSHTs are designed for
+                                                                   The Coral DNS server directs browsers fetching Coralized
+applications storing soft-state key/value pairs, where mul-
+                                                                   URLs to Coral HTTP proxies, attempting to find ones near
+tiple values may be stored under the same key. Coral-
+                                                                   the requesting client. These HTTP proxies exploit each
+CDN uses this mechanism to map a variety of types of
+                                                                   others’ caches in such a way as to minimize both transfer
+key onto addresses of CoralCDN nodes. In particular, it
+                                                                   latency and the load on origin web servers.
+uses DSHTs to find Coral nameservers topologically close
+clients’ networks, to find HTTP proxies caching particu-
+                                                                   3.1 The Coral DNS server
+lar web objects, and to locate nearby Coral nodes for the
+purposes of minimizing internal request latency.                   The Coral DNS server, dnssrv, returns IP addresses of
+   Instead of one global overlay as in [5, 14, 27], each           Coral HTTP proxies when browsers look up the host-
+Coral node belongs to several distinct DSHTs called clus-          names in Coralized URLs. To improve locality, it at-
+ters. Each cluster is characterized by a maximum desired           tempts to return proxies near requesting clients. In partic-
+network round-trip-time (RTT) we call the diameter. The            ular, whenever a DNS resolver (client) contacts a nearby
+system is parameterized by a fixed hierarchy of diameters          dnssrv instance, dnssrv both returns proxies within an ap-
+known as levels. Every node is a member of one DSHT                propriate cluster, and ensures that future DNS requests
+at each level. A group of nodes can form a level-i cluster         from that client will not need to leave the cluster. Using
+if a high-enough fraction their pair-wise RTTs are below           the nodes function, dnssrv also exploits Coral’s on-the-
+the level-i diameter threshold. Although Coral’s imple-            fly network measurement capabilities and stored topology
+mentation allows for an arbitrarily-deep DSHT hierarchy,           hints to increase the chances of clients discovering nearby
+this paper describes a three-level hierarchy with thresh-          DNS servers.
+olds of ∞, 60 msec, and 20 msec for level-0, -1, and -2               More specifically, every instance of dnssrv is an au-
+clusters respectively. Coral queries nodes in higher-level,        thoritative nameserver for the domain nyucd.net. As-
+fast clusters before those in lower-level, slower clusters.        suming a 3-level hierarchy, as Coral is generally config-
+This both reduces the latency of lookups and increases             ured, dnssrv maps any domain name ending http.L2.
+the chances of returning values stored by nearby nodes.            L1.L0.nyucd.net to one or more Coral HTTP prox-
+   Coral provides the following interface to higher-level          ies. (For an (n + 1)-level hierarchy, the domain name
+applications:                                                      is extended out to Ln in the obvious way.) Because
+                                                                   such names are somewhat unwieldy, we established a
+  • put(key , val , ttl, [levels]): Inserts a mapping from         DNS DNAME alias [4], nyud.net, with target http.
+    the key to some arbitrary value, specifying the time-          L2.L1.L0.nyucd.net. Any domain name ending
+    to-live of the reference. The caller may optionally            nyud.net is therefore equivalent to the same name with
+    specify a subset of the cluster hierarchy to restrict          suffix http.L2.L1.L0.nyucd.net, allowing Cor-
+    the operation to certain levels.                               alized URLs to have the more concise form http://
+  • get (key, [levels]): Retrieves some subset of the val-         www.x.com.nyud.net:8090/.
+    ues stored under a key. Again, one can optionally                 dnssrv assumes that web browsers are generally close
+    specify a subset of the cluster hierarchy.                     to their resolvers on the network, so that the source ad-
+
+                                                               3
+dress of a DNS query reflects the browser’s network lo-                old, it returns nameservers for L1.L0.nyucd.net. For
+cation. This assumption holds to varying degrees, but is               clients closer than the level-2 threshold, it returns name-
+good enough that Akamai [12], Digital Island [6], and                  servers for domain L2.L1.L0.nyucd.net. Because
+Mirror Image [21] have all successfully deployed com-                  DNS resolvers query the servers for the most specific
+mercial CDNs based on DNS redirection. The locality                    known domain, this scheme allows closer dnssrv instances
+problem therefore is reduced to returning proxies that are             to override the results of more distant ones.
+near the source of a DNS request. In order to achieve lo-                 Unfortunately, although resolvers can tolerate a frac-
+cality, dnssrv measures its round-trip-time to the resolver            tion of unavailable DNS servers, browsers do not han-
+and categorizes it by level. For a 3-level hierarchy, the re-          dle bad HTTP servers gracefully. (This is one reason for
+solver will correspond to a level 2, level 1, or level 0 client,       returning CoralProxy addresses with short TTL fields.)
+depending on how its RTT compares to Coral’s cluster-                  As an added precaution, dnssrv only returns CoralProxy
+level thresholds.                                                      addresses which it has recently verified first-hand. This
+   When asked for the address of a hostname ending                     sometimes means synchronously checking a proxy’s sta-
+http.L2.L1.L0.nyucd.net, dnssrv’s reply con-                           tus (via a UDP RPC) prior replying to a DNS query. We
+tains two sections of interest: A set of addresses for the             note further that people who wish to contribute only up-
+name—answers to the query—and a set of nameservers                     stream bandwidth can flag their proxy as “non-recursive,”
+for that name’s domain—known as the authority section                  in which case dnssrv will only return that proxy to clients
+of a DNS reply. dnssrv returns addresses of CoralProx-                 on local networks.
+ies in the cluster whose level corresponds to the client’s
+level categorization. In other words, if the RTT between               3.2 The Coral HTTP proxy
+the DNS client and dnssrv is below the level-i threshold
+(for the best i), dnssrv will only return addresses of Coral           The Coral HTTP proxy, CoralProxy, satisfies HTTP re-
+nodes in its level-i cluster. dnssrv obtains a list of such            quests for Coralized URLs. It seeks to provide reasonable
+nodes with the nodes function. Note that dnssrv always re-             request latency and high system throughput, even while
+turns CoralProxy addresses with short time-to-live fields              serving data from origin servers behind comparatively
+(30 seconds for levels 0 and 1, 60 for level 2).                       slow network links such as home broadband connections.
+   To achieve better locality, dnssrv also specifies the               This design space requires particular care in minimiz-
+client’s IP address as a target argument to nodes. This                ing load on origin servers compared to traditional CDNs,
+causes Coral to probe the addresses of the last five net-              for two reasons. First, many of Coral’s origin servers
+work hops to the client and use the results to look for                are likely to have slower network connections than typ-
+clustering hints in the DSHTs. To avoid significantly de-              ical customers of commercial CDNs. Second, commer-
+laying clients, Coral maps these network hops using a fast,            cial CDNs often collocate a number of machines at each
+built-in traceroute-like mechanism that combines concur-               deployment site and then select proxies based in part on
+rent probes and aggressive time-outs to minimize latency.              the URL requested—effectively distributing URLs across
+The entire mapping process generally requires around 2                 proxies. Coral, in contrast, selects proxies only based on
+RTTs and 350 bytes of bandwidth. A Coral node caches                   client locality. Thus, in CoralCDN, it is much easier for
+results to avoid repeatedly probing the same client.                   every single proxy to end up fetching a particular URL.
+   The closer dnssrv is to a client, the better its selection of          To aggressively minimize load on origin servers, a
+CoralProxy addresses will likely be for the client. dnssrv             CoralProxy must fetch web pages from other proxies
+therefore exploits the authority section of DNS replies to             whenever possible. Each proxy keeps a local cache from
+lock a DNS client into a good cluster whenever it happens              which it can immediately fulfill requests. When a client
+upon a nearby dnssrv. As with the answer section, dnssrv               requests a non-resident URL, CoralProxy first attempts
+selects the nameservers it returns from the appropriate                to locate a cached copy of the referenced resource using
+cluster level and uses the target argument to exploit mea-             Coral (a get ), with the resource indexed by a SHA-1 hash
+surement and network hints. Unlike addresses in the an-                of its URL [22]. If CoralProxy discovers that one or more
+swer section, however, it gives nameservers in the author-             other proxies have the data, it attempts to fetch the data
+ity section a long TTL (one hour). A nearby dnssrv must                from the proxy to which it first connects. If Coral provides
+therefore override any inferior nameservers a DNS client               no referrals or if no referrals return the data, CoralProxy
+may be caching from previous queries. dnssrv does so by                must fetch the resource directly from the origin.
+manipulating the domain for which returned nameservers                    While CoralProxy is fetching a web object—either
+are servers. To clients more distant than the level-1 timing           from the origin or from another CoralProxy—it inserts a
+threshold, dnssrv claims to return nameservers for domain              reference to itself in its DSHTs with a time-to-live of 20
+L0.nyucd.net. For clients closer than that thresh-                     seconds. (It will renew this short-lived reference until it
+                                                                       completes the download.) Thus, if a flash crowd suddenly
+
+                                                                   4
+fetches a web page, all CoralProxies, other than the first            nodeids
+simultaneous requests, will naturally form a kind of mul-               4 5               7        0              2     3           13 14
+ticast tree for retrieving the web page. Once any Coral-              distance (nodeids xor 4)                           target 5
+Proxy obtains the full file, it inserts a much longer-lived
+reference to itself (e.g., 1 hour). Because the insertion al-                                      4              6     7           9 10
+gorithm accounts for TTL, these longer-lived references                                                                 RPC#1 (2)
+will overwrite shorter-lived ones, and they can be stored
+                                                                                                 {4, 5, 7}                             R
+on well-selected nodes even under high insertion load, as                                                    target 2
+later described in Section 4.2.                                         0 1               3 4                     6     7           9 10
+   CoralProxies periodically renew referrals to resources                                                         RPC#2 (1)
+in their caches. A proxy should not evict a web object                      {4, 5, 7}
+from its cache while a reference to it may persist in the                                              target 0
+DSHT. Ideally, proxies would adaptively set TTLs based
+on cache capacity, though this is not yet implemented.                  0 1               3 4                     6     7           9 10
+                                                                                                             RPC#3 (0)
+4 Coral: A Hierarchical Indexing System
+                                                                    Figure 2: Example of routing operations in a system contain-
+This section describes the Coral indexing infrastructure,           ing eight nodes with IDs {4, 5, 7, 0, 2, 3, 13, 14}. In this illus-
+which CoralCDN leverages to achieve scalability, self-              tration, node R with id = 14 is looking up the node closest to
+organization, and efficient data retrieval. We describe how         key k = 4, and we have sorted the nodes by their distance to
+Coral implements the put and get operations that form               k. The top boxed row illustrates XOR distances for the nodes
+the basis of its distributed sloppy hash table (DSHT) ab-           {0, 2, 3, 13, 14} that are initially known by R. R fi rst contacts a
+straction: the underlying key-based routing layer (4.1),            known peer whose distance to k is closest to half of R’s distance
+the DSHT algorithms that balance load (4.2), and the                (10/2 = 5); in this illustration, this peer is node zero, whose
+changes that enable latency and data-placement optimiza-            distance to k is 0 ⊕ 4 = 4. Data in RPC requests and responses
+tions within a hierarchical set of DSHTs (4.3). Finally,            are shown in parentheses and braces, respectively: R asks node
+we describe the clustering mechanisms that manage this              zero for its peers that are half-way closer to k, i.e., those at dis-
+hierarchical structure (4.4).                                       tance 24 = 2. R inserts these new references into its routing table
+                                                                    (middle row). R now repeats this process, contacting node fi ve,
+4.1 Coral’s Key-Based Routing Layer                                 whose distance 1 is closest to 24 . Finally, R contacts node four,
+                                                                    whose distance is 0, and completes its search (bottom row).
+Coral’s keys are opaque 160-bit ID values; nodes are as-
+signed IDs in the same 160-bit identifier space. A node’s
+ID is the SHA-1 hash of its IP address. Coral defines a             est node to k, or some node whose distance to k is at least
+distance metric on IDs. Henceforth, we describe a node              one bit shorter than R’s. This permits R to visit a se-
+as being close to a key if the distance between the key and         quence of nodes with monotonically decreasing distances
+the node’s ID is small. A Coral put operation stores a              [d1 , d2 , . . .] to k, such that the encoding of di+1 as a bi-
+key/value pair at a node close to the key. A get operation          nary number has one fewer bit than di . As a result, the
+searches for stored key/value pairs at nodes successively           expected number of iterations for R to discover the clos-
+closer to the key. To support these operations, a node re-          est node to k is logarithmic in the number of nodes.
+quires some mechanism to discover other nodes close to                 Figure 2 illustrates the Coral routing algorithm, which
+any arbitrary key.                                                  successively visits nodes whose distances to the key are
+   Every DSHT contains a routing table. For any key k, a            approximately halved each iteration. Traditional key-
+node R’s routing table allows it to find a node closer to k,        based routing layers attempt to route directly to the node
+unless R is already the closest node. These routing tables          closest to the key whenever possible [25, 26, 31, 35], re-
+are based on Kademlia [17], which defines the distance              sorting to several intermediate hops only when faced with
+between two values in the ID-space to be their bitwise              incomplete routing information. By caching additional
+exclusive or (XOR), interpreted as an unsigned integer.             routing state—beyond the necessary log(n) references—
+Using the XOR metric, IDs with longer matching prefixes             these systems in practice manage to achieve routing in a
+(of most significant bits) are numerically closer.                  constant number of hops. We observe that frequent refer-
+   The size of a node’s routing table in a DSHT is logarith-        ences to the same key can generate high levels of traffic in
+mic in the total number of nodes comprising the DSHT.               nodes close to the key. This congestion, called tree satu-
+If a node R is not the closest node to some key k, then             ration, was first identified in shared-memory interconnec-
+R’s routing table almost always contains either the clos-           tion networks [24].
+
+                                                                5
+   To minimize tree saturation, each iteration of a Coral              In the forward phase, Coral’s routing layer makes re-
+search prefers to correct only b bits at a time.2 More              peated RPCs to contact nodes successively closer to the
+specifically, let splice(k, r, i) designate the most signifi-       key. Each of these remote nodes returns (1) whether the
+cant bi bits of k followed by the least significant 160 − bi        key is loaded and (2) the number of values it stores under
+bits of r. If node R with ID r wishes to search for key             the key, along with the minimum expiry time of any such
+k, R first initializes a variable t ← r. At each iteration,         values. The client node uses this information to determine
+R updates t ← splice(k, t, i), using the smallest value             if the remote node can accept the store, potentially evict-
+of i that yields a new value of t. The next hop in the              ing a value with a shorter TTL. This forward phase ter-
+lookup path is the closest node to t that already exists in         minates when the client node finds either the node closest
+R’s routing table. As described below, by limiting the use          to the key, or a node that is full and loaded with respect
+of potentially closer known hops in this way, Coral can             to the key. The client node places all contacted nodes that
+avoid overloading any node, even in the presence of very            are not both full and loaded on a stack, ordered by XOR
+heavily accessed keys.                                              distance from the key.
+   The potential downside of longer lookup paths is higher             During the reverse phase, the client node attempts to
+lookup latency in the presence of slow or stale nodes. In           insert the value at the remote node referenced by the
+order to mitigate these effects, Coral keeps a window of            top stack element, i.e., the node closest to the key. If
+multiple outstanding RPCs during a lookup, possibly con-            this operation does not succeed—perhaps due to others’
+tacting the closest few nodes to intermediary target t.             insertions—the client node pops the stack and tries to in-
+                                                                    sert on the new stack top. This process is repeated until a
+4.2 Sloppy Storage                                                  store succeeds or the stack is empty.
+                                                                       This two-phase algorithm avoids tree saturation by stor-
+Coral uses a sloppy storage technique that caches
+                                                                    ing values progressively further from the key. Still, evic-
+key/value pairs at nodes whose IDs are close to the key
+                                                                    tion and the leakage rate β ensure that nodes close to
+being referenced. These cached values reduce hot-spot
+                                                                    the key retain long-lived values, so that live keys remain
+congestion and tree saturation throughout the indexing in-
+                                                                    reachable: β nodes per minute that contact an interme-
+frastructure: They frequently satisfy put and get requests
+                                                                    diate node (including itself) will go on to contact nodes
+at nodes other than those closest to the key. This charac-
+                                                                    closer to the key. For a perfectly-balanced      tree, the" key’s
+teristic differs from DHTs, whose put operations all pro-                                           !
+                                                                    closest node receives only β · (2b − 1) · ⌈ logb n ⌉ store
+ceed to nodes closest to the key.
+                                                                    requests per minute, when fixing b bits per iteration.
+The Insertion Algorithm. Coral performs a two-phase                    Proof sketch. Each node in a system of n nodes can be
+operation to insert a key/value pair. In the first, or “for-        uniquely identified by a string S of log n bits. Consider
+ward,” phase, Coral routes to nodes that are successively           S to be a string of b-bit digits. A node will contact the
+closer to the key, as previously described. However, to             closest node to the key before it contacts any other node
+avoid tree saturation, an insertion operation may terminate         if and only if its ID differs from the key in exactly one
+prior to locating the closest node to the key, in which case        digit. There are ⌈(log n)/b⌉ digits in S. Each digit can
+the key/value pair will be stored at a more distant node.           take on 2b −1 values that differ from the key. Every node
+More specifically, the forward phase terminates whenever            that differs in one digit will throttle all but β requests per
+the storing node happens upon another node that is both             minute.! Therefore, the closest " node receives a maximum
+full and loaded for the key:                                        rate of β · (2b −1) · ⌈ logb n ⌉ RPCs per minute.
+                                                                       Irregularities in the node ID distribution may increase
+ 1. A node is full with respect to some key k when it               this rate slightly, but the overall rate of traffic is still loga-
+    stores l values for k whose TTLs are all at least one-          rithmic, while in traditional DHTs it is linear. Section 6.4
+    half of the new value.                                          provides supporting experimental evidence.
+ 2. A node is loaded with respect to k when it has re-
+    ceived more than the maximum leakage rate β re-                 The Retrieval Algorithm. To retrieve the value associ-
+    quests for k within the past minute.                            ated with a key k, a node simply traverses the ID space
+                                                                    with RPCs. When it finds a peer storing k, the remote
+   In our experiments, l = 4 and β = 12, meaning that un-           peer returns k’s corresponding list of values. The node ter-
+der high load, a node claims to be loaded for all but one           minates its search and get returns. The requesting client
+store attempt every 5 seconds. This prevents excessive              application handles these redundant references in some
+numbers of requests from hitting the key’s closest nodes,           application-specific way, e.g., CoralProxy contacts mul-
+yet still allows enough requests to propagate to keep val-          tiple sources in parallel to download cached content.
+ues at these nodes fresh.                                              Multiple stores of the same key will be spread over mul-
+  2 Experiments in this paper use b = 1.                            tiple nodes. The pointers retrieved by the application are
+
+                                                                6
+thus distributed among those stored, providing load bal-                             00...00                                    160−bit id space                            11...11
+ancing both within Coral and between servers using Coral.
+
+4.3 Hierarchical Operations                                                                 k                   0                                       1       level 2
+For locality-optimized routing and data placement, Coral                                            0           1                                   0               1
+uses several levels of DSHTs called clusters. Each level-
+i cluster is named by a randomly-chosen 160-bit cluster                                                                             1
+identifier; the level-0 cluster ID is predefined as 0160 . Re-
+                                                                                                                        2
+call that a set of nodes should form a cluster if their aver-                                       C2                                                          R
+age, pair-wise RTTs are below some threshold. As men-                                                               0                                   1       level 1
+tioned earlier, we describe a three-level hierarchy with                                            0           1                                   0               1
+thresholds of ∞, 60 msec, and 20 msec for level-0, -1, and                                  0        1          0           1               0       1               0          1
+-2 clusters respectively. In Section 6, we present experi-                                                                              0       1
+mental evidence to the client-side benefit of clustering.                                                           3
+   Figure 3 illustrates Coral’s hierarchical routing opera-                           C1            C2                                                          R
+tions. Each Coral node has the same node ID in all clus-
+                                                                                                                    0                                   1       level 0
+ters to which it belongs; we can view a node as projecting
+                                                                                                    0           1                                   0               1
+its presence to the same location in each of its clusters.
+                                                                                            0           1       0               1           0       1               0          1
+This structure must be reflected in Coral’s basic routing
+                                                                                        0       1   0       1               0       1   0       1   0       1   0       1
+infrastructure, in particular to support switching between
+a node’s distinct DSHTs midway through a lookup.3                                     C1
+                                                                                            0 1
+                                                                                           C2                   4                           0 10 1
+                                                                                                                                                                R0 1
+                                                                                        C0
+The Hierarchical Retrieval Algorithm. A requesting
+node R specifies the starting and stopping levels at which                       Figure 3: Coral’s hierarchical routing structure. Nodes use the
+Coral should search. By default, it initiates the get query                      same IDs in each of their clusters; higher-level clusters are natu-
+on its highest (level-2) cluster to try to take advantage of                     rally sparser. Note that a node can be identifi ed in a cluster by its
+network locality. If routing RPCs on this cluster hit some                       shortest unique ID prefi x, e.g., “11” for R in its level-2 cluster;
+node storing the key k (RPC 1 in Fig. 3), the lookup halts                       nodes sharing ID prefi xes are located on common subtrees and
+and returns the corresponding stored value(s)—a hit—                             are closer in the XOR metric. While higher-level neighbors usu-
+without ever searching lower-level clusters.                                     ally share lower-level clusters as shown, this is not necessarily
+   If a key is not found, the lookup will reach k’s closest                      so. RPCs for a retrieval on key k are sequentially numbered.
+node C2 in this cluster (RPC 2), signifying failure at this
+level. So, node R continues the search in its level-1 clus-
+ter. As these clusters are very often concentric, C2 likely
+exists at the identical location in the identifier space in all                  However, this placement is only “correct” within the con-
+clusters, as shown. R begins searching onward from C2                            text of the local level-2 cluster. Thus, provided that the
+in its level-1 cluster (RPC 3), having already traversed the                     key is not already loaded, the node continues its insertion
+ID-space up to C2 ’s prefix.                                                     in the level-1 cluster from the point at which the key was
+   Even if the search eventually switches to the global                          inserted in level 2, much as in the retrieval case. Again,
+cluster (RPC 4), the total number of RPCs required is                            Coral traverses the ID-space only once. As illustrated
+about the same as a single-level lookup service, as a                            in Figure 3, this practice results in a loose hierarchical
+lookup continues from the point at which it left off in                          cache, whereby a lower-level cluster contains nearly all
+the identifier space of the previous cluster. Thus, (1)                          data stored in the higher-level clusters to which its mem-
+all lookups at the beginning are fast, (2) the system can                        bers also belong.
+tightly bound RPC timeouts, and (3) all pointers in higher-                         To enable such cluster-aware behavior, the headers of
+level clusters reference data within that local cluster.                         every Coral RPC include the sender’s cluster information:
+                                                                                 the identifier, age, and a size estimate of each of its non-
+The Hierarchical Insertion Algorithm. A node starts                              global clusters. The recipient uses this information to de-
+by performing a put on its level-2 cluster as in Section 4.2,                    multiplex requests properly, i.e., a recipient should only
+so that other nearby nodes can take advantage of locality.                       consider a put and get for those levels on which it shares
+    3 We initially built Coral using the Chord [31] routing layer as a           a cluster with the sender. Additionally, this information
+block-box; diffi culties in maintaining distinct clusters and the complex-       drives routing table management: (1) nodes are added or
+ity of the subsequent system caused us to scrap the implementation.              removed from the local cluster-specific routing tables ac-
+
+                                                                             7
+cordingly; (2) cluster information is accumulated to drive           preference function δ that shifts every hour. A node se-
+cluster management, as described next.                               lects the larger cluster only if the following holds:
+                                                                      #                            #
+4.4 Joining and Managing Clusters                                     #                            #
+                                                                      # log(size A ) − log(size B )# > δ (min(age A , age B ))
+As in any peer-to-peer system, a peer contacts an existing
+node to join the system. Next, a new node makes sev-                 where age is the current time minus the cluster’s creation
+eral queries to seed its routing tables. However, for non-           time. Otherwise, a node simply selects the cluster with
+global clusters, Coral adds one important requirement: A             the lower cluster ID.
+node will only join an acceptable cluster, where accept-                We use a square wave function for δ that takes a value
+ability requires that the latency to 80% of the nodes be             0 on an even number of hours and 2 on an odd number.
+below the cluster’s threshold. A node can easily deter-              For clusters of disproportionate size, the selection func-
+mine whether this condition holds by recording minimum               tion immediately favors the larger cluster. Otherwise, δ’s
+round-trip-times (RTTs) to some subset of nodes belong-              transition perturbs clusters to a steady state.4
+ing to the cluster.                                                     In either case, a node that switches clusters still remains
+   While nodes learn about clusters as a side effect of nor-         in the routing tables of nodes in its old cluster. Thus,
+mal lookups, Coral also exploits its DSHTs to store hints.           old neighbors will still contact it and learn of its new,
+When Coral starts up, it uses its built-in fast traceroute           potentially-better, cluster. This produces an avalanche ef-
+mechanism (described in Section 3.1) to determine the ad-            fect as more and more nodes switch to the larger cluster.
+dresses of routers up to five hops out. Excluding any pri-           This merging of clusters is very beneficial. While a small
+vate (“RFC1918”) IP addresses, Coral uses these router               cluster diameter provides fast lookup, a large cluster ca-
+addresses as keys under which to index clustering hints in           pacity increases the hit rate.
+its DSHTs. More specifically, a node R stores mappings
+from each router address to its own IP address and UDP               5 Implementation
+port number. When a new node S, sharing a gateway with
+                                                                     The Coral indexing system is composed of a client library
+R, joins the network, it will find one or more of R’s hints
+                                                                     and stand-alone daemon. The simple client library allows
+and quickly cluster with it, assuming R is, in fact, near S.
+                                                                     applications, such as our DNS server and HTTP proxy, to
+   In addition, nodes store mappings to themselves using
+                                                                     connect to and interface with the Coral daemon. Coral is
+as keys any IP subnets they directly connect to and the
+                                                                     14,000 lines of C++, the DNS server, dnssrv, is 2,000 lines
+24-bit prefixes of gateway router addresses. These prefix
+                                                                     of C++, and the HTTP proxy is an additional 4,000 lines.
+hints are of use to Coral’s level function, which tracer-
+                                                                     All three components use the asynchronous I/O library
+outes clients in the other direction; addresses on forward
+                                                                     provided by the SFS toolkit [19] and are structured by
+and reverse traceroute paths often share 24-bit prefixes.
+                                                                     asynchronous events and callbacks. Coral network com-
+   Nodes continuously collect clustering information from
+                                                                     munication is via RPC over UDP. We have successfully
+peers: All RPCs include round-trip-times, cluster mem-
+                                                                     run Coral on Linux, OpenBSD, FreeBSD, and Mac OS X.
+bership, and estimates of cluster size. Every five min-
+utes, each node considers changing its cluster member-
+ship based on this collected data. If this collected data            6 Evaluation
+indicates that an alternative candidate cluster is desirable,
+                                                                     In this section, we provide experimental results that sup-
+the node first validates the collected data by contacting
+                                                                     port our following hypotheses:
+several nodes within the candidate cluster by routing to
+selected keys. A node can also form a new singleton clus-
+                                                                       1. CoralCDN dramatically reduces load on servers,
+ter when 50% of its accesses to members of its present
+                                                                          solving the “flash crowd” problem.
+cluster do not meet the RTT constraints.
+   If probes indicate that 80% of a cluster’s nodes are                2. Clustering provides performance gains for popular
+within acceptable TTLs and the cluster is larger, it re-                  data, resulting in good client performance.
+places a node’s current cluster. If multiple clusters are
+                                                                       3. Coral naturally forms suitable clusters.
+acceptable, then Coral chooses the largest cluster.
+   Unfortunately, Coral has only rough approximations of               4. Coral prevents hot spots within its indexing system.
+cluster size, based on its routing-table size. If nearby clus-
+                                                                         4 Should clusters of similar size continuously exchange members
+ters A and B are of similar sizes, inaccurate estimations
+                                                                     when δ is zero, as soon as δ transitions, nodes will all flow to the cluster
+could lead to oscillation as nodes flow back-and-forth (al-          with the lower cluster id. Should the clusters oscillate when δ = 2 (as
+though we have not observed such behavior). To perturb               the estimations “hit” with one around 2 2 -times larger), the nodes will all
+an oscillating system into a stable state, Coral employs a           flow to the larger one when δ returns to zero.
+
+
+                                                                 8
+   To examine all claims, we present wide-area measure-
+ments of a synthetic work-load on CoralCDN nodes run-                                                                            level 2
+ning on PlanetLab, an internationally-deployed test bed.                                               300                       level 1
+
+
+
+
+                                                                                   Requests / Minute
+We use such an experimental setup because traditional                                                                            level 0
+tests for CDNs or web servers are not interesting in evalu-                                                               origin server
+ating CoralCDN: (1) Client-side traces generally measure                                               200
+the cacheability of data and client latencies. However, we
+are mainly interested in how well the system handles load
+spikes. (2) Benchmark tests such as SPECweb99 mea-                                                     100
+sure the web server’s throughput on disk-bound access
+patterns, while CoralCDN is designed to reduce load on
+off-the-shelf web servers that are network-bound.                                                        0
+   The basic structure of the experiments were is follows.                                                   0   300      600        900     1200
+First, on 166 PlanetLab machines geographically distri-                                                                Time (sec)
+buted mainly over North America and Europe, we launch
+                                                                                  Figure 4: The number of client accesses to CoralProxies and the
+a Coral daemon, as well as a dnssrv and CoralProxy.
+                                                                                  origin HTTP server. CoralProxy accesses are reported relative to
+For experiments referred to as multi-level, we configure a
+                                                                                  the cluster level from which data was fetched, and do not include
+three-level hierarchy by setting the clustering RTT thresh-
+                                                                                  requests handled through local caches.
+old of level 1 to 60 msec and level 2 to 20 msec. Ex-
+periments referred to as single-level use only the level-0
+global cluster. No objects are evicted from CoralProxy
+                                                                                  6.1 Server Load
+caches during these experiments. For simplicity, all nodes                        Figure 4 plots the number of requests per minute that
+are seeded with the same well-known host. The network                             could not be handled by a CoralProxy’s local cache. Dur-
+is allowed to stabilize for 30 minutes.5                                          ing the initial minute, 15 requests hit the origin web server
+   Second, we run an unmodified Apache web server                                 (for 12 unique files). The 3 redundant lookups are due to
+sitting behind a DSL line with 384 Kbit/sec upstream                              the simultaneity at which requests are generated; subse-
+bandwidth, serving 12 different 41KB files, representing                          quently, requests are handled either through CoralCDN’s
+groups of three embedded images referenced by four web                            wide-area cooperative cache or through a proxy’s local
+pages.                                                                            cache, supporting our hypothesis that CoralCDN can mi-
+   Third, we launch client processes on each machine that,                        grate load off of a web server.
+after an additional random delay between 0 and 180 sec-                              During this first minute, equal numbers of requests
+onds for asynchrony, begin making HTTP GET requests                               were handled by the level-1 and level-2 cluster caches.
+to Coralized URLs. Each client generates requests for the                         However, as the files propagated into CoralProxy caches,
+group of three files, corresponding to a randomly selected                        requests quickly were resolved within faster level-2 clus-
+web page, for a period of 30 minutes. While we recognize                          ters. Within 8-10 minutes, the files became replicated at
+that web traffic generally has a Zipf distribution, we are                        nearly every server, so few client requests went further
+attempting merely to simulate a flash crowd to a popular                          than the proxies’ local caches. Repeated runs of this ex-
+web page with multiple, large, embedded images (i.e., the                         periment yielded some variance in the relative magnitudes
+Slashdot effect). With 166 clients, we are generating 99.6                        of the initial spikes in requests to different levels, although
+requests/sec, resulting in a cumulative download rate of                          the number of origin server hits remained consistent.
+approximately 32, 800 Kb/sec. This rate is almost two or-
+ders of magnitude greater than the origin web server could                        6.2 Client Latency
+handle. Note that this rate was chosen synthetically and
+in no way suggests a maximum system throughput.                                   Figure 5 shows the end-to-end latency for a client to fetch
+   For Experiment 4 (Section 6.4), we do not run any such                         a file from CoralCDN, following the steps given in Sec-
+clients. Instead, Coral nodes generate requests at very                           tion 2.2. The top graph shows the latency across all Plan-
+high rates, all for the same key, to examine how the DSHT                         etLab nodes used in the experiment, the bottom graph
+indexing infrastructure prevents nodes close to a target ID                       only includes data from the clients located on 5 nodes
+from becoming overloaded.                                                         in Asia (Hong Kong (2), Taiwan, Japan, and the Philip-
+                                                                                  pines). Because most nodes are located in the U.S. or Eu-
+    5 The stabilization time could be made shorter by reducing the clus-
+                                                                                  rope, the performance benefit of clustering is much more
+tering period (5 minutes). Additionally, in real applications, clustering
+is in fact a simpler task, as new nodes would immediately join nearby
+                                                                                  pronounced on the graph of Asian nodes.
+large clusters as they join the pre-established system. In our setup, clus-          Recall that this end-to-end latency includes the time for
+ters develop from an initial network comprised entirely of singletons.            the client to make a DNS request and to connect to the
+
+                                                                              9
+                 7                                                                                   10
+                                single-level                                                                      single-level
+                 6              multi-level                                                                       multi-level
+                 5              multi-level, traceroute
+
+
+
+ Latency (sec)                                                                       Latency (sec)
+                                                                                                      1
+                 4
+                 3
+                                                                                                     0.1
+                 2
+                 1
+                 0                                                                          0.01
+                     0       0.2       0.4      0.6     0.8             1                                  0   0.2     0.4     0.6     0.8      1
+                                   Fraction of Requests                                                           Fraction of Requests
+                 7                                                                      Figure 6: Latencies for proxy to get keys from Coral.
+                                Asia, single-level
+                 6              Asia, multi-level
+                                Asia, multi-level, traceroute                    bination of hosts sharing networks with CoralProxies—
+                 5
+
+
+ Latency (sec)
+                                                                                 within the same IP prefix as registered with Coral—and
+                 4                                                               hosts without. Although the multi-level network using
+                                                                                 traceroute provides the lowest latency at most percentiles,
+                 3
+                                                                                 the multi-level system without traceroute also performs
+                 2                                                               better than the single-level system. Clustering has a clear
+                                                                                 performance benefit for clients, and this benefit is partic-
+                 1
+                                                                                 ularly apparent for poorly-connected hosts.
+                 0                                                                  Figure 6 shows the latency of get operations, as seen by
+                     0       0.2       0.4      0.6     0.8             1        CoralProxies when they lookup URLs in Coral (Step 8 of
+                                   Fraction of Requests                          Section 2.2). We plot the get latency on the single level-0
+                                                                                 system vs. the multi-level systems. The multi-level sys-
+                 Request latency (sec)      All nodes     Asian nodes            tem is 2-5 times faster up to the 80% percentile. After the
+                                           50% 96%        50% 96%                98% percentile, the single-level system is actually faster:
+                            single-level   0.79 9.54      2.52 8.01
+                                                                                 Under heavy packet loss, the multi-system requires a few
+                             multi-level   0.31 4.17      0.04 4.16
+                                                                                 more timeouts as it traverses its hierarchy levels.
+                 multi-level, traceroute   0.19 2.50      0.03 1.75
+
+Figure 5: End-to-End client latency for requests for Coralized                   6.3 Clustering
+URLs, comparing the effect of single-level vs. multi-level clus-
+ters and of using traceroute during DNS redirection. The top                     Figure 7 illustrates a snapshot of the clusters from the pre-
+graph includes all nodes; the bottom only nodes in Asia.                         vious experiments, at the time when clients began fetch-
+                                                                                 ing URLs (30 minutes out). This map is meant to provide
+                                                                                 a qualitative feel for the organic nature of cluster devel-
+discovered CoralProxy. The proxy attempts to fulfill the                         opment, as opposed to offering any quantitative measure-
+client request first through its local cache, then through                       ments. On both maps, each unique, non-singleton clus-
+Coral, and finally through the origin web server. We note                        ter within the network is assigned a letter. We have plot-
+that CoralProxy implements cut-through routing by for-                           ted the location of our nodes by latitude/longitude coor-
+warding data to the client prior to receiving the entire file.                   dinates. If two nodes belong to the same cluster, they are
+   These figures report three results: (1) the distribution of                   represented by the same letter. As each PlanetLab site
+latency of clients using only a single level-0 cluster (the                      usually collocates several servers, the size of the letter
+solid line), (2) the distribution of latencies of clients using                  expresses the number of nodes at that site that belong to
+multi-level clusters (dashed), and (3) the same hierarchi-                       the same cluster. For example, the very large “H” (world
+cal network, but using traceroute during DNS resolution                          map) and “A” (U.S. map) correspond to nodes collocated
+to map clients to nearby proxies (dotted).                                       at U.C. Berkeley. We did not include singleton clusters on
+   All clients ran on the same subnet (and host, in fact) as a                   the maps to improve readability; post-run analysis showed
+CoralProxy in our experimental setup. This would not be                          that such nodes’ RTTs to others (surprisingly, sometimes
+the case in the real deployment: We would expect a com-                          even at the same site) were above the Coral thresholds.
+
+                                                                            10
+                                                       J               JJ                                                                                          84
+                                                       JJ J    J
+
+ HH
+          C
+
+
+
+
+H
+                   I                                               J
+
+ HC
+  H
+  H
+                             I
+                                     I  KI G               J
+                                                               J
+                                                                   J
+
+
+                      IIII IIIIIKIII
+                                G
+                         II III II I I
+  H
+  HI
+    HH H I
+              I
+                   I
+                    I     I
+                                 I
+                                  II
+                                      I                J                                                                                                           72
+                  III I
+    HH
+
+
+
+
+                                                                                                                                               Requests / Minute
+                                                                                A
+                                                                                E
+                                                                                A
+
+                                                                                                            D
+                                                                                                                                                                   60
+                                                                                                                                                                   48
+      X 1 node
+
+   X 2 nodes                                   B
+                                                                                                                                                                   36
+  X 3 nodes                                                                                                                         F
+                                                                                                                                                                   24
+      JM                                                                                                                                                           12
+   J  J                                                                                                                    L
+                                                                                                                                                                    0
+                                                                                                        H
+                                                                                                                    P OP
+                                                                                        K
+                                                                                        H
+                                                                                                    C                             O FO                              near   Distance to Hotspot         far
+                                           I                                            PC
+                                                                                                        O
+                                                                                                        P                   O
+                                                                                                                           OG
+                                                                                                                             OO
+
+
+
+
+ A
+                                                                                                                            O
+
+                                                   D                        D
+                                                                                    K
+                                                                                            K
+                                                                                                                     O
+                                                                                                                     O
+
+      AAEJA
+                                                                                                B               F    O
+                                                                                                B       O
+                                                                                                        O   O
+                                                                                                                                              Figure 8: The total number of put RPCs hitting each Coral node
+              A
+                   A
+                   A                                                                             B
+                       A                                                                        B                                             per minute, sorted by distance from node ID to target key.
+      X 1 node
+                                                                   E E
+                                                                   N
+   X 2 nodes                                                                E
+  X 3 nodes                                                        level-0 cluster. At the same time, all PlanetLab nodes be-
+                                                                   gan to issue back-to-back put /get requests at their max-
+                                                                   imum (non-concurrent) rates. All operations referenced
+Figure 7: World view of level-1 clusters (60 msec threshold),
+                                                                   the same key; the values stored during put requests were
+and United States view of level-2 clusters (20 msec threshold).
+                                                                   randomized. On average, each node issued 400 put/get
+Each unique, non-singleton cluster is assigned a letter; the size
+                                                                   operation pairs per second, for a total of approximately
+of the letter corresponds to collocated nodes in the same cluster.
+                                                                   12 million put/get requests per minute, although only a
+                                                                   fraction hit the network. Once a node is storing a key,
+   The world map shows that Coral found natural divi- get requests are satisfied locally. Once it is loaded, each
+sions between sets of nodes along geospatial lines at a 60 node only allows the leakage rate β RPCs “through” it per
+msec threshold. The map shows several distinct regions, minute.
+the most dramatic being the Eastern U.S. (70 nodes), the              The graphs show the number of put RPCs that hit each
+Western U.S. (37 nodes), and Europe (19 nodes). The node in steady-state, sorted by the XOR distance of the
+close correlation between network and physical distance node’s ID to the key. During the first minute, the clos-
+suggests that speed-of-light delays dominate round-trip- est node received 106 put RPCs. In the second minute,
+times. Note that, as we did not plot singleton clusters, the as shown in Figure 8, the system reached steady-state
+map does not include three Asian nodes (in Japan, Taiwan, with the closest node receiving 83 put RPCs per minute.
+and the Philippines, respectively).                                Recall that our equation in Section 4.2 predicts that it
+   The United States map shows level-2 clusters again should receive (β · log n) = 108 RPCs per minute. The
+roughly separated by physical locality. The map shows plot strongly emphasizes the efficacy of the leakage rate
+16 distinct clusters; obvious clusters include California β = 12, as the number of RPCs received by the majority
+(22 nodes), the Pacific Northwest (9 nodes), the South, the of nodes is a low multiple of 12.
+Midwest, etc. The Northeast Corridor cluster contains 29              No nodes on the far side of the graph received any
+nodes, stretching from North Carolina to Massachusetts. RPCs. Coral’s routing algorithm explains this condition:
+One interesting aspect of this map is the three separate, these nodes begin routing by flipping their ID’s most-
+non-singleton clusters in the San Francisco Bay Area. significant bit to match the key’s, and they subsequently
+Close examination of individual RTTs between these sites contact a node on the near side. We have omitted the graph
+shows widely varying latencies; Coral clustered correctly of get RPCs: During the first minute, the most-loaded
+given the underlying network topology.                             node received 27 RPCs; subsequently, the key was widely
+                                                                   distributed and the system quiesced.
+6.4 Load Balancing
+Finally, Figure 8 shows the extent to which a DSHT bal-                                                                                       7 Related work
+ances requests to the same key ID. In this experiment,
+we ran 3 nodes on each of the earlier hosts for a to-                                                                                         CoralCDN builds on previous work in peer-to-peer sys-
+tal of 494 nodes. We configured the system as a single                                                                                        tems and web-based content delivery.
+
+                                                                                                                                         11
+7.1 DHTs and directory services                               latency. Squirrel proposes web caching on a traditional
+                                                              DHT, although only for organization-wide networks [10].
+A distributed hash table (DHT) exposes two basic func- Squirrel reported poor load-balancing when the system
+tions to the application: put (key, value) stores a value stored pointers in the DHT. We attribute this to the DHT’s
+at the specified key ID; get (key) returns this stored value, inability to handle too many values for the same key—
+just as in a normal hash table. Most DHTs use a key-based Squirrel only stored 4 pointers per object—while Coral-
+routing layer—such as CAN [25], Chord [31], Kadem- CDN references many more proxies by storing different
+lia [17], Pastry [26], or Tapestry [35]—and store keys on sets of pointers on different nodes. SCAN examined repli-
+the node whose ID is closest to the key. Keys must be cation policies for data disseminated through a multicast
+well distributed to balance load among nodes. DHTs often tree from a DHT deployed at ISPs [3].
+replicate multiply-fetched key/value pairs for scalability,      Akamai [1] and other commercial CDNs use DNS redi-
+e.g., by having peers replicate the pair onto the second-to- rection to reroute client requests to local clusters of ma-
+last peer they contacted as part of a get request.            chines, having built detailed maps of the Internet through
+   DHTs can act either as actual data stores or merely a combination of BGP feeds and their own measurements,
+as directory services storing pointers. CFS [5] and such as traceroutes from numerous vantage points [28].
+PAST [27] take the former approach to build a distri- Then, upon reaching a cluster of collocated machines,
+buted file system: They require true read/write consis- hashing schemes [11, 32] map requests to specific ma-
+tency among operations, where writes should atomically chines to increase capacity. These systems require de-
+replace previously-stored values, not modify them.            ploying large numbers of highly provisioned servers, and
+   Using the network as a directory service, Tapestry [35] typically result in very good performance (both latency
+and Coral relax the consistency of operations in the net- and throughput) for customers.
+work. To put a key, Tapestry routes along fast hops be-          Such centrally-managed CDNs appear to offer two ben-
+tween peers, placing at each peer a pointer back to the efits over CoralCDN. (1) CoralCDN’s network measure-
+sending node, until it reaches the node closest to the ments, via traceroute-like probing of DNS clients, are
+key. Nearby nodes routing to the same key are likely somewhat constrained in comparison. CoralCDN nodes
+to follow similar paths and discover these cached point- do not have BGP feeds and are under tight latency con-
+ers. Coral’s flexible clustering provides similar latency- straints to avoid delaying DNS replies while probing. Ad-
+optimized lookup and data placement, and its algorithms ditionally, Coral’s design assumes that no single node
+prevent multiple stores from forming hot spots. SkipNet even knows the identity of all other nodes in the system,
+also builds a hierarchy of lookup groups, although it ex- let alone their precise network location. Yet, if many peo-
+plicitly groups nodes by domain name to support organi- ple adopt the system, it will build up a rich database of
+zational disconnect [9].                                      neighboring networks. (2) CoralCDN offers less aggre-
+                                                              gate storage capacity, as cache management is completely
+7.2 Web caching and content distribution                      localized. But, it is designed for a much larger number
+                                                              of machines and vantage points: CoralCDN may provide
+Web caching systems fit within a large class of CDNs that better performance for small organizations hosting nodes,
+handle high demand through diverse replication.               as it is not economically efficient for commercial CDNs
+   Prior to the recent interest in peer-to-peer systems, sev- to deploy machines behind most bottleneck links.
+eral projects proposed cooperative Web caching [2, 7, 8,         More recently, CoDeeN has provided users with a set
+16]. These systems either multicast queries or require of open web proxies [23]. Users can reconfigure their
+that caches know some or all other servers, which wors- browsers to use a CoDeeN proxy and subsequently en-
+ens their scalability, fault-tolerance, and susceptibility to joy better performance. The system has been deployed,
+hot spots. Although the cache hit rate of cooperative web and anecdotal evidence suggests it is very successful at
+caching increases only to a certain level, corresponding to distributing content efficiently. Earlier simulation results
+a moderate population size [34], highly-scalable coopera- show that certain policies should achieve high system
+tive systems can still increase the total system throughput throughput and low request latency [33]. (Specific details
+by reducing server-side load.                                 of the deployed system have not yet been published, in-
+   Several projects have considered peer-to-peer overlays cluding an Akamai-like service also in development.)
+for web caching, although all such systems only benefit          Although CoDeeN gives participating users better per-
+participating clients and thus require widespread adoption formance to most web sites, CoralCDN’s goal is to
+to reduce server load. Stading et al. use a DHT to cache gives most users better performance to participating web
+replicas [29], and PROOFS uses a randomized overlay to sites—namely those whose publishers have “Coralized”
+distribute popular content [30]. Both systems focus solely the URLs. The two design points pose somewhat dif-
+on mitigating flash crowds and suffer from high request
+
+                                                          12
+ferent challenges. For instance, CoralCDN takes pains            most trustworthy hosts. Clustering may prove to be a very
+to greatly minimize the load on under-provisioned origin         useful abstraction for building interesting applications.
+servers, while CoDeeN has tighter latency requirements
+as it is on the critical path for all web requests. Finally,     Multi-cast Tree Formation. CoralCDN may transmit
+while CoDeeN has suffered a number of administrative             multiple requests to an origin HTTP server at the begin-
+headaches, many of these problems do not apply to Coral-         ning of a flash crowd. This is caused by a race condition
+CDN, as, e.g., CoralCDN does not allow POST operations           at the key’s closest node, which we could eliminate by
+or SSL tunneling, and it can be barred from accessing par-       extending store transactions to provide return status in-
+ticular sites without affecting users’ browsing experience.      formation (like test-and-set in shared-memory systems).
+                                                                 Similar extensions to store semantics may be useful for
+8 Future Work                                                    balancing its dynamically-formed dissemination trees.
+
+Security. This paper does not address CoralCDN’s se-             Handling Heterogeneous Proxies. We should consider
+curity issues. Probably the most important issue is en-          the heterogeneity of proxies when performing DNS redi-
+suring the integrity of cached data. Given our experience        rection and intra-Coral HTTP fetches. We might use some
+with spam on the Internet, we should expect that adver-          type of feedback-based allocation policy, as proxies can
+saries will attempt to replace cached data with advertise-       return their current load and bandwidth availability, given
+ments for pornography or prescription drugs. A solution          that they are already probed to determine liveness.
+is future work, but breaks down into three components.
+                                                                 Deployment and Scalability Studies. We are planning
+   First, honest Coral nodes should not cache invalid
+                                                                 an initial deployment of CoralCDN as a long-lived Planet-
+data. A possible solution might include embedding self-
+                                                                 Lab port 53 (DNS) service. In doing so, we hope to gather
+certifying pathnames [20] in Coralized URLs, although
+                                                                 measurements from a large, active client population, to
+this solution requires server buy-in. Second, Coral nodes
+                                                                 better quantify CoralCDN’s scalability and effectiveness:
+should be able to trace the path that cached data has taken
+                                                                 Given our client-transparency, achieving wide-spread use
+and exclude data from known bad systems. Third, we
+                                                                 is much easier than with most peer-to-peer systems.
+should try to prevent clients from using malicious proxies.
+This requires client buy-in, but offers additional incentives
+for organizations to run Coral: Recall that a client will ac-    9 Conclusions
+cess a local proxy when one is available, or administrators      CoralCDN is a peer-to-peer web-content distribution net-
+can configure a local DNS resolver to always return a spe-       work that harnesses people’s willingness to redistribute
+cific Coral instance. Alternatively, “SSL splitting” [15]        data they themselves find useful. It indexes cached web
+provides end-to-end security between clients and servers,        content with a new distributed storage abstraction called a
+albeit at a higher overhead for the origin servers.              DSHT. DSHTs map a key to multiple values and can scale
+   CoralCDN may require some additional abuse-                   to many stores of the same key without hot-spot conges-
+prevention mechanisms, such as throttling bandwidth              tion. Coral successfully clusters nodes by network diam-
+hogs and restricting access to address-authenticated con-        eter, ensuring that nearby replicas of data can be located
+tent [23]. To leverage our redundant resources, we are           and retrieved without querying more distant nodes. Fi-
+considering efficient erasure coding for large-file trans-       nally, a peer-to-peer DNS layer redirects clients to nearby
+fers [18]. For such, we have developed on-the-fly veri-          CoralProxies, allowing unmodified web browsers to ben-
+fication mechanisms to limit malicious proxies’ abilities        efit from CoralCDN, and more importantly, to avoid over-
+to waste a node’s downstream bandwidth [13].                     loading origin servers.
+Leveraging the Clustering Abstraction. This paper                   Measurements of CoralCDN demonstrate that it al-
+presents clustering mainly as a performance optimization         lows under-provisioned web sites to achieve dramatically
+for lookup operations and DNS redirection. However, the          higher capacity. A web server behind a DSL line expe-
+clustering algorithms we use are driven by generic poli-         riences hardly any load when hit by a flash crowd with
+cies that could allow hierarchy creation based on a variety      a sustained aggregate transfer rate that is two orders of
+of criteria. For example, one could provide a clustering         magnitude greater than its bandwidth. Moreover, Coral’s
+policy by IP routing block or by AS name, for a simple           clustering mechanism forms qualitatively sensible geo-
+mechanism that reflects administrative control and per-          graphic clusters and provides quantitatively better perfor-
+forms well under network partition. Or, Coral’s clusters         mance than locality-unaware systems.
+could be used to explicitly encode a web-of-trust security          We have made CoralCDN freely available, so that even
+model in the system, especially useful given its standard        people with slow connections can publish web sites whose
+open-admissions policy. Then, clusters could easily repre-       capacity grows automatically with popularity. Please visit
+sent trust relationships, allowing lookups to resolve at the     http://www.scs.cs.nyu.edu/coral/.
+
+                                                            13
+Acknowledgments. We are grateful to Vijay Karam-                               [15] C. Lesniewski-Laas and M. F. Kaashoek. SSL splitting: Securely
+cheti for early conversations that helped shape this work.                          serving data from untrusted caches. In USENIX Security, Wash-
+                                                                                    ington, D.C., Aug 2003.
+We thank David Andersen, Nick Feamster, Daniel Gif-
+fin, Robert Grimm, and our shepherd, Marvin Theimer,                           [16] R. Malpani, J. Lorch, and D. Berger. Making world wide web
+                                                                                    caching servers cooperate. In WWW, Apr 1995.
+for their helpful feedback on drafts of this paper. Petar
+                                                                               [17] P. Maymounkov and D. Mazières. Kademlia: A peer-to-peer in-
+Maymounkov and Max Krohn provided access to Kadem-
+                                                                                    formation system based on the xor metric. In IPTPS, Cambridge,
+lia data structure and HTTP parsing code, respectively.                             MA, Mar 2002.
+We thank the PlanetLab support team for allowing us                            [18] P. Maymounkov and D. Mazières. Rateless codes and big down-
+the use of UDP port 53 (DNS), despite the additional                                loads. In IPTPS, Berkeley, CA, Feb 2003.
+hassle this caused them. Coral is part of project IRIS                         [19] D. Mazières. A toolkit for user-level fi le systems. In USENIX,
+(http://project-iris.net/), supported by the                                        Boston, MA, Jun 2001.
+NSF under Cooperative Agreement No. ANI-0225660.                               [20] D. Mazières and M. F. Kaashoek. Escaping the evils of centralized
+David Mazières is supported by an Alfred P. Sloan Re-                              control with self-certifying pathnames. In ACM SIGOPS European
+search Fellowship. Michael Freedman is supported by an                              Workshop, Sep 1998.
+NDSEG Fellowship.                                                              [21] Mirror Image Internet. http://www.mirror-image.com/, 2004.
+                                                                               [22] FIPS Publication 180-1: Secure Hash Standard. National Institute
+                                                                                    of Standards and Technology (NIST), Apr 1995.
+References
+                                                                               [23] V. Pai, L. Wang, K. Park, R. Pang, and L. Peterson. The dark side
+ [1] Akamai Technologies, Inc. http://www.akamai.com/, 2004.                        of the web: An open proxy’s view. In HotNets, Cambridge, MA,
+ [2] A. Chankhunthod, P. Danzig, C. Neerdaels, M. Schwartz, and                     Nov 2003.
+     K. Worrell. A hierarchical internet object cache. In USENIX, Jan          [24] G. Pfi ster and V. A. Norton. “hot spot” contention and combining
+     1996.                                                                          in multistage interconnection networks. IEEE Trans. on Comput-
+ [3] Y. Chen, R. Katz, and J. Kubiatowicz. SCAN: A dynamic, scal-                   ers, 34(10), Oct 1985.
+     able, and effi cient content distribution network. In Proceedings         [25] S. Ratnasamy, P. Francis, M. Handley, R. Karp, and S. Shenker.
+     of the International Conference on Pervasive Computing, Zurich,                A scalable content-addressable network. In ACM SIGCOMM, San
+     Switzerland, Aug 2002.                                                         Diego, CA, Aug 2001.
+ [4] M. Crawford. RFC 2672: Non-terminal DNS name redirection,                 [26] A. Rowstron and P. Druschel. Pastry: Scalable, distributed object
+     Aug 1999.                                                                      location and routing for large-scale peer-to-peer systems. In Proc.
+                                                                                    IFIP/ACM Middleware, Nov 2001.
+ [5] F. Dabek, M. F. Kaashoek, D. Karger, R. Morris, and Ion Stoica.
+     Wide-area cooperative storage with CFS. In SOSP, Banff, Canada,           [27] A. Rowstron and P. Druschel. Storage management and caching
+     Oct 2001.                                                                      in PAST, a large-scale, persistent peer-to-peer storage utility. In
+                                                                                    SOSP, Banff, Canada, Oct 2001.
+ [6] Digital Island, Inc. http://www.digitalisland.com/, 2004.
+                                                                               [28] N. Spring, R. Mahajan, and D. Wetherall. Measuring ISP topolo-
+ [7] L. Fan, P. Cao, J. Almeida, and A. Z. Broder. Summary cache: a                 gies with Rocketfuel. In SIGCOMM, Pittsburgh, PA, Aug 2002.
+     scalable wide-area web-cache sharing protocol. Technical Report
+     1361, CS Dept, U. Wisconson, Madison, Feb 1998.                           [29] T. Stading, P. Maniatis, and M. Baker. Peer-to-peer caching
+                                                                                    schemes to address flash crowds. In IPTPS, Cambridge, MA, Mar
+ [8] S. Gadde, J. Chase, and M. Rabinovich. A taste of crispy squid. In             2002.
+     Workshop on Internet Server Perf., Madison, WI, Jun 1998.
+                                                                               [30] A. Stavrou, D. Rubenstein, and S. Sahu. A lightweight, robust p2p
+ [9] N. Harvey, M. Jones, S. Saroiu, M. Theimer, and A. Wolman.                     system to handle flash crowds. In IEEE ICNP, Paris, France, Nov
+     Skipnet: A scalable overlay network with practical locality prop-              2002.
+     erties. In USITS, Seattle, WA, Mar 2003.
+                                                                               [31] I. Stoica, R. Morris, D. Liben-Nowell, D. Karger, M. F. Kaashoek,
+[10] S. Iyer, A. Rowstron, and P. Druschel. Squirrel: A decentralized,              F. Dabek, and H. Balakrishnan. Chord: A scalable peer-to-peer
+     peer-to-peer web cache. In PODC, Monterey, CA, Jul 2002.                       lookup protocol for internet applications. In IEEE/ACM Trans. on
+[11] D. Karger, E. Lehman, F. Leighton, M. Levine, D. Lewin, and                    Networking, 2002.
+     R. Panigrahy. Consistent hashing and random trees: Distributed            [32] D. Thaler and C. Ravishankar. Using name-based mappings to
+     caching protocols for relieving hot spots on the World Wide Web.               increase hit rates. IEEE/ACM Trans. on Networking, 6(1):1–14,
+     In STOC, May 1997.                                                             1998.
+[12] D. Karger, A. Sherman, A. Berkheimer, B. Bogstad, R. Dhanidina,           [33] L. Wang, V. Pai, and L. Peterson. The effectiveness of request
+     K. Iwamoto, B. Kim, L. Matkins, and Y. Yerushalmi. Web caching                 redirection on cdn robustness. In OSDI, Boston, MA, Dec 2002.
+     with consistent hashing. WWW8 / Computer Networks, 31(11–                 [34] A. Wolman, G. Voelker, N. Sharma, N. Cardwell, A. Karlin, and
+     16):1203–1213, 1999.                                                           H. Levy. On the scale and performance of cooperative web proxy
+[13] M. Krohn, M. J. Freedman, and D. Mazières. On-the-fly verifi ca-              caching. In SOSP, Kiawah Island, SC, Dec 1999.
+     tion of rateless erasure codes for effi cient content distribution. In    [35] B. Zhao, L. Huang, J. Stribling, S. Rhea, A. Joseph, and J. Ku-
+     IEEE Symp. on Security and Privacy, Oakland, CA, May 2004.                     biatowicz. Tapestry: A resilient global-scale overlay for service
+[14] J. Kubiatowicz, D. Bindel, Y. Chen, S. Czerwinski, P. Eaton,                   deployment. IEEE J. Selected Areas in Communications, 2003.
+     D. Geels, R. Gummadi, S. Rhea, H. Weatherspoon, W. Weimer,
+     C. Wells, and B. Zhao. OceanStore: An architecture for global-
+     scale persistent storage. In ASPLOS, Cambridge, MA, Nov 2000.
+
+
+                                                                          14
+

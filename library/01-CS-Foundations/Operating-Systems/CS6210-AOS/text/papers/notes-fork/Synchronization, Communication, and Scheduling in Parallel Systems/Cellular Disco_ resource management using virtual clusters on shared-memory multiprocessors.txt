@@ -1,0 +1,1139 @@
+          Cellular Disco: resource management using virtual
+             clusters on shared-memory multiprocessors
+                 Kinshuk Govil, Dan Teodosiu*, Yongqiang Huang, and Mendel Rosenblum
+             Computer Systems Laboratory                                                       *Hewlett-Packard Laboratories
+                   Stanford University                                                                 Palo Alto, CA
+       {kinshuk, yhuang, mendel} @cs.stanford.edu                                                  danteo @hpLhp.com
+
+Abstract                                                                          the past several years. Unfortunately, due to the development
+Despite the fact that large-scale shared-memory multipro-                         cost and the complexity of the required changes, most oper-
+cessors have been commercially available for several years,                       ating systems are unable to effectively utilize these large
+system software that fully utilizes all their features is still                   machines. Poor scalability restricts the size of machines that
+not available, mostly due to the complexity and cost of mak-                      can be supported by most current commercial operating sys-
+ing the required changes to the operating system. A recently                      tems to at most a few dozen processors. Memory allocation
+proposed approach, called Disco, substantially reduces this                       algorithms that are not aware of the large difference in local
+development cost by using a virtual machine monitor that                          versus remote memory access latencies on NUMA (Non-
+leverages the existing operating system technology.                               Uniform Memory Access time) systems lead to suboptimal
+                                                                                  application performance. Resource management policies not
+    In this paper we present a system called Cellular Disco                       designed to handle a large number of resources can lead to
+that extends the Disco work to provide all the advantages of                      contention and inefficient usage. Finally, the inability of the
+the hardware partitioning and scalable operating system                           operating system to survive any hardware or system software
+approaches. We argue that Cellular Disco can achieve these                        failure results in the loss of all the applications running on
+benefits at only a small fraction of the development cost of                      the system, requiring the entire machine to be rebooted.
+modifying the operating system. Cellular Disco effectively
+turns a large-scale shared-memory multiprocessor into a                               The solutions that have been proposed to date are either
+virtual cluster that supports fault containment and hetero-                       based on hardware partitioning [4][21][25][28], or require
+geneity, while avoiding operating system scalability bottle-                      developing new operating systems with improved scalability
+necks. Yet at the same time, Cellular Disco preserves the                         and fault containment characteristics [3][8][10][22]. Unfor-
+benefits of a shared-memory multiprocessor by implement-                          tunately, both of these approaches suffer from serious draw-
+ing dynamic, fine-grained resource sharing, and by allow-                         backs. Hardware partitioning limits the flexibility with
+ing users to overcommit resources such as processors and                          which allocation and sharing of resources in a large system
+memory. This hybrid approach requires a scalable resource                         can be adapted to dynamically changing load requirements.
+manager that makes local decisions with limited informa-                          Since partitioning effectively turns the system into a cluster
+tion while still providing good global performance and fault                      of smaller machines, applications requiring a large number
+containmenL                                                                       of resources will not perform well. New operating system
+                                                                                  designs can provide excellent performance, but require a
+    In this paper we describe our experience with a Cellular
+                                                                                  considerable investment in development effort and time
+Disco prototype on a 32-processor SGI Origin 2000 system.
+                                                                                  before reaching commercial maturity.
+We show that the execution time penalty for this approach is
+low, typically within 10% of the best available commercial                            A recently proposed alternative approach, called
+operating system for most workloads, and that it can man-                         Disco [2], uses a virtual machine monitor to run unmodified
+age the CPU and memory resources of the machine signifi-                          commodity operating systems on scalable multiprocessors.
+cantly better than the hardware partitioning approach.                            With a low implementation cost and a small run-time virtu-
+                                                                                  alization overhead, the Disco work shows that a virtual
+1    Introduction                                                                 machine monitor can be used to address scalability and
+                                                                                  NUMA-awareness issues. By running multiple copies of an
+Shared-memory multiprocessor systems with up to a few                             off-the-shelf operating system, the Disco approach is able to
+hundred processors have been commercially available for                           leverage existing operating system technology to form the
+                                                                                  system software for scalable machines.
+Permission to make digital or hard copies of all or part of this work
+for personal or classroom use is granted without fee provided that                     Although Disco demonstrated the feasibility of this new
+copies are not made or distributed for profit or commercial advan-                approach, it left many unanswered questions. In particular,
+tage, and that copies bear this notice and the full citation on the first         the Disco prototype lacked several major features that made
+page. To copy otherwise, to republish, to post on servers or to redis-            it difficult to compare Disco to other approaches. For exam-
+tribute to lists, requires prior specific permission and/or a fee.                ple, while other approaches such as hardware partitioning
+SOSP-17 12/1999 Kiawah Island, SC                                                 support hardware fault containment, the Disco prototype
+                                                                                  lacked such support. In addition, the Disco prototype lacked
+© 1999 ACM 1-58113-140-2/99/0012...$5.00                                          the resource management mechanisms and policies required
+
+
+
+
+                                                                            154
+to make it competitive compared to a customized operating               factored out. A key design decision that reduced cost com-
+system approach.                                                        pared to Hive was to assume that the code of Cellular Disco
+    In this work we present a system called Cellular Disco              itself is correct. This assumption is warranted by the fact that
+that extends the basic Disco approach by supporting hard-               the size of the virtual machine monitor (50K lines of C and
+ware fault containment and aggressive global resource man-              assembly) is small enough to be thoroughly tested.
+agement, and by running on actual scalable hardware. Our                    Resource m a n a g e m e n t : In order to support better
+system effectively turns a large-scale shared-memory                    resource management than hardware clusters, Cellular Disco
+machine into a virtual cluster by combining the scalability             allows virtual machines to overcommit the actual physical
+and fault containment benefits of clusters with the resource            resources present in the system. This offers an increased
+allocation flexibility of shared-memory systems. Our experi-            degree of flexibility by allowing Cellular Disco to dynami-
+ence with Cellular Disco shows that:                                    cally adjust the fraction of the system resources assigned to
+     1. Hardware fault containment can be added to a virtual            each virtual machine. This approach can lead to a signifi-
+machine monitor with very low run-time overheads and                    cantly better utilization of the system, assuming that
+implementation costs. With a negligible performance pen-                resource requirement peaks do not occur simultaneously.
+alty over the existing virtualization overheads, fault contain-             Cellular Disco multiplexes physical processors among
+ment can be provided in the monitor at only a very small                several virtual machines, and supports memory paging in
+fraction of the development effort that would be needed for             addition to any such mechanism that may be provided by the
+adding this support to the operating system.                            hosted operating system. These features have been carefully
+    2. The virtual cluster approach can quickly and effi-               implemented to avoid the inefficiencies that have plagued
+ciently correct resource allocation imbalances in scalable              virtual machine monitors in the past [20]. For example, Cel-
+systems. This capability allows Cellular Disco to manage                lular Disco tracks operating system memory usage and pag-
+the resources of a scalable multiprocessor significantly bet-           ing disk I/O to eliminate double paging overheads.
+ter than a hardware partitioning scheme and almost as well                  Cellular Disco must manage the physical resources in the
+as a highly-tuned operating system-centric approach. Vir-               system while satisfying the often conflicting constraints of
+tual clusters do not suffer from the resource allocation con-           providing good fault-containment and scalable resource load
+straints of actual hardware clusters, since large applications          balancing. Since a virtual machine becomes vulnerable to
+can be allowed to use all the resources of the system,                  faults in a cell once it starts using any resources from that
+instead of being confined to a single partition.                        cell, fault containment will only be effective if all of the
+    3. The small-scale, simulation-based results of Disco               resources for a given virtual machine are allocated from a
+appear to match the experience of running workloads on                  small number of cells. However, a naive policy may subop-
+real scalable hardware. We have built a Cellular Disco pro-             timally use the resources due to load imbalance. Resource
+totype that runs on a 32-processor SGI Origin 2000 [14] and             load balancing is required to achieve efficient resource utili-
+is able to host multiple instances of SGI's IRIX 6.2 operat-            zation in large systems. The Cellular Disco implementation
+ing system running complex workloads. Using this system,                of both CPU and memory load balancing was designed to
+we have shown that Cellular Disco provides all the features             preserve fault containment, avoid contention, and scale to
+mentioned above while keeping the run-time overhead of                  hundreds of nodes.
+virtualization below 10% for most workloads.                                In the process of virtualizing the hardware, Cellular
+    This paper focuses on our experience with the mecha-                Disco can also make many of the NUMA-specific resource
+nisms and policies implemented in Cellular Disco for deal-              management decisions for the operating system. The physi-
+ing with the interrelated challenges of hardware fault                  cal memory manager of our virtual machine monitor imple-
+containment and global resource management:                             ments first-touch allocation and dynamic migration or
+     Fault containment: Although a virtual machine monitor              replication of "hot" memory pages [29]. These features are
+automatically provides software fault containment in that a             coupled with a physical CPU scheduler that is aware of
+failure of one operating system instance is unlikely to harm            memory locality issues.
+software running in other virtual machines, the large poten-                By virtualizing the underlying hardware, Cellular Disco
+tial size of scalable shared-memory multiprocessors also                provides an additional level of indirection that offers an eas-
+requires the ability to contain hardware faults. Cellular Disco         ier and more effective alternative to changing the operating
+is internally structured into a number of semi-independent              system. For instance, we have added support that allows
+cells, or fault-containment units. This design allows the               large applications running across multiple virtual machines
+impact of most hardware failures to be confined to a single             to interact directly through shared memory by registering
+cell, a behavior very similar to that of clusters, where most           their shared memory regions directly with the virtual
+failures remain limited to a single node.                               machine monitor. This support allows a much more efficient
+     While Cellular Disco is organized in a cellular structure          interaction than through standard distributed-system proto-
+similar to the one in the Hive operating system [3], providing          cols and can be provided transparently to the hosted operat-
+fault containment in Cellular Disco required only a fraction            ing system.
+of the development effort needed for Hive, and it does not                  This paper is structured as follows. We start by describ-
+impact performance once the virtualization cost has been                ing the Cellular Disco architecture in Section 2. Section 3
+
+
+
+
+                                                                  155
+                                                                          dynamic needs and the priority of the virtual machine, simi-
+           App.cat,on          II    App IF;1A                            lar to the way an operating system schedules physical
+        os     II os           II    OperatinSystem                       resources based on the needs and the priority of user applica-
+                                                                          tions.
+        vM       II    vM      II     Virtua,Machine                          To be able to virtualize the hardware, the virtual
+                                                                          machine monitor needs to intercept all privileged opera-
+          Cellular Disco (Virtual Machine Monitor)                        tions performed by a virtual machine. This can be imple-
+                                                                          mented efficiently by using the privilege levels of the
+                                                                          processor. Although the complexity of a virtual machine
+                                                                          monitor depends on the underlying hardware, even com-
+                                                                          plex architectures such as the Intel x86 have been success-
+                                                                          fully virtualized [30]. The MIPS processor architecture
+                                                                          [11] that is supported by Cellular Disco has three privilege
+Figure 1.     Cellular Disco architecture. Multi )le                      levels: user mode (least privileged, all memory accesses are
+instances of an off-the-shelf operating system run                        mapped), supervisor mode (semi-privileged, allows
+inside virtual machines on top of a virtual machine                       mapped accesses to supervisor and user space), and kernel
+monitor; each instance is only booted with as many                        mode (most privileged, allows use of both mapped and
+resources as it can handle well. In the Origin 2000                       unmapped accesses to any location, and allows execution
+each node contains two CPUs and a portion of the                          of privileged instructions). Without virtualization, the
+system memory (not shown in the figure).                                  operating system runs at kernel level and applications exe-
+                                                                          cute in user mode; supervisor mode is not used. Under Cel-
+describes the prototype implementation and the basic virtu-               lular Disco, only the virtual machine monitor is allowed to
+alization and fault-containment overheads. Next, we discuss               run at kernel level, and thus to have direct access to all
+                                                                          machine resources in the system. An operating system
+our resource management mechanisms and policies: CPU
+management in Section 4 and memory management in                          instance running inside a virtual machine is only permitted
+Section 5. Section 6 discusses hardware fault recovery. We                to use the supervisor and user levels. Whenever a virtual-
+                                                                          ized operating system kernel executes a privileged instruc-
+conclude after comparing our work to hardware- and oper-
+                                                                          tion, the processor will trap into Cellular Disco where that
+ating system-centric approaches and discussing related
+work.                                                                     instruction is emulated. Since in supervisor mode all mem-
+                                                                          ory accesses are mapped, an additional level of indirection
+                                                                          thus becomes available to map physical resources to actual
+2   The Cellular Disco architecture                                       machine resources.
+Compared to previous work on virtual machine monitors,                        The operating system executing inside a virtual machine
+Cellular Disco introduces a number of novel features: sup-                does not have enough access privilege to perform I/O opera-
+port for hardware fault containment, scalable resource man-               tions. When attempting to access an I/O device, a CPU will
+agement mechanisms and policies that are aware of fault                   trap into the virtual machine monitor, which checks the
+containment constraints, and support for large, memory-                   validity of the I/O request and either forwards it to the real
+intensive applications. For completeness, we first present a              I/O device or performs the necessary actions itself in the case
+high-level overview of hardware virtualization that parallels             of devices such as the virtual paging disk (see Section 5.3).
+the descriptions given in [2] and [5]. We then discuss each of            Memory is managed in a similar way. While the operating
+the distinguishing new features of Cellular Disco in turn.                system inside a virtual machine allocates physical memory
+                                                                          to satisfy the needs of applications, Cellular Disco allocates
+                                                                          machine memory as needed to back the physical memory
+2.1 Overview o f hardware virtualization
+                                                                          requirements of each virtual machine. A pmap data structure
+Cellular Disco is a virtual machine monitor [5] that can exe-             similar to the one in Mach [18] is used by the virtual machine
+cute multiple instances of an operating system by running                 monitor to map physical addresses to actual machine
+each instance inside its own virtual machine (see Figure 1).              addresses. In addition to the pmap, Cellular Disco needs to
+Since the virtual machines export an interface that is similar            maintain a memmap structure that allows it to translate back
+to the underlying hardware, the operating system instances                from machine to physical pages; this structure is used for
+need not be aware that they are actually running on top of                dynamic page migration and replication, and for fault recov-
+Cellular Disco.                                                           ery (see Section 6).
+    For each newly created virtual machine, the user speci-                   Performing the physical-to-machine translation using the
+fies the amount of resources that will be visible to that virtual         pmap at every software reload of the MIPS TLB can lead to
+machine by indicating the number of virtual CPUs (VCPUs),                 very high overheads. Cellular Disco reduces this overhead
+the amount of memory, and the number and type of I/O                      by maintaining for every VCPU a 1024-entry translation
+devices. The resources visible to a virtual machine are called            cache called the second level software TLB (L2TLB). The
+physical resources. Cellular Disco allocates the actual                   entries in the L2TLB correspond to complete virtual-to-
+machine resources to each virtual machine as required by the              machine translations, and servicing a TLB miss from the
+
+
+
+
+                                                                    156
+                                                                         able to continue unaffected. We designed the system to favor
+  ]    V~       JJ VM J]                    VirtualMachine               a smaller overhead during normal execution but a higher cost
+                                                                         when a component fails, hopefully an infrequent occurrence.
+                                                                         The details of the fault recovery algorithm are covered in
+                                                                         Section 6.
+                                                                             One of our basic assumptions when designing Cellular
+                                                                         Disco was that the monitor can be kept small enough to be
+  ] ~.___        :      Interconnect                  : ._.___.~         thoroughly tested so that its probability of failure is
+                                                                         extremely low. Cellular Disco is thus considered to be a
+                                                                         trusted system software layer. This assumption is warranted
+                 '~    Cell b o ! n d a r i e s / '                      by the fact that with a size of less than 50K lines, the monitor
+                                                                         is about as complex as other trusted layers in the shared-
+Figure2. The cellular structure of Cellular Disco allows
+                                                                         memory machine (e.g., the cache coherence protocol imple-
+the impact of a hardware fault to 19e contained within
+                                                                         mentation), and it is about two orders of magnitude simpler
+the boundary of the cell w h e r e the fault occurred.
+                                                                         than modern operating systems, which may contain up to
+                                                                         several million lines of code.
+L2TLB is much faster than generating a virtual exception to
+be handled by the operating system inside the virtual                        The trusted layer decision can lead to substantially
+machine.                                                                 smaller overheads compared to a design in which the system
+                                                                         software layer cannot be trusted due to its complexity, such
+                                                                         as in the case of the Hive operating system [3]. If cells do not
+2.2 Support for hardware fault containment                               trust each other, they have to use expensive distributed pro-
+As the size of shared-memory machines increases, reliability             tocols to communicate and to update their data structures.
+becomes a key concern for two reasons. First, one can expect             This is substantially less efficient than directly using shared
+to see an increase in the failure rate of large systems: a tech-         memory. The overheads become evident when one considers
+nology that fails once a year for a small workstation corre-             the case of a single virtual machine straddling multiple cells,
+sponds to a failure rate of once every three days when used              all of which need to update the monitor data structures cor-
+in a 128-processor system. Second, since a failure will usu-             responding to the virtual machine. An example of a structure
+ally bring down the entire system, it can cause substantially            requiring frequent updates is the pmap address translation
+more state loss than on a small machine. Fault tolerance does            table.
+not necessarily offer a satisfactory answer for most users,                  Although Cellular Disco cells can use shared memory
+due to the system cost increase and to the fact that it does not         for updating virtual machine-specific data structures, they
+prevent operating system crashes from bringing down the                  are not allowed to directly touch data structures in other
+entire machine.                                                          cells that are essential for the survival of those cells. For
+    Support for software fault containment (of faults occur-             those cases, as well as when the monitor needs to request
+ring in the operating systems running inside the virtual                 that operations be executed on a given node or VCPU, a
+machines) is a straightforward benefit of any virtual machine            carefully designed communication mechanism is provided
+monitor, since the monitor can easily restrict the resources             in Cellular Disco that offers low latency and exactly-once
+that are visible to each virtual machine. If the operating sys-          semantics.
+tem running inside a virtual machine crashes, this will not                  The basic communication primitive is a fast inter-proces-
+impact any other virtual machines.                                       sor RPC (Remote Procedure Call). For our prototype Origin
+    To address the reliability concerns for large machines,              2000 implementation, we measured the round-trip time for
+we designed Cellular Disco to support hardware fault con-                an RPC carrying a cache line-sized argument and reply (128
+tainment, a technique that can limit the impact of faults to             bytes) at 16 ~ts. Simulation results indicate that this time can
+only a small portion of the system. After a fault, only a small          be reduced to under 7 gts if appropriate support is provided
+fraction of the machine will be lost, together with any appli-           in the node controller, such as in the case of the FLASH mul-
+cations running on that part of the system, while the rest of            tiprocessor [ 13].
+the system can continue executing unaffected. This behavior                  A second communication primitive, called a message, is
+is similar to the one exhibited by a traditional cluster, where          provided for executing an action on the machine CPU that
+hardware and system software failures tend to stay localized             currently owns a virtual CPU. This obviates most of the need
+to the node on which they occurred.                                      for locking, since per-VCPU operations are serialized on the
+    To support hardware fault containment, Cellular Disco is             owner. The cost of sending a message is on average the same
+internally structured as a set of semi-independent cells, as             as that of an RPC. Messages are based on a fault tolerant, dis-
+shown in Figure 2. Each cell contains a complete copy of the             tributed registry that is used for locating the current owner of
+monitor text and manages all the machine memory pages                    a VCPU given the ID of that VCPU. Since the registry is
+belonging to its nodes. A failure in one cell will only bring            completely rebuilt after a failure, VCPUs can change owners
+down the virtual machines that were using resources from                 (that is, migrate around the system) without having to
+that cell, while virtual machines executing elsewhere will be            depend on a fixed home. Our implementation guarantees
+
+
+
+
+                                                                   157
+exactly-once message semantics in the presence of conten-                    An important aspect of our memory balancing policies is
+tion, VCPU migration, and hardware faults.                              that they carefully weigh the performance gains obtained by
+                                                                        allocating borrowed memory versus the implications for
+2.3 Resource management under constraints                               fault containment, since using memory from a remote cell
+                                                                        can make a virtual machine vulnerable to failures on that
+Compared to traditional resource management issues, an                  cell.
+additional requirement that increases complexity in Cellular
+Disco is fault containment. The mechanisms and policies
+                                                                        2.4 Support for large applications
+used in our system must carefully balance the often conflict-
+ing requirements of efficiently scheduling resources and                In order to avoid operating system scalability bottlenecks,
+maintaining good fault containment. While efficient                     each operating system instance is given only as many
+resource usage requires that every available resource in the            resources as it can handle well. Applications that need fewer
+system be used when needed, good fault containment can                  resources than those allocated to a virtual machine run as
+only be provided if the set of resources used by any given              they normally would in a traditional system. However, large
+virtual machine is confined to a small number of cells. Addi-           applications are forced to run across multiple virtual
+tionally, our algorithms had to be designed to scale to system          machines.
+sizes of up to a few hundred nodes. The above requirements                  The solution proposed in Disco was to split large appli-
+had numerous implications for both CPU and memory man-                  cations and have the instances on the different virtual
+agement.                                                                machines communicate using distributed systems protocols
+    CPU management: Operating systems for shared-mem-                   that run over a fast shared-memory based virtual ethernet
+                                                                        provided by the virtual machine monitor. This approach is
+ory machines normally use a global run queue to perform
+                                                                        similar to the way such applications are run on a cluster or a
+load sharing; each idle CPU looking for work examines the
+run queue to attempt to find a runnable task. Such an                   hardware partitioning environment. Unfortunately, this
+approach is inappropriate for Cellular Disco because it vio-            approach requires that shared-memory applications be
+lates fault-containment requirements and because it is a                rewritten, and incurs significant overhead introduced by
+source of contention in large systems. In Cellular Disco,               communication protocols such as TCP/IP.
+each machine processor maintains its own run queue of                        Cellular Disco's virtual cluster environment provides a
+VCPUs. However, even with proper initial load placement,                much more efficient sharing mechanism that allows large
+separate run queues can lead to an imbalance among the pro-             applications to bypass the operating system and register
+cessors due to variability in processor usage over the lifetime         shared-memory regions directly with the virtual machine
+of the VCPUs. A load balancing scheme is used to avoid the              monitor. Since every system call is intercepted first by the
+situation in which one portion of the machine is heavily                monitor before being reflected back to the operating system,
+loaded while another portion is idle. The basic load balanc-            it is easy to add in the monitor additional system call func-
+ing mechanism implemented in Cellular Disco is V C P U                  tionality for mapping global shared-memory regions. Appli-
+migration; our system supports intra-node, intra-cell, and              cations running on different virtual machines can
+inter-cell migration of VCPUs. VCPU migration is used by                communicate through these shared-memory regions without
+a balancing policy module that decides when and which                   any extra overhead because they simply use the cache-coher-
+VCPU to migrate, based on the current load of the system                ence mechanisms built into the hardware. The only draw-
+and on fault containment restrictions.                                  back of this mechanism is that it requires relinking the
+                                                                        application with a different shared-memory library, and pos-
+    An additional feature provided by the Cellular Disco
+                                                                        sibly a few small modifications to the operating system for
+scheduler is that all non-idle VCPUs belonging to the same
+                                                                        handling misbehaving applications.
+virtual machine are gang-scheduled. Since the operating sys-
+tems running inside the virtual machines use spinlocks for                   Since the operating system instances are not aware of
+their internal synchronization, gang-scheduling is necessary            application-level memory sharing, the virtual machine mon-
+to avoid wasting precious cycles spinning for a lock held by            itor needs to provide the appropriate paging mechanisms and
+a descheduled VCPU.                                                     policies to cope with memory overload conditions. When
+                                                                        paging out to disk, Cellular Disco needs to preserve the shar-
+     Memory management: Fault-containment requires that                 ing information for pages belonging to a shared-memory
+each Cellular Disco cell manage its own memory allocation.              region. In addition to the actual page contents, the Cellular
+However, this can lead to a case in which a cell running a              Disco pager writes out a list of virtual machines using that
+memory-intensive virtual machine may run out of memory,                 page, so that sharing can be properly restored when the page
+while other cells have free memory reserves. In a static par-           is faulted back in.
+titioning scheme there would be no choice but to start paging
+data out to disk. To avoid an inefficient use of the shared-
+memory system, Cellular Disco implements a memory bor-
+                                                                        3   The Cellular Disco prototype
+rowing mechanism through which a cell may temporarily                   In this section we start by discussing our Cellular Disco pro-
+obtain memory from other cells. Since memory borrowing                  totype implementation that runs on actual scalable hardware.
+may be limited by fault containment requirements, we also               After describing the experimental setup, we provide evalua-
+support paging as a fall-back mechanism.                                tions of our virtualization and fault containment overheads.
+
+
+
+
+                                                                  158
+Virtual Machine                                                            Component              Characteristics
+                                                                          Processors              32 x MIPS RI0000 @ 195 MHz
+                                                                          Node controllers        16 x SGI Hub @ 100 MHz
+Cellular Disco        f~ard          ~,~                   ~)             Memory                  3.5 GB
+Host IRIX 6.4       actual~'~ _ 1                                         L2 cache size           4 MB
+(device drivers)    I/O r e q ~ "~            ?c4                         Disks                   5 (total capacity: 40GB)
+                                                                          Table 4. SGI Origin 2000 configuration that was used
+Hardware                                            ompletion int         for running most of the experiments in this paper.
+
+Figure 3. I/0 requests made by a virtual machine are                      exception vectors have been overwritten. To allow the host
+handled using host IRIX device drivers. This is a six                     drivers to properly handle I/O completion the monitor reac-
+step process that is fully described in the text.                         tivates the dormant IRIX, making it look as if the I/O inter-
+                                                                          rupt had just been posted (5). Finally, Cellular Disco posts a
+3.1 Prototype i m p l e m e n t a t i o n                                 virtual interrupt to the virtual machine to notify it of the com-
+                                                                          pletion of its I/O request (6). Since some drivers require that
+The Cellular Disco virtual machine monitor was designed to
+                                                                          the kernel be aware of time, Cellular Disco forwards all
+support shared-memory systems based on the MIPS R 10000
+                                                                          timer interrupts in addition to device interrupts to the host
+processor architecture [11]. Our prototype implementation
+                                                                          IRIX.
+consists of about 50K lines of C and assembly and runs on a
+32-processor SGI Origin 2000 [ 14].                                           Our piggybacking technique allowed us to bring up our
+                                                                          system on real hardware quickly, and enabled Cellular Disco
+    One of the main hurdles we had to overcome in the pro-
+                                                                          to handle any hardware device IRIX supports. By measuring
+totype was the handling of I/O devices. Since coping with all
+                                                                          the time spent in the host IRIX kernel, we found the over-
+the details of the Origin I/O hardware was beyond our avail-
+                                                                          head of the piggybacking approach to be small, less than 2%
+able resources, we decided to leverage the device driver
+                                                                          of the total running time for all the benchmarks we ran. The
+functionality already present in the SGI IRIX 6.4 operating
+                                                                          main drawback of our current piggybacking scheme is that it
+system for our prototype. Our Cellular Disco implementa-
+                                                                          does not support hardware fault containment, given the
+tion thus runs piggybacked on top of IRIX 6.4.
+                                                                          monolithic design of the host operating system. While the
+    To run our Cellular Disco prototype, we first boot the                fault containment experiments described in Section 6 do not
+IRIX 6.4 operating system with a minimal amount of mem-                   use the piggybacking scheme, a solution running one copy of
+ory. Cellular Disco is implemented as a multi-threaded ker-               the host operating system per Cellular Disco cell would be
+nel process that spawns a thread on each CPU. The threads                 possible with appropriate support in the host operating sys-
+are pinned to their designated processors to prevent the IRIX             tem.
+scheduler from interfering with the control of the virtual
+machine monitor over the machine's CPUs. Subsequent
+                                                                          3.2 E x p e r i m e n t a l setup
+actions performed by the monitor violate the IRIX process
+abstraction, effectively taking over the control of the                   We evaluated Cellular Disco by executing workloads on a
+machine from the operating system. After saving the kernel                32-processor SGI Origin 2000 system configured as shown
+registers of the host operating system, the monitor installs its          in Table 4. The running times for our benchmarks range
+own exception handlers and takes over all remaining system                from 4 to 6 minutes, and the noise is within 2%.
+memory. The host IRIX 6.4 operating system remains dor-                       On this machine we ran the following four workloads:
+mant but can be reactivated any time Cellular Disco needs to              Database, Pmake, Raytrace, and Web server. These work-
+use a device driver.                                                      loads, described in detail in Table 5, were chosen because
+    Whenever one of the virtual machines created on top of                they stress different parts of the system and because they are
+Cellular Disco requests an I/O operation, the request is han-             a representative set of applications that commercial users run
+dled by the procedure illustrated in Figure 3. The I/O request            on large machines.
+causes a trap into Cellular Disco (1), which checks access
+permissions and simply forwards the request to the host                   3.3 Virtualization overheads
+IRIX (2) by restoring the saved kernel registers and excep-
+                                                                          The performance penalty that must be paid for virtualization
+tion vectors, and requesting the host kernel to issue the
+appropriate I/O request (3). From the perspective of the host             largely depends on the processor architecture of the virtual-
+operating system, it looks as if Cellular Disco had been run-             ized system. The dominant portion of this overhead is the
+ning all the time just like any other well-behaved kernel pro-            cost of handling the traps generated by the processor for each
+cess. After IRIX initiates the I/O request, control returns to            privileged instruction executed by the kernel.
+Cellular Disco, which puts the host kernel back into the dor-                 To measure the impact of virtualization we compared the
+mant state. Upon I/O completion the hardware raises an                    performance of the workloads executing under two different
+interrupt (4), which is handled by Cellular Disco because the             setups. First, we ran the workloads on IRIX6.4 executing
+
+
+
+
+                                                                    159
+  Workload         Description
+                   Decision support workload based on the TPC-D [27] query suite on Informix Relational Database version 7.1.2 using a
+  Database
+                   200MB and a 1GB database. We measure the sum of the run times of the 17 non-update queries.
+ Pmake             I/al intensive parallel compilation of the SGI IRIX 5.3 operating system (about 500K lines of C and assembly code).
+: Raytrace         CPU intensive ray tracer from the SPLASH-2 [31] parallel benchmark suite. We used the balls4 data set with varying
+                   amounts of anti-aliasing so that it runs four to six minutes for single- and multi-process configurations.
+                   Kernel intensive web server workload. SpecWEB96 [23] running on an Apache web server. Although the workload always
+ Web
+                   runs for 5 minutes, we scaled the execution times so that each run performs the same number of requests.
+Table 5. Workloads. The execution times reported in this paper are the average of two stable runs after an initial
+warm-up run. The running times range from 4 to 6 minutes, with a noise of 2%.
+~ 120 ~"-                                  120
+P-           ln~      109            107                          112                                                120
+                                                      109                              I06    120                                                                Cellular Disco
+r,                                                                                                       110
+                                                            160                     160--                                                                        IrixKemel
+O10o
+•~                                         160                                                       10( - -   10(         100 101     10( __10z     10(         User
+                                                                                              100
+
+~60                                         so
+                                                                                               80
+ G
+ N
+----60                                      60
+ m                                                                                             60
+
+
+                                                                                               40
+
+     20                                     !0              ~     I                 ~          20                                             =
+                                                                                                                                                           Ill
+
+
+           tRtXCD ~R~XCO =R~XCO tR~XCO
+                                             o
+                                                  IRIX CD
+                                                            Ii
+                                                            IRlX CD     IRIX CD
+                                                                                    ~al
+                                                                                   ,R,xco
+                                                                                                0
+                                                                                                     II I
+                                                                                                     ,R,xco    ,R,xco
+                                                                                                                     |
+                                                                                                                           ,R,x   co   ,R,x
+                                                                                                                                              '~"~
+                                                                                                                                              co     IRIX CD
+          Database Pmake Raytrace Web            Database Pmake Raytrace Web                        Database Pmake Raytrace Web    Web
+                                                                                                                           Loaded Unloaded
+                   Uniprocessor                             8 processors                                             32 processors
+Figure 6. Virtualization overheads. For each workload, the left bar shows the execution time separated into various
+modes for the benchmark running on IRIX6.4 on top of the bare hardware. The right bar shows the same bench-
+mark running on IRIX6.2 on top of Cellular Disco. The time spent in IRIX6.4 device drivers is included in the
+Cellular Disco portion of each right bar. For multiprocessor runs, the idle time under Cellular Disco increases due to
+the virtualization overheads in the serial parts of the workload. The reduction in user time for some workloads is
+due to better memory placement. Note that for most workloads, the overheads are within 10%.
+
+directly on top of the bare hardware. Then, we ran the same                             down into time spent in idle mode, in the virtual machine
+workloads on IRIX6.2 executing on top of the Cellular Disco                             monitor (this portion also includes the time spent in the host
+virtual machine monitor. We used two different versions of                              kernel's device drivers), in the operating system kernel, and
+IRIX to demonstrate that Cellular Disco can leverage an off-                            in user mode. This breakdown was measured by using the
+the-shelf operating system that has only limited scalability to                         hardware counters of the MIPS RI0000 processors.
+provide essentially the same functionality and performance                                  Figure 6 also shows the virtualization overheads for 8
+as an operating system specifically designed for large-scale                            and 32 processor systems executing a single virtual machine
+machines. IRIX 6.2 was designed for small-scale Challenge                               that spans all the processors. We have included two cases
+bus-based multiprocessors [7], while IRIX 6.4 was the latest                            (loaded and unloaded) for the Web workload because the
+operating system available for the Origin 2000 when we                                  two systems perform very differently depending on the load.
+started our experimental work. Another reason for using two                             The unloaded case limits the number of server and client pro-
+different versions of IRIX is that IRIX6.2 does not run on the                          cesses to 16 each (half the number of processors), while the
+Origin 2000. Except for scalability fixes in IRIX6.4, the two                           loaded case starts 32 clients and does not limit the number of
+versions are fairly similar; therefore, the uniprocessor num-                           server processes (the exact value is determined by the web
+bers presented in this section provide a good estimate of the                           server). IRIX6.4 uses blocking locks in the networking code,
+virtualization cost. However, multiprocessor numbers may                                which results in better performance under heavy load, while
+also be distorted by the scalability limitations of IRIX6.2.                            IRIX6.2 uses spin locks, which increases kernel time but
+    The Cellular Disco virtualization overheads are shown in                            performs better under light load. The Database, Pmake, and
+Figure 6. As shown in the figure, the worst-case uniproces-                             Web benchmarks have a large amount of idle time due to
+sor virtualization penalty is only 9%. For each workload, the                           their inability to fully exploit the available parallelism; a sig-
+bar on the left shows the time (normalized to 100) needed to                            nificant fraction of those workloads is serialized on a single
+complete the run on IRIX 6.4, while the bar on the right                                processor. Note that on a multiprocessor virtual machine,
+shows the relative time to complete the same run on IRIX 6.2                            any virtualization overheads occurring in the serial part of a
+running on top of the monitor. The execution time is broken                             workload are magnified since they increase the idle time of
+
+
+
+
+                                                                                  160
+                                                                              migration, each providing a different tradeoff between per-
+                                                       Idle
+              100 101   100 98    100 101   100 101                           formance and cost.
+~10o                                                   Cellular Disco
+                                                       Inx Kemel
+o                                                                                  The simplest VCPU migration case occurs when a
+                                                       User
+    8o B                                                                      VCPU is moved to a different processor on the same node
+                                                                              (the Origin 2000 has two CPUs per node). Although the time
+                                                                              required to update the internal monitor data structures is only
+                                                                              37 gs, the real cost is paid gradually over time due to the loss
+E                                                                             of CPU cache affinity. To get a rough estimate of this cost,
+    40                                                                        let us assume that half of the 128-byte lines in the 4 MB sec-
+Z
+         I
+                                                                              ond-level cache are in use, with half of the active lines local
+    20                                                                        and the other half remote. Refilling this amount of cached
+
+         :ii_tt
+              lc   8c   lc   8c   lc   8c   lc    8c
+                                                                              information on the destination CPU requires about 8 ms.
+                                                                                   The second type of migration occurs when a VCPU is
+             Database Pmake RaNrace Web                                       moved to a processor on a different node within the same
+                                                                              cell. Compared to the cost of intra-node migration, this case
+Figure 7. Overhead of fault-containment. The left bar,                        incurs the added cost of copying the second level software
+normalized to 100, shows the execution breakdown in                           TLB (described in Section 2.1) which is always kept on the
+a single cell configuration. The right bar shows the                          same node as the VCPU since it is accessed very frequently.
+execution profile on an 8 cell system. In both cases,                         At 520 gs, the cost for copying the entire L2TLB (32 KB) is
+we ran a single 32-processor virtual machine spanning                         still much smaller than the gradual cost of refilling the CPU
+the entire system.                                                            cache. However, inter-node migration has a higher long-
+                                                                              term cost because the migrated VCPU is likely to access
+the unused VCPUs. Even under such circumstances, Cellular                     machine memory pages allocated on the previous node.
+Disco introduces only 20% overhead in the worst case.                         Unlike the cost of cache affinity loss which is only paid once,
+                                                                              accessing remote memory is a continuous penalty that is
+3.4 Fault-containment overheads                                               incurred every time the processor misses on a remote cache
+                                                                              line. Cellular Disco alleviates this penalty by dynamically
+In order to gauge the overheads introduced by the cellular                    migrating or replicating frequently accessed pages to the
+structure of Cellular Disco, we ran our benchmarks on top of                  node generating the cache misses [29].
+the virtual machine monitor using two configurations. First,
+the monitor was run as a single cell spanning all 32 proces-                      The third type of VCPU migration occurs when a VCPU
+sors in the machine, corresponding to a setup that does not                   is moved across a cell boundary; this migration costs
+provide any fault containment. Second, we booted Cellular                     1520 gs including the time to copy the L2TLB. Besides los-
+Disco in an 8-cell configuration, with 4 processors per cell.                 ing cache and node affinity, this type of migration may also
+We ran our workloads inside a 32-processor virtual machine                    increase the fault vulnerability of the VCPU. If the latter has
+that was completely contained in the single cell in the first                 never before run on the destination cell and has not been
+case, and that spanned all 8 cells in the second one.                         using any resources from it, migrating it to the new cell will
+                                                                              make it vulnerable to faults in that cell. However, Cellular
+    Figure7 shows that the running time for virtual                           Disco provides a mechanism through which dependencies to
+machines spanning cell boundaries is practically the same as                  the old cell can be entirely removed by moving all the data
+when executing in a single cell (except for some small differ-                used by the virtual machine over to the new cell; this process
+ences due to scheduling artifacts). This result shows that in                 is covered in detail in Section 4.5.
+Cellular Disco, hardware fault containment can be provided
+at practically no loss in performance once the virtualization
+overheads have been factored out. This result stands in sharp                 4.2 CPU balancing policies
+contrast to earlier fault containment work [3].                               Cellular Disco employs two separate CPU load balancing
+                                                                              policies: the idle balancer and the periodic balancer. The idle
+4        CPU management                                                       balancer runs whenever a processor becomes idle, and per-
+                                                                              forms most of the balancing work. The periodic balancer
+In this section, we first describe the processor load balancing               redistributes those VCPUs that are not handled well by the
+mechanisms provided in Cellular Disco. We then discuss the                    idle balancer.
+policies we use to actually balance the system. Next we dis-
+                                                                                  When a processor becomes idle, the idle balancer runs on
+cuss our implementation of gang scheduling. We conclude
+                                                                              that processor to search for VCPUs that can be "stolen" from
+with an evaluation of the performance of the system and with
+comments on some interesting issues regarding inter-cell                      the run queues of neighboring processors in the same cell,
+migration.                                                                    starting with the closest neighbor. However, the idle bal-
+                                                                              ancer cannot arbitrarily select any VCPU on the remote
+                                                                              queues due to gang scheduling constraints. Cellular Disco
+4.1 C P U b a l a n c i n g m e c h a n i s m s                               will schedule a VCPU only when all the non-idle VCPUs of
+Cellular Disco supports three different types of VCPU                         that virtual machine are runnable. Annotations on the idle
+
+
+
+
+                                                                        161
+                                                                        To reduce memory contention the tree nodes are physically
+                                                                        spread across the machine. Starting from its corresponding
+                                                                        leaf, each processor updates the tree on every 10 ms timer
+                                                                        interrupt. Cellular Disco reduces the contention on higher
+                                                                        level nodes by reducing the number of processors that can
+                                                                        update a level by half at every level greater than three.
+                                                                            The periodic balancer traverses this tree depth first,
+                                                                        checking the load disparity between the two children. If the
+                                                                        disparity is larger than one VCPU, The balancer will try to
+                                                                        find a VCPU from the loaded side that is a good candidate for
+                                                                        migration. Gang scheduling requires that two VCPUs of the
+                                                                        same VM not be scheduled on the same processor; therefore,
+                                                                        one of the requirements for a good candidate is that the less
+       Idle balancer                                                    loaded side must have a processor that does not already have
+                                                                        another VCPU of the same virtual machine. If the two sides
+Figure 8. CPU balancing scenario. The numbers inside                    belong to different cells, then migrating a VCPU will make it
+the nodes of the tree represent the CPU load on the                     vulnerable to faults in the new cell. To prevent VCPUs from
+corresponding portion of the machine. The letter in the                 being vulnerable to faults in many cells, Cellular Disco keeps
+VCPU name specifies the virtual machine, while the                      track of the list of cells each VCPU is vulnerable to, and the
+number designates the virtual processor. VCPUs in                       periodic balancer prefers migrating VCPUs that are already
+the top row are currently scheduled on the processors.                  vulnerable to faults on the less-loaded cell.
+                                                                            Executing the periodic balancer across the entire system
+                                                                        can be expensive for large machines; therefore we left this as
+loop of the kernel inform Cellular Disco when a VCPU
+                                                                        a tunable parameter, currently set at 80 ms. However,
+becomes idle. The idle balancer checks the remote queues
+                                                                        heavily loaded systems can have local load imbalances that
+for VCPUs that, if moved, would allow that virtual machine
+                                                                        are not be handled by idle balancer due to the lack of idle
+to run. For example, consider the case shown in Figure 8.
+                                                                        cycles. Cellular Disco addresses this problem by also adding
+VCPUs in the top row are currently executing on the actual
+                                                                        a local periodic load balancer that runs on each 8 CPU region
+machine CPUs; CPU 0 is idle due to gang scheduling con-
+straints. After checking the remote queues, the idle balancer           every 20 ms. The combination of these schemes results in an
+running on CPU 1 will migrate VCPU B 1 because the migra-               efficient adaptive system.
+tion will allow VCPUs B0 and B 1 to run on CPUs 0 and 1,
+respectively. Although migrating VCPU B 1 would allow to                4.3 Scheduling policy
+it start executing right away, it may have enough cache and             Both of the balancing schemes described in the previous sec-
+node affinity on CPU 2 to cancel out the gains. Cellular                tion would be ineffective without a scalable gang scheduler.
+Disco tries to match the benefits with the cost of migration            Most gang schedulers use either space or time partitioning,
+by delaying migration until a VCPU has been descheduled                 but these schemes require a centralized manager that
+for some time depending on the migration distance: 4 ms for             becomes a scalability bottleneck. Cellular Disco's scheduler
+intra-node, and 6 ms for inter-node. These were the optimal             uses a distributed algorithm similar to the IRIX gang sched-
+values after testing a range from 1 ms to 10 ms; however, the           uler [1].
+overall performance only varies by 1-2% in this range.
+                                                                            When selecting the next VCPU to run on a processor, our
+    The idle balancer performs well even in a fairly loaded             scheduler always picks the highest-priority gang-runnable
+system because there are usually still a few idle cycles avail-         VCPU that has been waiting the longest. A VCPU becomes
+able for balancing decisions due to the fragmentation caused            gang-runnable when all the non-idle VCPUs of that virtual
+by gang scheduling. However, by using only local load                   machine are either running or waiting on run queues of pro-
+information to reduce contention, the idle balancer is not              cessors executing lower priority virtual machines. After
+always able to take globally optimal decisions. For this rea-           selecting a VCpU, the scheduler sends RPCs to all the pro-
+son, we included in our system a periodic balancer that uses            cessors that have VCPUs belonging to this virtual machine
+global load information to balance load in heavily loaded               waiting on the run queue. On receiving this RPC, those pro-
+systems and across different cells. Querying each processor             cessors deschedule the VCPU they were running, follow the
+individually is impractical for systems with hundreds of pro-           same scheduling algorithm, and converge on the desired vir-
+cessors. Instead, each processor periodically updates the               tual machine. Each processor makes its own decisions, but
+load tree, a low-contention distributed data structure that             ends up converging on the correct choice without employing
+tracks the load of the entire system.                                   a central global manager.
+   The load tree, shown in Figure 8, is a binary tree encom-
+passing the entire machine. Each leaf of the tree represents a          4.4 CPU management results
+processor, and stores the load on that processor. Each inner            We tested the effectiveness of the complete CPU manage-
+node in the tree contains the sum of the loads of its children,         ment system by running the following three-part experiment.
+
+
+
+
+                                                                  162
+First, we ran a single virtual machine with 8 VCPUs execut-              mechanism, it is important to discuss the memory allocation
+ing an 8-process raytrace, leaving 24 processors idle. Next,             module. Each cell maintains its own freelist (list of free
+we ran four such virtual machines, each one running an 8-                pages) indexed by the home node of each memory page. Ini-
+process raytrace. Finally, we ran eight virtual machines con-            tially, the freelist entries for nodes not belonging to this cell
+figured the same way, a total of 64 VCPUs running raytrace               are empty, as the cell has not yet borrowed any memory.
+processes. An ideal system would run the first two configu-              Every page allocation request is tagged with a list of nodes
+rations in the same time, while the third case should take               that can supply the memory (this list is initialized when a vir-
+twice as long. We measured only a 0.3% increase in the sec-              tual machine is created). When satisfying a request, a higher
+ond case, and the final configuration took 2.17 times as long.           preference is given to memory from the local node, in order
+The extra time can be attributed to migration overheads,                 to reduce the memory access latency on NUMA systems
+cache affinity loss due to scheduling, and some load imbal-              (first-touch allocation strategy).
+ance. To get a baseline number for the third case, we ran the
+                                                                              The memory balancing mechanism is fairly straightfor-
+same experiment on IRIX6.4 and found that IRIX actually
+                                                                         ward. A cell wishing to borrow memory issues a fast RPC to
+exhibits a higher overhead of 2.25.
+                                                                         a cell which has available memory. The loaner cell allocates
+                                                                         memory from its freelist and returns a list of machine pages
+4.5 Inter-cell migration issues                                          as the result of the RPC. The borrower adds those pages to
+Migrating VCPUs across cell boundaries raises a number of                its freelist, indexed by their home node. This operation takes
+interesting issues. One of these is when to migrate the data             758 ~ts to borrow 4 MB of memory.
+structure associated with the entire virtual machine, not just
+a single VCPU. The size of this data structure is dominated              5.2 Memory balancing policies
+by the pmap, which is proportional to the amount of physical
+memory the virtual machine is allowed to use. Although the               A cell starts borrowing memory when its number of free
+L2TLB reduces the number of accesses to the pmap, it is still            pages reaches a low threshold, but before completely run-
+desirable to place the pmap close to the VCPUs so that soft-             ning out of pages. This policy seeks to avoid forcing small
+ware reloaded TLB misses can be satisfied quickly. Also, if              virtual machines that fit into a single cell to have to use
+all the VCPUs have migrated out of a cell, keeping the pmap              remote memory. For example, consider the case of a cell
+in the old cell leaves the virtual machine vulnerable to faults          with two virtual machines: one with a large memory foot-
+in the old cell. We could migrate the virtual machine-wide               print, and one that entirely fits into the cell. The large virtual
+data structures when most of the VCPUs have migrated to a                machine will have to use remote memory to avoid paging,
+new cell, but the pmap is big enough that we do not want to              but the smaller one can achieve good performance with just
+move it that frequently. Therefore, we migrate it only when              local memory, without becoming vulnerable to faults in
+all the VCPUs have migrated to a different cell. We have                 other cells. The cell must carefully decide when to allocate
+carefully designed this mechanism to avoid blocking the                  remote memory so that enough local memory is available to
+VCPUs, which can run concurrently with this migration.                   satisfy the requirements of the smaller virtual machine.
+This operation takes 80 ms to copy I/O-related data struc-                   Depending on their fault containment requirements,
+tures other than the pmap, and copying the pmap takes                    users can restrict the set of cells from which a virtual
+161 bts per MB of physical memory the virtual machine is                 machine can use borrowed memory. Paging must be used as
+allowed to use.                                                          a last recourse if free memory is not available from any of the
+    Although Cellular Disco migrates the virtual machine                 cells in this list. To avoid paging as much as possible, a cell
+data structures when all the VCPUs have moved away from                  should borrow memory from cells that are listed in the allo-
+a cell, this is not sufficient to remove vulnerability to faults         cation preferences of the virtual machines it is executing.
+occurring in the old cell. To become completely independent              Therefore, every cell keeps track of the combined allocation
+from the old cell, any data pages being used by a virtual                preferences of all the virtual machines it is executing, and
+machine must be migrated as well. This operation takes                   adjusts that list whenever a virtual machine migrates into or
+25 ms per MB of memory being used by the virtual machine                 out of the cell.
+and can be executed without blocking any of the VCPUs.                       A policy we have found to be effective is the following:
+                                                                         when the local free memory of a cell drops below 16MB, the
+5 Memory management                                                      cell tries to maintain at least 4MB of free memory from each
+In this section, we focus on the problem of managing                     cell in its allocation preferences list; the cell borrows 4MB
+machine memory across cells. We will present the mecha-                  from each cell in the list from which it has less than 4MB
+nisms to address this problem, policies that uses those mech-            available. This heuristic biases the borrowing policy to
+anisms, and an evaluation of the performance of the                      solicit memory from cells that actively supply pages to at
+complete system. The section concludes by looking at issues              least one virtual machine. Cells will agree to loan memory as
+related to paging.                                                       long as they have more than 32MB available. The above
+                                                                         thresholds are all tunable parameters. These default values
+                                                                         were selected to provide hysteresis for stability, and they are
+5.1 Memory balancing mechanism                                           based on the number of pages that can be allocated during
+Before describing the Cellular Disco memory balancing                    the interval between consecutive executions of the policy,
+
+
+
+
+                                                                   163
+every 10 ms. In this duration, each CPU can allocate at most                               Case A: without           Case B: with
+732 KB, which means that a typical cell with 8CPUs can                                     virtual paging disk       virtual paging disk
+only allocate 6MB in 10 ms if all the CPUs allocate memory
+                                                                                          I Cellular Disco pageout   Cellular Disco pageout
+as fast as possible, a very unlikely scenario; therefore, we
+                                                                                             Disk write               Disk write
+decided to borrow 4MB at a time. Cells start borrowing                                      OS pageout               OS pageout
+when only 16MB are left because we expect the resident size                                  Page fault in            Update mapping
+of small virtual machines to be in 10-15MB range.                                            Disk write
+    We measured the effectiveness of this policy by running
+                                                                             Total disk
+a 4-processor Database workload. First, we ran the bench-                    accesses;
+                                                                                                      3                         1
+mark with the monitor configured as a single cell, in which
+case there is no need for balancing. Next, we ran in an 8-cell           Figure 9. Redundant paging. Disk activity is shown in
+configuration, with 4 CPUs per cell. In the second configu-              bold. Case A illustrates the problem, which results in 3
+ration, the cell executing the Database virtual machine did              disk accesses, while Case B shows the way Cellular
+not have enough memory to satisfy the workload and ended                 Disco avoids it, requiring just one disk access.
+up borrowing 596MB of memory from the other cells. Bor-
+rowing this amount of memory had a negligible impact on                  independent decisions, some pages may have to be written
+the overall execution time (less than 1% increase).                      out to disk twice, or read in just to be paged back out. Cellu-
+                                                                         lar Disco avoids this inefficiency by trapping every read and
+                                                                         write to the kernel's paging disk, identified by designating
+5.3 Issues related to paging
+                                                                         for every virtual machine a special disk that acts as the vir-
+If all the cells are running low on memory, there is no choice           tual paging disk. Figure 9 illustrates the problem and the way
+but to page data out to disk. In addition to providing the basic         Cellular Disco avoids it. In both cases shown, the virtual
+paging functionality, our algorithms had to solve three addi-            machine kernel wishes to write a page to its paging disk that
+tional challenges: identifying actively used pages, handling             Cellular Disco has already paged out to its own paging disk.
+memory pages shared by different virtual machines, and                   Without the paging disk, as shown in Case A, the kernel's
+avoiding redundant paging.                                               pageout request appears to the monitor as a regular disk write
+     Cellular Disco implements a second-chance FIFO queue                of a page that has been paged out to Cellular Disco's paging
+to approximate LRU page replacement, similar to VMS                      disk. Therefore, Cellular Disco will first fault that page in
+[15]. Each virtual machine is assigned a resident set size that          from its paging disk, and then issue the write for the kernel's
+is dynamically trimmed when the system is running low on                 paging disk. Case B shows the optimized version with the
+memory. Although any LRU approximation algorithm can                     virtual paging disk. When the operating system issues a write
+find frequently used pages, it cannot separate the infre-                to this disk, the monitor notices that it has already paged out
+quently used pages into pages that contain active data and               the data, so it simply updates an internal data structure to
+unallocated pages that contain garbage. Cellular Disco                   make the sectors of the virtual paging disk point to the real
+avoids having to write unallocated pages out to disk by non-             sectors on Cellular Disco's paging disk. Any subsequent
+intrusively monitoring the physical pages actually being                 operating system read from the paging disk is satisfied by
+used by the operating system. Annotations on the operating               looking up the actual sectors in the indirection table and
+system's memory allocation and deallocation routines pro-                reading them from Cellular Disco's paging disk.
+vide the required information to the virtual machine moni-
+                                                                             We measured the impact of the paging optimization by
+tor.
+                                                                         running the following micro-benchmark, called stressMem.
+    A machine page can be shared by multiple virtual                     After allocating a very large chunk of memory, stressMem
+machines if the page is used in a shared memory region as                writes a unique integer on each page; it then loops through
+described in Section 2.4, or as a result of a COW (Copy-On-              all the pages again, verifying that the value it reads is the
+Write) optimization. The sharing information is usually kept             same as what it wrote out originally. StressMem ran for 258
+in memory in the control data structures for the actual                  seconds when executing without the virtual paging disk opti-
+machine page. However, this information cannot remain                    mization, but it took only 117 seconds with the optimization
+there once the page has been written out if the machine page             (a 55% improvement).
+is to be reused. In order to preserve the sharing, Cellular
+Disco writes the sharing information out to disk along with
+the data. The sharing information is stored on a contiguous              6       Hardware       fault recovery
+sector following the paged data so that it can be written out            Due to the tight Coupling provided by shared-memory hard-
+using the same disk I/O request; this avoids the penalty of an           ware, the effects of any single hardware fault in a multipro-
+additional disk seek.                                                    cessor can very quickly ripple through the entire system.
+    Redundant paging is a problem that has plagued early                 Current commercial shared-memory multiprocessors are
+virtual machine implementations [20]. This problem can                   thus extremely likely to crash after the occurrence of any
+occur since there are two separate paging schemes in the sys-            hardware fault. To resume operation on the remaining good
+tem: one in Cellular Disco, the other in the operating systems           resources after a fault, these machines require a hardware
+running in the virtual machines. With these schemes making               reset and a reboot of the operating system.
+
+
+
+
+                                                                   164
+     As shown in [26], it is possible to design multiprocessors
+that limit the impact of most faults to a small portion of the             F-4ql        vM, II            vM3 II vM,
+machine, called a hardware fault containment unit. Cellular
+Disco requires that the underlying hardware be able to
+recover itself with such a recovery mechanism. After detect-
+                                                                            I            II                II v,,, II vM, I
+ing a hardware fault, the fault recovery support described in                      'i     '
+                                                                                          J       ' Cellula~
+                                                                                                  i                Disco'   i   'i   '
+                                                                                                                                     I
+
+
+[26] diagnoses the system to determine which resources are
+still operational and reconfigures the machine in order to
+allow the resumption of normal operation on the remaining
+good resources. An important step in the reconfiguration
+process is to determine which cache lines have been lost as a
+result of the failure. Following a failure, cache lines can be
+either coherent (lines that were not affected by the fault) or
+incoherent (lines that have been lost because of the fault).                       i      i       i            i            i   i    i
+
+
+
+Since the shared-memory system is unable to supply valid                   Figure 10. Experimental setup used for the fault-
+data for incoherent cache lines, any cache miss to these lines             containment experiments shown in Table 11. Each
+must be terminated by raising an exception.                                virtual machine has essential dependencies on two
+    After completing hardware recovery, the hardware                       Cellular Disco cells. The fault injection experiments
+informs Cellular Disco that recovery has taken place by post-              were performed on a detailed simulation of the FLASH
+ing an interrupt on all the good nodes. This interrupt will                multiprocessor [13].
+cause Cellular Disco to execute its own recovery sequence to
+determine the set of still-functioning cells and to decide                 dencies are treated similarly to memory dependencies.
+which virtual machines can continue execution after the
+                                                                               The experimental setup used throughout the rest of this
+fault. This recovery process is similar to that done in Hive
+                                                                           paper could not be used for testing the Cellular Disco fault
+[3], but our design is much simpler for two reasons: we did
+                                                                           recovery support, since the necessary hardware fault con-
+not have to deal with operating system data structures, and
+                                                                           tainment support required by Cellular Disco is not imple-
+we can use shared-memory operations because cells can trust
+                                                                           mented in the Origin 2000 multiprocessor, and since in the
+each other. Our simpler design results in a much faster
+                                                                           piggybacking solution of Section 3.1 the host operating sys-
+recovery time.
+                                                                           tem represents a single point of failure. Fortunately, Cellular
+     In the first step of the Cellular Disco recovery sequence,            Disco was originally designed to run on the FLASH multi-
+all cells agree on a liveset (set of still-functioning nodes) that         processor [13], for which the hardware fault containment
+forms the basis of all subsequent recovery actions. While                  support described in [26] was designed. When running on
+each cell can independently obtain the current liveset by                  FLASH, Cellular Disco can fully exploit the machine's hard-
+reading hardware registers [26], the possibility of multiple               ware fault containment capabilities. The main difference
+hardware recovery rounds resulting from back-to-back hard-                 between FLASH and the Origin 2000 is the use in FLASH of
+ware faults requires the use of a standard n-round agreement               a programmable node controller called MAGIC. Most of the
+protocol [ 16] to guarantee that all cells operate on a common             hardware fault containment support in FLASH is imple-
+liveset.                                                                   mented using MAGIC firmware.
+    The agreed-upon liveset information is used in the sec-                    We tested the hardware fault recovery support in Cellular
+ond recovery step to "unwedge" the communication system,                   Disco by using a simulation setup that allowed us to perform
+which needs to be functional for subsequent recovery                       a large number of fault injection experiments. We did not use
+actions. In this step, any pending RPC's or messages to                    the FLASH hardware because the current FLASH prototype
+failed cells are aborted; subsequent attempts to communicate               only has four nodes and because injecting multiple con-
+with a failed cell will immediately return an error.                       trolled faults is extremely difficult and time consuming on
+                                                                           real hardware. The SimOS [19] and FlashLite [13] simula-
+    The final recovery step determines which virtual
+                                                                           tors provide enough detail to accurately observe the behavior
+machines had essential dependencies on the failed cells and
+                                                                           of the hardware fault containment support and of the system
+terminates those virtual machines. Memory dependencies
+                                                                           software after injecting any of a number of common hard-
+are determined by scanning all machine memory pages and
+                                                                           ware faults into the simulated FLASH system.
+checking for incoherent cache lines; the hardware provides a
+mechanism to perform this check. Using the memmap data                         Figure 10 shows the setup used in our fault injection
+structure, bad machine memory pages are translated back to                 experiments. We simulated an 8-node FLASH system run-
+the physical memory pages that map to them, and then to the                ning Cellular Disco. The size of the Cellular Disco cells was
+virtual machines owning those physical pages. A tunable                    chosen to be one node, the same as that of the FLASH hard-
+recovery policy parameter determines whether a virtual                     ware fault containment units. We ran 8 virtual machines,
+machine that uses a bad memory page will be immediately                    each with essential dependencies on two different cells. Each
+terminated or will be allowed to continue running until it                 virtual machine executed a parallel compile of a subset of the
+tries to access an incoherent cache line. I/O device depen-                GnuChess source files.
+
+
+
+
+                                                                     165
+                                                                                500                            500
+                                    Number of                                         total                           total ~      /,
+ Simulated hardware fault                        Success Rate                          HW ........
+                                   experiments
+ Node power supply failure            250            100%                       300
+                                                                                      ] 16 MB/node ]           300
+ Router power supply failure          250            100%
+                                                                          -~,
+ Link cable or connector failure      250            100%
+                                                                                lOO                            100
+ MAGIC firmware failure               250            100%
+
+Table 11. For all the fault in iection experiments shown,                              2 8 16             32          16 64 128      256MB
+the simulated system recovered and produced correct                                   f (number of nodes)            f (memory per node)
+results.
+                                                                          Figure 12. Fault-recovery times shown as a function of
+                                                                          the number of nodes in the system and the amount of
+    On the configuration shown in Figure 10 we performed                  memory per node. The total time includes both hard-
+the fault injection experiments described in Table 11. After              ware and Cellular Disco recovery.
+injecting a hardware fault, we allowed the FLASH hardware
+recovery and the Cellular Disco recovery to execute, and ran
+                                                                          cluster of small machines with a fast interconnect. This
+the surviving virtual machines until their workloads com-
+                                                                          approach is also similar to Cellular Disco without inter-cell
+pleted. We then checked the results of the workloads by
+                                                                          resource sharing. In fact, because IRIX6.2 does not run on
+comparing the checksums of the generated object files with                the SGI Origin, we evaluated the performance of this
+the ones obtained from a reference run. An experiment was
+                                                                          approach using Cellular Disco without inter-cell sharing. We
+deemed successful if exactly one Cellular Disco cell and the
+                                                                          used IRIX6.4 as the representative of operating system-cen-
+two virtual machines with dependencies on that cell were
+                                                                          tric approaches.
+lost after the fault, and if the surviving six virtual machines
+produced the correct results. Table 11 shows that the Cellu-                  Small applications that fit inside a single hardware parti-
+lar Disco hardware fault recovery support was 100% effec-                 tion run equally well on all three systems, except for the
+tive in 1000 experiments that covered router, interconnect                small virtualization overheads of Cellular Disco. Large
+link, node, and MAGIC firmware failures.                                  resource-intensive applications that don't fit inside a single
+                                                                          partition, however, can experience significant slowdown
+    In order to evaluate the performance impact of a fault on             when running on a partitioned system due to the lack of
+the surviving virtual machines, we measured the recovery                  resource sharing. In this section we evaluate all three sys-
+times in a number of additional experiments. Figure 12                    tems using such a resource-intensive workload to demon-
+shows how the recovery time varies with the number of                     strate the need for resource sharing.
+nodes in the system and the amount of memory per node.
+The figure shows that the total recovery time is small (less                   For our comparison, we use a workload consisting of a
+than half a second) for all tested hardware configurations.               mix of applications that resembles the way large-scale
+While the recovery time only shows a modest increase with                 machines are used in practice: we combine an 8-process
+                                                                          Database workload with a 16-process Raytrace run. By
+the number of nodes in the system, there is a steep increase
+with the amount of memory per node. For large memory                      dividing the 32-processor Origin system into 4 cells (each
+configurations, most of the time is spent in two places. First,           with 8 processors), we obtain a configuration in which there
+to determine the status of cache lines after a failure, the hard-         is neither enough memory in any single cell to satisfy Data-
+ware fault containment support must scan all node coherence               base, nor enough CPUs in any cell to satisfy Raytrace.
+directories. Second, Cellular Disco uses MAGIC firmware                   Because the hardware partitioning approach cannot automat-
+support to determine which machine memory pages contain                   ically balance the load, we explicitly placed the two applica-
+inaccessible or incoherent cache lines. Both of these opera-              tions on different partitions. In all three cases, we started
+                                                                          both applications at the same time, and measured the time it
+tions involve expensive directory scanning operations that
+are implemented using MAGIC firmware. The cost of these                   took them to finish, along with the overall CPU utilization.
+                                                                          Table 13 summarizes the results of our experimental com-
+operations could be substantially reduced in a machine with
+                                                                          parison. As exPected, the performance of our virtual clusters
+ a hardwired node controller.
+                                                                          solution is very close to that of the operating system-centric
+                                                                          approach as both applications are able to access as many
+7    Comparison to other approaches                                       resources as they need. Also, as expected, the hardware par-
+In the previous sections we have shown that Cellular Disco                titioning approach suffers serious performance degradation
+combines the features of both hardware partitioning and tra-              due to the lack of resource sharing.
+ditional shared-memory multiprocessors. In this section we                    The hardwai'e partitioning and cluster approaches typi-
+compare the performance of our system against both hard-                  cally avoid such serious problems by allocating enough
+ware partitioning and traditional operating system-centric                resources in each partition to meet the expected peak
+approaches. The hardware partitioning approach divides a                  demand; for example, the database partition would have
+large scale machine into a set of small scale machines and a              been allocated with more memory and the raytrace partition
+separate operating system is booted on each one, similar to a             with more processors. However, during normal operation
+
+
+
+
+                                                                    166
+                                                                          MultiProcessing (CMP) architecture [28]. The benefits of
+Approach                  Raytrace     Database CPU util.
+                                                                          this approach are that it only requires very small operating
+Operating system            216 s         231 s        55%                system changes, and that it provides limited fault isolation
+Virtual cluster             221 s         229 s        58%                between partitions [25][28]. The major drawback of parti-
+Hardware partitioning       434 s         325 s        31%                tioning is that it lacks resource sharing, effectively turning a
+                                                                          large and expensive machine into a cluster of smaller sys-
+Table 13. Comparison of our virtual cluster approach to                   tems that happen to share a fast network. As shown in
+operating system- and hardware-centric approaches                         Section 7, the lack of resource sharing can lead to serious
+using a combination of Raytrace and Database                              performance degradation.
+applications. We measured the wall clock time for                              To alleviate the resource sharing problems of static par-
+each application and the overall CPU utilization.                         titioning, dynamic partitioning schemes have been proposed
+                                                                          that allow a limited redistribution of resources (CPUs and
+this configuration wastes resources, and prevents efficient               memory) across partitions [4] [25] [28]. Unfortunately, repar-
+resource utilization because a raytrace workload will not per-            titioning is usually a very heavyweight operation requiring
+form well on the partition configured for databases and sim-              extensive hardware and operating system support. An addi-
+ilarly, a database workload will not perform well on the                  tional drawback is that even though whole nodes can be
+partition configured for raytrace.                                        dynamically reassigned to a different partition, the resources
+                                                                          within a node cannot be multiplexed at a fine granularity
+                                                                          between two partitions.
+8   Related work
+In this section we compare Cellular Disco to other projects               8.3 Software-centric approaches
+that have some similarities to our work: virtual machines,
+                                                                          Attempts to provide the support for large-scale multiproces-
+hardware partitioning, operating system based approaches,
+                                                                          sots in the operating system can be divided into two strate-
+fault containment, and resource load balancing.
+                                                                          gies: tuning of an existing SMP operating system to make it
+                                                                          scale to tens or hundreds of processors, and developing new
+8.1 Virtual machines                                                      operating systems with better scalability characteristics.
+Virtual machines are not a new idea: numerous research                        The advantage of adapting an existing operating system
+projects in the 1970's [9], as well as commercial product                 is backwards compatibility and the benefit of an existing siz-
+offerings [5][20] attest to the popularity of this concept in its         able code base, as illustrated by SGI's IRIX 6.4 and IRIX6.5
+heyday. The VAX VMM Security Kernel [12] used virtual                     operating systems. Unfortunately, such an overhaul usually
+machines to build a compatible secure system at a low devel-              requires a significant software development effort. Further-
+opment cost. While Cellular Disco shares some of the funda-               more, adding support for fault containment is a daunting task
+mental framework and techniques of these virtual machine                  in practice, since the base operating system is inherently vul-
+monitors, it is quite different in that it adapts the virtual             nerable to faults.
+machine concept to address new challenges posed by mod-
+                                                                              New operating system developments have been pro-
+ern scalable shared memory servers.
+                                                                          posed to address the requirements of scalability (Tornado [8]
+    Disco [2] first proposed using virtual machines to pro-               and K42 [10]) and fault containment (Hive [3]). While these
+vide scalability and to hide some of the characteristics of the           approaches tackle the problem at the basic level, they require
+underlying hardware from NUMA-unaware operating sys-                      a very significant development time and cost before reaching
+tems. Compared to Disco, Cellular Disco provides a com-                   commercial maturity. Compared to these approaches, Cellu-
+plete solution for large scale machines by extending the                  lar Disco is about two orders of magnitude simpler, while
+Disco approach with the following novel aspects: the use of               providing almost the same performance.
+a virtual machine monitor for supporting hardware fault con-
+tainment; the development of both NUMA- and fault con-                    8.4 F a u l t - c o n t a i n m e n t
+tainment-aware      scalable    resource    balancing      and
+overcommitment policies; and the development of mecha-                    While a considerable amount of work has been done on fault
+nisms to support those policies. We have also evaluated our               tolerance, this technique does not seem to be very attractive
+approach on real hardware using long-running realistic                    for large-scale shared-memory machines, due to the increase
+workloads that more closely resemble the way large                        in cost and to the fact that it does not defend well against
+machines are currently used.                                              operating system failures. An alternative approach that has
+                                                                          been proposed is fault-containment, a design technique that
+                                                                          can limit the impact of a fault to a small fraction of the sys-
+8.2 Hardware-centric approaches                                           tem. Fault containment support in the operating system has
+Hardware partitioning has been proposed as a way to solve                 been explored in the Hive project [3], while the necessary
+the system software issues for large-scale shared-memory                  hardware and firmware support has been implemented in the
+machines. Some of the systems that support partitioning are               FLASH multiprocessor [13]. Cellular Disco requires the
+Sequent's Application Region Manager [21], Sun Microsys-                  presence of hardware fault containment support such as that
+terns' Dynamic System Domains [25], and Unisys' Cellular                  described in [26], and is thus complementary. Hive and Cel-
+
+
+
+
+                                                                    167
+lular Disco are two attempts to provide fault containment              practice with a reasonable implementation effort. Although
+support in the system software; the main advantage of Cellu-           the results presented in this paper are based on virtualizing
+lar Disco is its extreme simplicity when compared to Hive.             the MIPS processor architecture and on running the IRIX
+Our approach is the first practical demonstration that end-to-         operating system, our approach can be extended to other pro-
+end hardware fault containment can be provided at a realistic          cessor architectures and operating systems. A straightfor-
+cost in terms of implementation effort. Cellular Disco also            ward extension of Cellular Disco could support the
+shows that if the basic system software layer can be trusted,          simultaneous execution on a scalable machine of several
+fault containment does not add any performance overhead.               operating systems, such as a combination of Windows NT,
+                                                                       Linux, and UNIX.
+8.5 Load balancing                                                         Some of the remaining problems that have been left open
+CPU and memory load balancing have been studied exten-                 by our work so far include efficient virtualization of low-
+sively in the context of networks of workstations, but not on          latency I/O devices (such as fast network interfaces), system
+single shared-memory systems. Traditional approaches to                management issues, and checkpointing and cloning of whole
+process migration [17] that require support in the operating           virtual machines.
+system are too complex and fragile, and v e ~ few have made
+it into the commercial world so far. Cellular Disco provides           Acknowledgments
+a much simpler approach to migration that does not require
+                                                                       We would like to thank SGI for kindly providing us access
+any support in the operating system, while offering the flex-
+                                                                       to a 32-processor Origin 2000 machine for our experiments,
+ibility of migrating at the granularity of individual CPUs or
+                                                                       and to the IRIX 5.3, IRIX 6.2 and IRIX 6.4 source code. The
+memory pages.
+                                                                       experiments in this paper would not have been possible with-
+     Research projects such as GMS [6] have investigated               out the invaluable help we received from John Keen and
+using remote memory in the context of clusters of machines,            Simon Patience.
+where remote memory is used as a fast cache for VM pages
+                                                                           The FLASH and Hive teams built most of the infrastruc-
+and file system buffers. Cellular Disco can directly use the
+                                                                       ture needed for this paper, and provided an incredibly stim-
+hardware support for shared memory, thus allowing substan-
+                                                                       ulating environment for this work. Our special thanks go to
+tially more flexibility.
+                                                                       the Disco, SimOS, and FlashLite developers whose work has
+                                                                       enabled the development of Cellular Disco and the fault
+9   Conclusions                                                        injection experiments presented in the paper.
+With a size often exceeding a few million lines of code, cur-             This study is part of the Stanford FLASH project, funded
+rent commercial operating systems have grown too large to              by DARPA grant DABT63-94-C-0054.
+adapt quickly to the new features that have been introduced
+in hardware. Off-the-shelf operating systems currently suffer
+from poor scalability, lack of fault containment, and poor
+                                                                       References
+resource management for large systems. This lack of good               [1] James M. Barton and Nawaf Bitar. A Scalable Multi-
+support for large-scale shared-memory multiprocessors                      Discipline, Multiple-Processor Scheduling Framework
+stems from the tremendous difficulty of adapting the system                for IRIX. Lecture Notes in Computer Science, 949, pp.
+software to the new hardware requirements.                                 45-69. 1995.
+    Instead of modifying the operating system, our approach            [2] Edouard Bugnion, Scott Devine, Kinshuk Govil, and
+inserts a software layer between the hardware and the oper-                Mendel Rosenblum. Disco: Running Commodity Oper-
+ating system. By applying an old idea in a new context, we                 ating Systems on Scalable Multiprocessors. ACM
+show that our virtual machine monitor (called Cellular                     Transactions on Computer Systems (TOCS), 15(4), pp.
+Disco) is able to supplement the functionality provided by                 412-447. November 1997.
+the operating system and to provide new features. In this              [3] John Chapin, Mendel Rosenblum, Scott Devine,
+paper, we argue that Cellular Disco is a viable approach for               Tirthankar Lahiri, Dan Teodosiu, and Anoop Gupta.
+providing scalability, scalable resource management, and                   Hive: Fault containment for shared-memory Multipro-
+fault containment for large-scale shared-memory systems at                 cessors. In Proceedings of the 15th Symposium on
+only a small fraction of the development cost required for                 Operating Systems Principles (SOSP), pp. 12-25.
+changing the operating system. Cellular Disco effectively                  December 1995.
+turns those large machines into "virtual clusters" by combin-
+ing the benefits of clusters and those of shared-memory sys-           [4] Compaq Computer Corporation. OpenVMS Galaxy.
+tems.                                                                      http://www.openvms.digital.corn/availability/galaxy.
+                                                                           html. Accessed October 1999.
+    Our prototype implementation of Cellular Disco on a 32-
+processor SGI Origin 2000 system shows that the virtualiza-            [5] R. J. Creasy. The Origin of the VM/370 Time-Sharing
+tion overhead can be kept below 10% for many practical                     System. IBM J. Res. Develop 25(5) pp. 483-490, 1981.
+workloads, while providing effective resource management               [6] Michael Feeley, William Morgan, Frederic Pighin,
+and fault containment. Cellular Disco is the first demonstra-              Anna Karlin, Henry Levy, and Chandramohan Thek-
+tion that end-to-end fault containment can be achieved in                  kath. Implementing Global Memory Management in a
+
+
+
+
+                                                                 168
+    Workstation Cluster. In Proceedings of the 15th Sympo-               actions on Modelling and Computer Simulations
+    sium on Operating Systems Principles (SOSP), pp. 201-                (TOMACS), 7(1), pp. 78-103. January 1997.
+    212. December 1995.
+                                                                     [20]Seawright, L.H., and MacKinnon, R.A. VM/370: A
+[7] Mike Galles and Eric Williams. Performance Optimiza-                 study of multiplicity and usefulness. IBM Systems
+    tions, Implementation, and Verification of the SGI                   Journal, 18(1), pp. 4-17. 1979.
+    Challenge Multiprocessor. In Proceedings of the 27th
+    Hawaii International Conference on System Sciences,              [21] Sequent Computer Systems, Inc. Sequent's Application
+                                                                          Region Manager. http://www.sequent.com/dcsolutions/
+    Volume 1: Architecture, pp. 134-143. January 1994.
+                                                                          agile wpl.html. Accessed October 1999.
+[8] Ben Gamsa, Orran Krieger, Jonathan Appavoo, and
+    Michael Stumm. Tornado: Maximizing Locality and                  [22] SGI Inc. IRIX 6.5. http://www.sgi.com/software/irix6.5.
+    Concurrency in a Shared Memory Multiprocessor                         Accessed October 1999.
+    Operating System. In Proceedings of the 3rd Sympo-               [23] Standard Performance     Evaluation Corporation.
+    sium on Operating Systems Design and Implementation                   SPECweb96 Benchmark. http://www.spec.org/osg/
+    (OSDI), pp. 87-100. February 1999.                                    web96. Accessed October 1999.
+[9] Robert P. Goldberg. Survey of Virtual Machine                    [24]Vijayaraghavan Soundararajan, Mark Heinrich, Ben
+    Research. 1EEE Computer Magazine 7(6), pp. 34-45.                    Verghese, Kourosh Gharachorloo, Anoop Gupta, and
+    June 1974.                                                           John Hennessy. Flexible Use of Memory for Replica-
+[10] IBM Corporation. The K42 Project. http://www, research.             tion/Migration in Cache-Coherent DSM Multiproces-
+      ibm.com/K42/index.html. Accessed October 1999.                     sors. In Proceedings of 25th International Symposium
+                                                                         on Computer Architecture (ISCA). pp. 342-55. June
+[ 11] Gerry Kane and Joe Heinrich. M1PS RISC Architecture.
+      Prentice Hall, Englewood Cliffs, NJ. 1992.                         1998.
+[12]Paul Karger, Mary Zurko, Douglas Bonin, Andrew                   [25] Sun Microsystems, Inc. Sun Enterprise 10030 Server:
+      Mason, and Clifford Kahn. A Retrospective on the                    Dynamic System Domains. http://www.sun.com/servers/
+      VAX VMM Security Kernel. IEEE Transactions on                       highend/lOOOO/Tour/domains.html. Accessed October
+      Software Engineering, 17(I 1), pp. 1147-1165. Novem-                1999.
+      ber 1991.                                                      [26]Dan Teodosiu, Joel Baxter, Kinshuk Govil, John
+[13] Jeffrey Kuskin, David Ofelt, Mark Heinrich, John Hei-               Chapin, Mendel Rosenblum, and Mark Horowitz.
+      nlein, Richard Simoni, Kourosh Gharachorloo, John                  Hardware Fault Containment in Scalable Shared-Mem-
+      Chapin, David Nakahira, Joel Baxter, Mark Horowitz,                ory Multiprocessors. In Proceedings of 24th Interna-
+      Anoop Gupta, Mendel Rosenblum, and John Hennessy.                  tional Symposium on Computer Architecture (ISCA).
+      The Stanford FLASH Multiprocessor. In Proceedings                  pp. 73-84. June 1997.
+      of the 21st International Symposium on Computer                [27]Transaction Processing Performance Council. TPC
+      Architecture (ISCA), pp. 302-313. April 1994.                      Benchmark D (Decision Support) Standard Specifica-
+[14]Jim Laudon and Daniel Lenoski. The SGI Origin: A                     tion. TPC, San Jose, CA. June 1997.
+      ccNUMA Highly Scalable Server. In Proceedings of               [28] Unisys Corporation. Cellular MultiProcessing: Break-
+      the 24th International Symposium on Computer Archi-                 through Architecture for an Open Mainframe. http://
+      tecture (ISCA). pp. 241-251. June 1997.                             www'marketplace'unisys'c°rrdent/cmp'html"   Accessed
+[15]H. M. Levy and P. H. Lipman. Virtual Memory Man-                      October 1999.
+      agement in the VAX/VMS Operating System. IEEE                  [29] Ben Verghese, Scott Devine, Anoop Gupta, and Mendel
+      Computer, 15(3), pp. 35-41. March 1982.                             Rosenblum. Operating System Support for Improving
+[16]Nancy Lynch. Distributed Algorithms. Morgan Kauf-                     Data Locality on CC-NUMA Compute Servers. In Pro-
+      mann Publishers, San Francisco, CA. 1996.                           ceedings of the 7th International Conference on Archi-
+[17]Dejan S. Milojicic, Fred Douglis, Yves Paindaveine,                   tectural Support for Programming Languages and
+      Richard Wheeler and Songnian Zhou. Process Migra-                   Operating Systems (ASPLOS), pp. 279-289. October
+      tion. TOG Research Institute Technical Report. Decem-               1996.
+      ber 1996.                                                      [30]VMWare. Virtual Platform. http://www.vmware.com/
+[18] Rashid, R.E, et al. Machine-Independent Virtual Mem-                products/virtualplatform.html. Accessed October 1999.
+      ory Management for Paged Uniprocessor and Multipro-            [31] Steven Cameron Woo, Moriyoshi Ohara, Evan Torrie,
+      cessor Architectures. IEEE Transactions on Computers,               Jaswinder Pal Singh, and Anoop Gupta. The SPLASH-
+      37(8), pp. 896-908. August 1988.                                    2 programs: Characterization and Methodological Con-
+[19]Mendel Rosenblum, Edouard Bugnion, Scott Devine                       siderations. In Proceedings of the 22nd Annual Interna-
+      and Steve Herrod. Using the SimOS Machine Simula-                   tional Symposium on Computer Architecture (ISCA),
+      tor to study Complex Computer Systems. ACM Trans-                   pp. 24-36. May 1995.
+
+
+
+
+                                                               169
+

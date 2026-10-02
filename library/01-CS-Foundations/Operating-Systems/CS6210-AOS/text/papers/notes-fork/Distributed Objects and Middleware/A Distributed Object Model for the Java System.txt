@@ -1,0 +1,797 @@
+       The following paper was originally published in the
+                Proceedings of the USENIX 1996
+         Conference on Object-Oriented Technologies
+              Toronto, Ontario, Canada, June 1996.
+
+
+
+
+A Distributed Object Model for the Java System
+
+
+
+       Ann Wollrath, Roger Riggs, and Jim Waldo
+               Sun Microsystems, Inc.
+
+
+
+
+    For more information about USENIX Association contact:
+               1. Phone:       510 528-8649
+               2. FAX:         510 548-5738
+               3. Email:       office@usenix.org
+               4. WWW URL: http://www.usenix.org
+                      A Distributed Object Model for the Java™ System
+                                 Ann Wollrath, Roger Riggs, and Jim Waldo
+                                                 JavaSoft
+                                    {ann.wollrath, roger.riggs, jim.waldo}@sun.com
+
+
+
+                                                              An alternative to sockets is Remote Procedure Call
+                        Abstract                              (RPC) [13]. RPC systems abstract the communication
+We show a distributed object model for the Java™1             interface to the level of a procedure call. Thus, instead
+System [1,6] (hereafter referred to simply as “Java”)         of application programmers having to deal directly
+that retains as much of the semantics of the Java ob-         with sockets, the programmer has the illusion of call-
+ject model as possible, and only includes differences         ing a local procedure when, in fact, the arguments of
+where they make sense for distributed objects. The            the call are packaged up and shipped off to the remote
+distributed object system is simple, in that a) distribut-    target of the call. Such RPC systems encode argu-
+ed objects are easy to use and to implement, and b)           ments and return values using some type of an exter-
+the system itself is easily extensible and maintainable.      nal data representation (e.g., XDR).
+We have designed such a model and implemented a               RPC, however, does not translate well into distributed
+system that supports remote method invocation (RMI)           object systems where communication between pro-
+for distributed objects in Java. This system combines         gram-level objects residing in different address spaces
+aspects of both the Modula-3 Network Objects system           is needed. In order to match the semantics of object
+[3] and Spring’s subcontract [8] and includes some            invocation, distributed object systems require remote
+novel features.                                               method invocation or RMI. In such systems, the pro-
+To achieve its goal of seamless integration in the lan-       grammer has the illusion of invoking a method on an
+guage, the system exploits the use of pickling [14] to        object, when in fact the invocation may act on a re-
+transmit arguments and return values and also exploits        mote object (one not resident in the caller’s address
+unique features of Java in order to dynamically load          space).
+stub code to clients2. The final system will include          In order to support distributed objects in Java, we
+distributed reference-counting garbage collection for         have designed a remote method invocation system that
+distributed objects as well as lazy activation [11,16].       is specifically tailored to operate in the Java environ-
+                                                              ment. Other RMI systems exist (such as CORBA) that
+                                                              can be adapted to handle Java objects, but these sys-
+                                                              tems fall short of seamless integration due to their in-
+1 Introduction                                                ter-operability requirement with other languages.
+                                                              CORBA presumes a heterogeneous, multi-language
+Distributed systems require entities which reside in
+                                                              environment and thus must have a language neutral
+different address spaces, potentially on different ma-
+                                                              object model. In contrast, the Java language’s RMI
+chines, to communicate. The Java™ system (hereafter
+                                                              system assumes the homogeneous environment of the
+referred to simply as “Java”) provides a basic commu-
+                                                              Java Virtual Machine, and the system can therefore
+nication mechanism, sockets [13]. While flexible and
+                                                              follow the Java object model whenever possible.
+sufficient for general communication, the use of sock-
+ets requires the client and server using this medium to       We identify several important goals for supporting
+engage in some application-level protocol to encode           distributed objects in Java:
+and decode messages for exchange. Design of such              • support seamless remote invocation between Java
+protocols is cumbersome and can be error-prone.                  objects in different virtual machines;
+                                                              • integrate the distributed object model into the Java
+1. Java and other Java-based names and logos are trade-          language in a natural way while retaining most of
+   marks of Sun Microsystems, Inc., and refer to Sun’s fam-      Java’s object semantics;
+   ily of Java-branded products and services.
+2. Patent pending
+• make differences between the distributed object           ented languages have the abstraction of “class” but
+    model and the local Java object model apparent;         provide no direct support (at the language level) for
+•   minimize complexity seen by the clients that use        interfaces.
+    remote objects and the servers that implement           An interface, in Java, describes a set of methods for
+    them;                                                   an object, but provides no implementation. A class, on
+•   preserve the safety provided by the Java runtime        the other hand, can describe as well as implement
+    environment.                                            methods. A class may also include fields to hold data,
+These goals fall under two main categories: the sim-        but interfaces cannot. Thus, a class is the implementa-
+plicity and naturalness of the model. It is most impor-     tion vehicle in Java; an interface provides a powerful
+tant that remote method invocation in Java be simple        abstraction that contains no implementation detail.
+(easy to use) and natural (fit well in the language).       Java allows subtyping of interfaces and classes by the
+In addition, the RMI system should perform garbage          use of extension. An interface may extend one or more
+collection of remote objects and should allow exten-        interfaces; this capability is known as multiple-inherit-
+sions such as server replication and the activation of      ance. Classes, however, are single-inheritance and
+persistent objects to service an invocation. These ex-      may extend at most one other class.
+tensions are transparent to the client and add minimal      While a class may extend at most one other class, it
+implementation requirements on the part of the serv-        may implement any number of interfaces. A class that
+ers that use them. These additional features motivate       implements an interface provides implementations for
+our system-level goals. Thus, the system must sup-          all the methods described in that interface. If a class is
+port:                                                       defined to implement an interface, but does not pro-
+• several invocation capabilities                           vide an implementation for a particular method of that
+     • simple invocation (unicast)                          interface, it must declare that method to be abstract.
+     • invocation to multicast groups (to enable            A class containing abstract methods may not be in-
+         server replication)                                stantiated.
+      • extensibility to other invocation paradigms         An example of an arbitrary class definition in Java is
+• various reference semantics for remote objects            as follows:
+    • live (or non-persistent) references to                 class Bar
+        remote objects                                            extends Foo
+      • persistent references to and lazy activation              implements Ping, Pong { ... }
+        of remote objects
+• the safe Java environment provided by security            where Bar is the class name, Foo is the name of the
+    managers and class loaders                              class being extended and Ping and Pong are the names
+• distributed garbage collection of active objects          of interfaces implemented by the class Bar.
+• capability of supporting multiple transports              Object Class Methods
+In this paper we will briefly describe the Java object      All classes in Java extend the class Object, either im-
+model, then introduce our distributed object model for      plicitly or explicitly. The class Object has several
+Java. We will also describe the system architecture         methods which an extended class can override to have
+and relevant system interfaces. Finally, we discuss re-     behavior specific to that class. These methods are:
+lated work and conclusions.
+                                                            • equals — tests the argument for equality with the
+2 Java Object Model                                            object
+                                                            • hashCode — returns a hash code for the object
+Java is a strongly-typed object-oriented language with      • toString — returns a string representing the object
+a C-style syntax. The language incorporates many            • clone — returns a clone of the object
+ideas from languages such as Smalltalk [5], Modula-3        • finalize — called to allow cleanup when the object
+[10], Objective C [12] and C++ [4]. Java attempts to           is garbage collected
+be simple and safe while presenting a rich set of fea-
+tures in the object-oriented domain.                        These methods are integral to the semantics of objects
+                                                            in Java.
+Interfaces and Classes
+                                                            Method Invocation
+One of the interesting features of Java is its separation
+of the notion of interface and class. Many object-ori-      Method invocation in Java has the following syntax:
+    result = object.method(arg1, arg2, ...);                • clients must handle an additional exception for
+where: object is the entity which is being acted upon,         each remote method invocation;
+method is the name of the method being called, argN         • parameter passing semantics are slightly different
+is a parameter to the method, and result is the return         in calls to remote objects;
+value.                                                      • semantics of Object methods are defined to make
+                                                               sense for remote objects.
+Method Parameters and Return Values
+In Java, all parameters to and return values from a         Remote Interfaces
+method are passed by-value. Only references to ob-          In order to implement a remote object, one must first
+jects exist in Java, so object references (not objects)     define a remote interface for that object. A remote in-
+are passed by value. Thus, a change to an object            terface must extend (either directly or indirectly) a
+passed to a method will be visible to the caller of the     distinguished interface called java.rmi.Remote. This
+method.                                                     interface is completely abstract and has no methods.
+The type of an object passed polymorphically does            interface Remote {}
+not change the type of the underlying object.
+                                                            For example, the following code fragment defines a
+3 Distributed Object Model                                  remote interface for a bank account that contains
+                                                            methods that deposit to the account, withdraw from
+In our model, a remote object is one whose methods
+                                                            the account, and get the account balance:
+can be accessed from another address space, potential-
+ly on a different machine. An object of this type is de-     import java.rmi.*;
+scribed by a remote interface, which is an interface (in
+Java) that declares the methods of a remote object.          public interface BankAccount
+Remote method invocation (or RMI) is the action of                    extends Remote
+invoking a method (of a remote interface) on a remote        {
+object. Most importantly, a method invocation on a re-            public void deposit(float amount)
+mote object has the same syntax as a method invoca-                     throws RemoteException;
+tion on a local object.                                           public void withdraw(float amount)
+                                                                        throws OverdrawnException,
+Clients of remote objects program to remote interfac-                          RemoteException;
+es, not to the implementation classes of those interfac-          public float balance()
+es. Since the failure modes of accessing remote                         throws RemoteException;
+objects are inherently different than the failure seman-     }
+tics of local objects, clients must deal with an addi-
+tional exception that can occur during any remote           As shown above, each method declared in an interface
+method invocation.                                          for a remote object must include java.rmi.RemoteEx-
+What follows is a brief comparison of the distributed       ception in its throws clause. If RemoteException is
+object model and the Java object model. The similari-       thrown during a remote call, then some communica-
+ties between the models are:                                tion failure happened during the call. Remote objects
+                                                            have very different failure semantics than local ob-
+• a reference to a remote object can be passed as an        jects. These failures cannot be hidden from the pro-
+     argument or returned as a result in any method         grammer since they cannot be masked by the
+     invocation (local or remote);                          underlying system [15]. Therefore, we choose to ex-
+•    a remote object can be cast to any of the set of       pose the additional exception RemoteException in all
+     remote interfaces supported by the implementation      remote method calls, so that programmers can handle
+     using the built-in Java syntax for casting;            this failure appropriately.
+•    the built-in Java instanceof operator can be used to
+     test the remote interfaces supported by a remote       Remote Implementations
+     object.                                                There are two ways to implement a remote interface
+There are several basic differences between the dis-        (such as BankAccount). The simplest implementation
+tributed object model and the Java object model:            route is for the implementation class, e.g., BankAc-
+                                                            ctImpl, to extend the class RemoteServer. We call this
+• clients of remote objects interact with remote            first scheme remote implementation reuse. Figure 1
+     interfaces, never with the implementation classes      below is an illustration of the interface and class hier-
+     of those interfaces;
+archies for remote interfaces and implementations in     with the details of making instances of that class re-
+this scheme.                                             motely accessible (by exporting the object to the RMI
+                                                         runtime). Such exporting is already taken care of in
+                                                         the RemoteServer constructor used in the first
+         Interfaces                       Classes
+                                                         scheme.
+          Remote                      RemoteObject       Implementations using the second scheme must also
+                                                         be responsible for their own Java Object semantics
+                                                         and therefore must redefine methods inherited from
+                                      RemoteSer ver      the class Object appropriately. These object methods
+                                                         are already taken care of in the implementation of Re-
+                                                         moteObject, used in the other scheme.
+       BankAccount                    BankAcctImpl
+                                                         We deem the “remote implementation reuse” scheme
+                                                         more seamlessly integrated into the Java object model
+                                        extension        as well as requiring less implementation detail; so we
+                                        implementation   will explain that implementation scheme in depth
+                                                         here. The other scheme, local implementation reuse, is
+         Figure 1. Reusing a remote implementation       included for implementation flexibility if such is re-
+                                                         quired by the programmer.
+The default constructor for RemoteServer takes care
+                                                         Thus, BankAcctImpl, an implementation class of the
+of making an implementation object remotely accessi-
+                                                         remote interface BankAccount can be defined by ex-
+ble to clients by exporting the remote object imple-
+                                                         tending RemoteServer as follows and would imple-
+mentation to the RMI runtime. The class
+                                                         ment all the methods of BankAccount:
+RemoteObject overrides methods inherited from Ob-
+ject to have semantics that make sense for remote ob-     package myPackage;
+jects. We will discuss what the appropriate semantics
+for these methods are in the section on “Object Meth-     import java.rmi.RemoteException;
+od Semantics”.                                            import java.rmi.server.RemoteServer;
+
+In the second implementation scheme, called local im-
+                                                          public class BankAcctImpl
+plementation reuse, the implementation class for a re-
+                                                                     extends RemoteServer
+mote object does not extend RemoteServer but may
+                                                                     implements BankAccount
+extend any other local implementation class as appro-
+                                                          {
+priate. However, the implementation must explicitly
+                                                               public void deposit(float amount)
+export the object to make it remotely accessible.
+                                                                     throws RemoteException {...};
+                                                               public void withdraw(float amount)
+        Interfaces                        Classes                    throws OverdrawnException,
+                                                                            RemoteException {...};
+          Remote                         Account               public float balance()
+                                                                     throws RemoteException {...};
+                                                          }
+
+
+                                                         A few additional notes about implementing remote in-
+                                                         terfaces are:
+       BankAccount                    BankAcctImpl
+                                                         • An implementation class may implement any
+                                                            number of remote interfaces.
+                                        extension        • An implementation class may extend any other
+                                        implementation      implementation class of a remote interface.
+                                                         • Only those methods that appear in a remote
+        Figure 2. Reusing a local implementation class      interface (one that extends Remote either directly
+                                                            or indirectly) can be accessed remotely; thus non-
+The “local implementation reuse” scheme (shown in
+                                                            remote methods in an implementation class can
+Figure 2), while allowing the class to reuse existing
+                                                            only be accessed locally.
+implementation code, does require that the class deal
+The server implementation scheme fits very well into        Since remote methods include RemoteException in
+the Java object model and the Java language.                their signature, the caller must be prepared to handle
+                                                            those exceptions in addition to other application spe-
+Remote Reference Types                                      cific exceptions. So, for each of the calls above (de-
+In the distributed object model, clients interact with      posit, withdraw, and balance), the code needs to catch
+stub (surrogate) objects that have exactly the same set     RemoteException (and the withdraw call would need
+of remote interfaces defined by the remote object’s         to also catch OverdrawnException).
+class; the stub class does not include the non-remote
+                                                            If RemoteException is thrown during a remote call,
+portions of the class hierarchy that constitutes the ob-
+                                                            then some communication failure happened during the
+ject’s type graph. This is because the stub class is gen-
+                                                            call. The client has little to no information on the out-
+erated from the most refined implementation class that
+                                                            come of the call—whether a failure happened before,
+implements one or more remote interfaces. For exam-
+                                                            during, or after the call completed. Thus, remote inter-
+ple, if C extends B and B extends A, but only B im-
+                                                            faces should be designed with these failure semantics
+plements a remote interface, then a stub is generated
+                                                            in mind [9,15]. The semantics of a remote method
+from B, not C.
+                                                            may need to be idempotent whereas calls within the
+Because the stub implements the same set of remote          local address space likely do not have to be. Note that
+interfaces as the remote object’s class, the stub has,      the above bank account interface does not support
+from the point of view of the Java system, the same         idempotent operations, so if an operation fails, the cli-
+type as the remote portions of the server object’s type     ent needs to perform some type of recovery to deter-
+graph. A client, therefore, can make use of the built-in    mine the true state of the bank account (using
+Java operations to check a remote object's type and to      transactions would solve this problem).
+cast from one remote interface to another, e.g.:
+                                                            In most cases, a method invoked on a remote object is
+ Remote obj = ...;// lookup object                          indirected through the remote object’s stub to which
+ if (obj instanceof BankAccount) {                          the caller has a reference. In a method invocation to a
+      BankAccount acct = (BankAccount)obj;                  remote object which actually resides in the same vir-
+      //...                                                 tual machine as the caller, the call may be a local in-
+ }                                                          vocation and not a call via the stub for the remote
+                                                            object. If the caller has an actual reference to the re-
+The system employs a mechanism called dynamic stub          mote object implementation, the method call is local
+loading to make the correct stub for the remote object      and is not forwarded via a stub. However, a caller may
+available to the client (this technique is fully de-        receive, from a remote object in a different virtual ma-
+scribed in the section “System Architecture”).              chine, a remote reference to the object whose imple-
+                                                            mentation is in the same virtual machine. In this case,
+Remote Method Invocation
+                                                            the client (the caller) has a reference to a stub for the
+For a client to invoke a method on a remote object,         remote object; thus, a method call on this reference
+that client must first obtain a reference to the object.    would be indirected through the stub.
+A reference to a remote object is obtained in the usual
+manner: as a return value in a method call or as a pa-      Object Method Semantics
+rameter passed to a method. The RMI system provides         The default implementations for the methods of class
+a simple bootstrap name server from which to obtain         Object (equals, hashCode, toString, clone, and final-
+remote objects on given hosts.                              ize) are not appropriate for remote objects. The class
+Invoking a method on a remote object has the same           RemoteObject provides implementations for these
+syntax as invoking a method on any Java object. For         methods that have semantics more appropriate for re-
+example, here's how the bank account could be ac-           mote objects.
+cessed (without exception handling):                        In order for a remote object to be used as a key in a
+ BankAccount acct = ...;// lookup account                   hash table, the methods equals and hashCode need to
+ float balance;                                             be overridden in a remote object implementation. The
+ acct.deposit(243.50);                                      semantics of equals for a remote object must be de-
+ acct.withdraw(100.00);                                     fined such that remote objects have reference equality.
+ balance = acct.balance();                                  Thus, given any two remote references to the same
+                                                            underlying object, those objects will be equal. No
+                                                            stronger equality, such as “content” equality, may be
+                                                            defined for remote objects, since determining the
+equality of contents would require a remote call. Re-      When used on a remote object, the getClass method
+member that in a remote call, a RemoteException may        reports the exact type of the generated stub object.
+be raised, and the method equals has no such excep-        Note that this type reflects only the remote interfaces
+tion in its throws clause. Due to the different failure    implemented by the object, not its local interfaces.
+semantics between local and remote calls, we chose to      The wait/notify methods of Object deal with waiting
+implement only reference equality for remote objects.      and notification in the context of Java’s threading
+The hashCode method will return the same value for         model. While use of these methods for remote objects
+remote references that refer to the same underlying        does not break the Java threading model, these meth-
+object.                                                    ods do not have the same semantics as they do for lo-
+                                                           cal Java objects. Use of these methods would only
+The toString method is defined to return a string
+                                                           operate on the client’s local reference to the remote
+which represents the reference of the object. In the
+                                                           object, not the actual object at the remote site. Since
+current implementation that supports unicast method
+                                                           these methods are final, they cannot be extended to
+invocation, the contents of this string includes trans-
+                                                           have behavior specific to remote objects.
+port specific information about the object (e.g., host
+name and port number) and an object identifier.            Due to the differing failure modes of local and remote
+                                                           objects, distributed wait and notification requires a
+Objects are only cloneable using the Java language’s
+                                                           more sophisticated protocol between the entities in-
+default mechanism if they support the java.lang.Clone-
+                                                           volved (so that, for example, a client crash does not
+able interface. Remote objects do not implement this
+                                                           cause a remote object to be locked forever), and as
+interface, but do implement the clone method so that
+                                                           such, cannot be easily fitted into the local threading
+if subclasses need to implement Cloneable, the remote
+                                                           model in Java. Hence, a client can use notify and wait
+classes will function correctly.
+                                                           methods on a remote reference, but that client must be
+Cloning a reference to a remote object is a local oper-    aware that such actions will not involve the actual re-
+ation and cannot be used by clients to create a new re-    mote object, only the local proxy (stub) for the remote
+mote object.                                               object.
+For RemoteServer objects, clone is implemented to          Parameter Passing in Remote Invocation
+make a new remote object distinct from the original.
+                                                           A parameter of any Java type can be passed in a re-
+Cloning a remote object is only available in the server
+                                                           mote call. These types include both Java primitive
+process where the remote object exists. If a remote
+                                                           types and Java objects (both remote and non-remote).
+object does not extend RemoteServer, it must imple-
+ment its own version of clone and be able to export a      The parameter passing semantics for remote calls are
+cloned object.                                             the same as the Java semantics except:
+The clone method for a remote object is defined to re-     • non-remote objects contained in a parameter of a
+turn a reference to the remote object. This operation         remote call are passed by copy; and,
+does not copy any contents of the remote object, it        • non-remote objects returned as the result of a
+simply returns a reference (since determining contents        remote call are also passed by copy.
+would require a remote call, and clone does not have
+                                                           That is, when a non-remote object is passed in a re-
+RemoteException in its throws clause which would be
+                                                           mote call, the content of the non-remote object is cop-
+raised in the event of a remote call failure).
+                                                           ied before invoking the call on the remote object.
+The finalize method is used in specific circumstances      Thus, there is no relationship between the non-remote
+depending on the type of remote object (for example,       object the client holds and the one it sends to a remote
+if a remote object is one that can be activated, some      server in a call. For example, let's suppose that the re-
+cleanup may be necessary).                                 mote object bank has a method to obtain the bank ac-
+There are several other methods defined in the class       count given a name and social security number; the
+Object. These methods, however, are declared as final,     account information info is not a remote object but a
+which means that they cannot be overridden in an ex-       local Java object:
+tended class. The methods are: getClass, notify, notify-    Bank bank = ...;
+All, and wait.                                              String ssn = "999-999-9999";
+                                                            AccountInfo info =
+The default implementation for getClass is appropri-
+                                                                 new AccountInfo("Robin Smith", ssn);
+ate for all Java objects, local or remote. The method
+                                                            BankAccount acct = bank.getAccount(info);
+needs no special implementation for remote objects.
+ info.setName("Robyn Smith");                              Another technique, that we call dynamic stub loading,
+                                                           is used to support client-side stubs which implement
+The contents of the object info is copied before invok-    the same set of remote interfaces as a remote object it-
+ing the remote call on the bank. A client can make         self. Since a stub of the exact type is available to the
+changes to info without effecting the server's copy and    client of a remote object, a client can use Java’s built-
+vice versa.                                                in operators for casting and typechecking remote in-
+                                                           terfaces.
+Locating Remote Objects
+A simple bootstrap name server is provided for storing     Architectural Overview
+named references to remote objects. A remote object        The three layers of the RMI system consist of the fol-
+reference can be stored using the URL-based interface      lowing:
+java.rmi.Naming.
+                                                           • stub/skeletons — client-side stubs (proxies) and
+For a client to invoke a method on a remote object,           server-side skeletons (dispatchers)
+that client must first obtain a reference to the object.   • remote reference layer — invocation behavior and
+A reference to a remote object is usually obtained as a       reference semantics (e.g., unicast, multicast)
+return value in a method call. The RMI system pro-         • transport — connection set up and management
+vides a simple bootstrap name server from which to            and remote object tracking
+obtain remote objects on given hosts. The Naming in-
+                                                           The application layer sits on top of the RMI system.
+terface provides Uniform Resource Locator (URL)
+based methods to lookup, bind, rebind, unbind and list
+the name and object pairings maintained on a particu-
+lar host and port.                                             Application       Client           Server
+
+Here's an example of how to bind and lookup remote
+objects:
+ BankAccount acct = new BankAcctImpl();
+ URL url = new URL(“rmi://zaphod/account”);                                     Stubs             Skeletons
+ // bind url to remote object                                   RMI
+                                                               System          Remote Reference Layer
+ java.rmi.Naming.bind(url, acct);
+ // ...                                                                                   Transport
+ // lookup account
+ acct = java.rmi.Naming.lookup(url);
+                                                                          Figure 3. System Architecture
+In the current implementation, a “naming” registry
+contains a non-persistent database of name-object          Figure 3 is an illustration of the layers of the RMI
+bindings. This database does not survive system            system. A remote method invocation from a client to a
+crashes.                                                   remote server object travels down through the layers
+                                                           of the RMI system to the client-side transport, then up
+                                                           through the server-side transport to the server. The
+4 System Architecture
+                                                           rest of this section summarizes the functionality at
+We have designed our RMI system in order to support        each layer in the system.
+the distributed object model discussed above. The sys-
+tem consists of three basic layers: the stub/skeleton      A client invoking a method on a remote server object
+layer, remote reference layer, and transport. A specif-    actually makes use of a stub or proxy for the remote
+ic interface and protocol defines the boundary at each     object as a conduit to the remote object. A client-held
+layer. Thus, each layer is independent of the next and     reference to a remote object is a reference to a local
+can be replaced by an alternate implementation with-       stub. This stub is an implementation of the remote in-
+out effecting the other layers in the system. For exam-    terfaces of the remote object and forwards invocation
+ple, the current transport implementation is TCP-          requests to that server object via the remote reference
+based (using Java sockets), but a transport based on       layer.
+UDP could be used interchangeably.                         The remote reference layer is responsible for carrying
+To accomplish transparent transmission of objects          out the semantics of the type of invocation. For exam-
+from one address space to another, the technique of        ple this layer is responsible for handling unicast or
+pickling [14] (designed specifically for Java) is used.    multicast invocation to a server. Each remote object
+implementation chooses its own invocation seman-           • informing the remote reference layer that the call
+tics—whether communication to the server is unicast,          is complete
+or the server is part of a multicast group (to accom-      A skeleton for a remote object is a server-side entity
+plish server replication).                                 that contains a method which dispatches calls to the
+Also handled by the remote reference layer are the         actual remote object implementation. The skeleton is
+reference semantics for the server. For example, the       responsible for:
+remote reference layer handles live and/or persistent
+references to remote objects. Persistent object refer-
+                                                           • unmarshaling arguments from the marshal stream
+ences are required in order to activate objects to sup-
+                                                           • making the up-call to the actual remote object
+                                                              implementation
+port long-running servers.
+                                                           • marshaling the return value of the call onto the
+The transport is responsible for connection set-up            marshal stream
+with remote locations and connection management,
+and also keeping track of and dispatching to remote        Remote Reference Layer
+objects (the targets of remote calls) residing in the      The remote reference layer deals with the lower level
+transport’s local address space.                           transport interface. This layer is also responsible for
+                                                           carrying out a specific invocation protocol which is in-
+In order to dispatch to a remote object, the server’s
+                                                           dependent of the client stubs and server skeletons.
+transport forwards the remote call up to the remote
+reference layer (specific to the server). The remote       Each remote object implementation chooses its own
+reference layer handles any server-side behavior that      invocation protocol that operates on its behalf. Such
+needs to be done before handing off the request to the     an invocation protocol is fixed for the life of the ob-
+server-side skeleton. The skeleton for a remote object     ject. Various invocation protocols can be carried out at
+makes an up-call to the remote object implementation       this layer, for example:
+which carries out the actual method call.                  • unicast invocation
+The return value of a call is sent back through the        • multicast invocation
+skeleton, remote reference layer and transport on the      • support for a specific replication strategy
+server side, and then up through the transport, remote     • support for a persistent reference to the remote
+reference layer and stub on the client side.                  object (enabling activation of the remote object)
+                                                           • reconnection strategies (if remote object becomes
+Stub/Skeleton Layer                                           inaccessible)
+The stub/skeleton layer is the interface between the
+                                                           These invocation protocols are not mutually exclusive,
+application layer and the rest of the RMI system. This
+                                                           but may be combined. For example, a remote object
+layer does not deal with specifics of any transport, but
+                                                           may require both persistent reference semantics and
+transmits data to the remote reference layer via the ab-
+                                                           replication. Both of these protocols would be carried
+straction of marshal streams. Marshal streams employ
+                                                           out in the remote reference layer.
+a mechanism called pickling which enables Java ob-
+jects to be transmitted between address spaces. Ob-        The invocation protocol is divided into two cooperat-
+jects transmitted using the pickling system are passed     ing components: the client-side and the server-side
+by copy to the remote address space.                       components. The client-side component contains in-
+                                                           formation specific to the remote server (or servers, if
+A stub for a remote object is the client-side proxy for
+                                                           invocation is to a multicast group) and communicates
+the remote object. Such a stub implements all the in-
+                                                           via the transport to the server-side component. During
+terfaces that are supported by the remote object imple-
+                                                           each method invocation, the client and server-side
+mentation. A client-side stub is responsible for:
+                                                           components are given a chance to intervene in order
+• initiating a call to the remote object (by calling the   to accomplish the specific invocation and reference se-
+   remote reference layer)                                 mantics. For example, if a remote object is part of a
+• marshaling arguments to a marshal stream                 multicast group, the client-side component can for-
+   (obtained from the remote reference layer)              ward the invocation to the multicast group rather than
+• informing the remote reference layer that the call       just a single remote object.
+   should be invoked
+                                                           In a corresponding manner, the server-side component
+• unmarshaling the return value from a marshal             is given a chance to intervene before delivering a re-
+   stream
+                                                           mote method invocation to the skeleton. This compo-
+                                                           nent, for example, could handle ensuring atomic
+multicast delivery by communicating with other repli-      • Channel — Abstractly, a channel is the conduit
+cas in the multicast group.                                    between two address spaces. As such, it is
+                                                               responsible for managing connections between the
+The remote reference layer transmits data to the trans-
+                                                               local address space and the remote address space
+port layer via the abstraction of a stream-oriented con-
+                                                               for which it is a channel.
+nection. The transport takes care of the
+implementation details of connections. Although con-       •   Connection —A connection is the abstraction for
+                                                               transferring data (performing input/output).
+nections present a streams-based interface, a connec-
+tionless transport may actually be implemented             A transport defines what the concrete representation
+beneath the abstraction.                                   of an endpoint is, so multiple transport implementa-
+                                                           tions may exist. The design and implementation also
+Transport                                                  allow multiple transports per address space (so both
+In general, the transport of the RMI system is respon-     TCP and UDP can be supported in the same address
+sible for:                                                 space). Thus, client and server transports can negoti-
+• setting up connections to remote address spaces          ate to find a common transport between them.
+• managing connections                                     Garbage Collection
+• monitoring connection liveness                           In a distributed system, just as in the local system, it
+• listening for incoming calls                             is desirable to automatically delete those remote ob-
+• maintaining a table of remote objects that reside in     jects that are no longer referenced by any client. This
+    the local address space
+                                                           frees the programmer from needing to keep track of a
+• setting up a connection for an incoming call             remote object’s clients so that the remote object can
+• locating the dispatcher for the target of the remote     terminate appropriately. RMI uses a reference count-
+    call and passing the connection to this dispatcher
+                                                           ing garbage collection algorithm similar to the one
+The concrete representation of a remote object refer-      used for Modula-3 Network Objects [2].
+ence consists of an endpoint and an object identifier.
+                                                           To accomplish reference-counting garbage collection,
+We call this representation a live reference. Thus, giv-
+                                                           the RMI runtime keeps track of all live references
+en a live reference for a remote object, a transport can
+                                                           within each Java virtual machine. When a live refer-
+use the endpoint to set up a communication channel to
+                                                           ence enters a Java virtual machine its reference count
+the address space in which the remote object resides.
+                                                           is incremented. The first reference to an object sends a
+On the server side, the transport uses the object iden-
+                                                           “referenced” message to the server for the object. As
+tifier to look up the target of the remote call.
+                                                           live references are found to be unreferenced in the lo-
+The transport for the RMI system consists of four ba-      cal virtual machine, their finalization decrements the
+sic abstractions (based somewhat on the transport of       count. When the last reference has been discarded an
+the Modula-3 network object system):                       unreferenced message is sent to the server. Many sub-
+                                                           tleties exist in the protocol, most related to maintain-
+• Endpoint — An endpoint denotes an address space.         ing the ordering of referenced and unreferenced
+    In the implementation, an endpoint can be mapped
+                                                           messages to insure the object is not prematurely col-
+    to its transport. That is, given an endpoint, a
+                                                           lected.
+    specific transport instance can be obtained.
+•   Transport — The transport abstraction manages          When a remote object is not referenced by any client,
+    channels. Each channel is a virtual connection         the RMI runtime refers to it using a weak reference.
+    between two address spaces. Within a transport,        The weak reference allows the Java virtual machine’s
+    only one channel exists per pair of address spaces,    garbage collector to discard the object if no other lo-
+    the local address space and a remote address           cal references to the object exist. The distributed gar-
+    space. Given an endpoint to a remote address           bage collection algorithm interacts with the local Java
+    space, a transport sets up a channel to that address   virtual machine’s garbage collector in the usual ways
+    space. The transport abstraction is also responsible   by holding normal or weak references to objects. As
+    for accepting calls on incoming connections to the     in the normal object life-cycle, finalize will be called
+    address space, setting up a connection object for      after the garbage collector determines that no more
+    the call, and dispatching to higher layers in the      references to the object exist.
+    system.                                                As long as a local or remote reference to a remote ob-
+                                                           ject exists, the remote object cannot be garbage col-
+                                                           lected and it may be passed in remote calls or returned
+to clients. Passing a remote object adds the client or        Dynamic stub loading is used only when code for a
+server to which it was passed to the remote object’s          needed stub is not already available. The argument
+referenced set. A remote object needing unreferenced          and return types specified in the remote interfaces are
+notification must implement the java.rmi.server.Unref-        made available using the same mechanism. Loading
+erenced interface. When those references no longer            arbitrary classes into clients or servers presents a po-
+exist, unreferenced will be invoked. unreferenced is          tential security problem; this problem is addressed by
+called when the set of references is found to be empty        requiring that a security manager check any classes
+so it may be called more than once. Remote objects            downloaded for RMI.
+are only collected when no more references, either lo-        In this scheme, client-side stub code is generated from
+cal or remote, still exist.                                   the remote object implementation class, and therefore
+Note that if there exists a network partition between a       supports the same set of remote interfaces as support-
+client and remote server object, it is possible that pre-     ed by the remote implementation. Such stub code re-
+mature collection of the remote object will occur             sides on the server’s host (or perhaps another
+(since the transport may think that the client crashed).      location), and can be downloaded to the client on de-
+Because of the possibility of premature collection, re-       mand (if the correct stub code is not already available
+mote references cannot guarantee referential integrity;       to the client). Stub code for a remote implementation
+in other words, it is always possible that a remote ref-      could be generated on-the-fly at the remote site and
+erence may in fact not refer to an existing object. An        shipped to the client or could be generated on the cli-
+attempt to use such a reference will generate a Remo-         ent-side from the list of remote interfaces supported
+teException which must be handled by the application.         by the remote implementation.
+Dynamic Stub Loading                                          Dynamic stub loading employs three mechanisms: a
+                                                              specialized Java class loader, a security manager, and
+In remote procedure call systems, client-side stub
+                                                              the pickling system. When a remote object reference
+code must be generated and linked into a client before
+                                                              is passed as a parameter or as the result of a method
+a remote procedure call can be done. This code may
+                                                              call, the marshal stream that transmits the reference
+be either statically linked into the client or linked in at
+                                                              includes information indicating where the stub class
+run-time via dynamic linking with libraries available
+                                                              for the remote object can be loaded from, if its URL is
+locally or over a network file system. In either the
+                                                              known.
+case of static or dynamic linking, the specific code to
+handle an RPC must be available to the client machine         A marshal stream is implemented by an underlying
+in compiled form.                                             pickle stream. Pickle streams provide an opportunity
+                                                              to embed information for each class and object that is
+This approach to code linking is static in that the stub
+                                                              transmitted. When transmitting class information for a
+code must be compiled and directly available to the
+                                                              remote object being marshaled, a marshal stream em-
+client in binary-compatible form at compile time and
+                                                              beds a URL that specifies where the stub code resides.
+at run time. Also with these systems, the stub code
+                                                              Thus, when a reference to a remote object is unmar-
+that the client uses is determined and fixed at compile
+                                                              shaled at the destination site, the marshal stream can
+time. Because of the static nature of the stub code
+                                                              locate and load the stub code (via the specialized class
+available to clients in such systems, the code may not
+                                                              loader, checked by the security manager) so that the
+be the actual stub code that the client needs at run
+                                                              correct stub is available to the client.
+time, but perhaps the closest matched code that can be
+determined at compile time. For example in an RMI             Security
+system, perhaps only a supertype (less specific form)         The security of a process using RMI is protected by
+of a more specific stub is available to the client at run-    existing Java mechanisms of the security manager and
+time. This code mismatch can lead to run-time errors          class loader. The security manager regulates access to
+if the client in fact needs a subtype (more specific          sensitive functions, and the class loader makes sure
+form) of the stub that has been linked in at compile-         that loaded classes are subject to the security manager
+time.                                                         and adhere to the standard Java safety guarantees.
+Our approach solves this code mismatch by loading             The JDK (Java Developer Kit) 1.0 security manager
+the exact stub code (in Java’s architecture neutral           does not regulate resource consumption, so the current
+bytecode format) at run-time to handle method invo-           RMI system has no mechanisms available to prevent
+cations on a remote object. This mechanism, called            classes loaded from abusing resources. As new securi-
+dynamic stub loading, exploits the Java mechanism
+for downloading code.
+ty manager mechanisms are developed to control re-          Class.forName mechanism. Thus, a server may define
+source use, RMI will use them.                              its own policies via the security manager and stub
+                                                            loader and the RMI system will operate within them.
+The Applet Environment
+In the applet environment, the AppletSecurityManager        5 Related Work
+and AppletClassLoader are used exclusively. RMI uses
+only the established security manager and class load-       The Common Object Request Broker Architecture
+er. In this environment remote object stubs, parameter      (CORBA) [11] is designed to support remote method
+classes and return object classes can be loaded only        invocation between heterogeneous languages and sys-
+from the applet host or its designated code base hosts.     tems. In CORBA, distributed objects are described in
+This requires that applet developers install the appro-     an interface definition language (IDL). IDL presents
+priate classes on the applet host.                          its own object model, and interfaces defined in IDL
+                                                            must be mapped into a target language and object
+The Server Environment                                      model.
+In the server environment, where a Java process is be-      Because of IDL’s language neutrality, the semantics of
+ing used to serve RMI requests, the server may need         its object model does not match the object model se-
+to use a security manager to isolate itself from stub       mantics of any implementation language. This mis-
+misbehavior. The server functions will usually be im-       match inhibits seamless integration of the CORBA
+plemented by classes loaded from the local system           distributed object model into any specific target lan-
+and therefore not subject to the restrictions of the se-    guage. Hence, programmers must deal with two very
+curity manager. If the remote object interfaces allow       different object models when writing distributed pro-
+objects, either local or remote, to be passed to the        grams: the local object model of the language, and the
+server, then those object classes must be accessible to     distributed object model mapped from IDL.
+the server. Usually those classes will be built-in class-
+es or will be defined by the server. As long the classes    Our system differs from CORBA in two essential
+are available locally there is no need for a specialized    ways: it language-dependence and its ability to load
+security manager or stub loader. To support this case,      stub code dynamically. Since our system is language-
+if no security manager is specified, stub loading from      dependent, we can integrate the distributed object
+network sources is disabled.                                model more closely with the target language, Java. Al-
+                                                            so, systems that are CORBA compliant are unable to
+When a server is passed a remote object for which it        exploit the use of dynamic stub loading, since COR-
+has no corresponding stub code, it may also be passed       BA generally assumes that stub code is linked in at
+the location from which the classes for that remote         compile time.
+object may be loaded. Two properties control if and
+from where the stub class can be loaded.                    Our approach is more akin to the Modula-3 (M3) net-
+                                                            work object system [3]. The Modula-3 system sup-
+java.rmi.server.ClientClassDisable controls whether         ports remote method invocation on objects in a
+the URL’s supplied by clients are used; if set to true,     language-dependent fashion (i.e., the system does not
+URL’s from clients are ignored and stub classes are         support interoperability with other languages). A sec-
+loaded using the stub class base.                           ond similarity is that the M3 system transmits objects
+java.rmi.server.StubClassBase defines the URL from          via pickling. Our RMI system is similar in those re-
+which stub classes will be loaded. This is the URL          spects (it depends on the architecture neutrality of
+that is passed along with remote object references so       Java bytecodes); however, our system is less static in
+clients will know the location from which to load stub      its determination of stub code. The M3 network object
+classes.                                                    system uses the closest matching stub code (called the
+                                                            most-specific surrogate) available at compile-time,
+The StubClassLoader is a specialized class loader           rather than our approach in which the exact matching
+used by the RMI runtime to load classes. When load-         stub code is determined at run-time and downloaded
+ing any class, the runtime first attempts to use this       over the network if such code is unavailable on the
+class loader. If it succeeds those classes will be sub-     client.
+ject to the current security manager and any classes
+the stub needs will be loaded and then regulated by         The implementation of our system is similar to the
+that security manager. If the security manager disal-       M3 system in another respect: that is, the inclusion of
+lows creating the class loader, the class (including        a distinct abstraction for the transport. While the net-
+stub classes) will be loaded using the default              work object system has a similar notion of a transport
+                                                            abstraction, it does not include a separate remote ref-
+erence layer to handle varying types of invocation se-     Authors
+mantics. Because of this limitation, this type of
+                                                           Ann Wollrath (ann.wollrath@sun.com) is a Staff En-
+functionality is not easily layered on the network ob-
+                                                           gineer at Sun Microsystems Laboratories, East Coast
+ject system without adding some burden to the pro-
+                                                           Division, working in the area of reliable large-scale
+grammer.
+                                                           distributed systems. Prior to joining Sun, she worked
+Spring [7] is an object oriented operating system de-      in the Parallel Computing Group at the MITRE Cor-
+signed as a successor to UNIX. Spring has the notion       poration investigating optimistic execution schemes
+of a subcontract [8] which has similar functionality to    for parallelizing sequential object-oriented programs.
+the remote reference layer in the RMI system. Our
+system differs in that the remote reference layer has a    Roger Riggs (roger.riggs@sun.com) is a staff engi-
+narrower interface that is more tailored to handling re-   neer at Sun Microsystems Laboratories, East Coast
+mote method invocation semantics. Subcontract is           Division, working on large scale distribution and reli-
+also very intimate with its doors-based transport, and     able distributed systems. Prior to joining the group, he
+as such does not support alternate transport implemen-     worked on client-server text retrieval and CORBA
+tations as readily as our approach.                        based information retrieval, and scabability issues on
+Like CORBA, Spring uses an interface definition lan-       the Web.
+guage to describe remote objects. Spring uses mar-
+shaling code generated from IDL descriptions of            Jim Waldo (jim.waldo@sun.com) is a Senior Staff
+objects, whereas our system pickles exact representa-      Engineer at Sun Microsystems Laboratories, East
+tions of objects at run-time.                              Coast Division, working in the area of reliable large-
+                                                           scale distributed systems. Prior to joining Sun, he
+                                                           worked in distributed systems and object-oriented
+6 Future Work
+                                                           software development at Apollo Computer (later
+The current system supports unicast remote method          Hewlett Packard), where he was one of the original
+invocation to remote objects in Java. The system also      designers of what has become the Common Object
+implements pickling, dynamic stub loading, and gar-        Request Broker Architecture (CORBA).
+bage collection. We have fully designed and partially
+implemented activation for distributed objects in this     References
+framework. This effort is on-going. Also included will
+be the capability for server replication in this para-     [1] Arnold, Ken, and James Gosling, The Java™
+digm.                                                          Programming Language. Addison-Wesley (1996).
+                                                           [2] Birrell, Andrew, David Evers, Greg Nelson, Susan
+7 Conclusions                                                  Owicki, and Edward Wobber, Distributed
+                                                               Garbage Collection for Network Objects. Digital
+Our RMI system design leverages the two basic as-              Equipment Corporation Systems Research Center
+sumptions of platform homogeneity and language-de-             Technical Report 116 (1993).
+pendence. We can assume homogeneity due to the
+architecture neutrality that the Java virtual machine      [3] Birrell, Andrew, Greg Nelson, Susan Owicki, and
+provides. Since we are able to focus on language-de-           Edward Wobber, Network Objects. Digital
+pendent distributed objects, the resulting system pre-         Equipment Corporation Systems Research Center
+sents a simple model that fits well into the Java              Technical Report 115 (1994).
+framework, is highly flexible, and is accessible on a      [4] Ellis, Margaret A., and Bjarne Stroustrup, The
+wide variety of machines.                                      Annotated C++ Reference Manual. Addison-
+                                                               Wesley (1990).
+Availability                                               [5] Goldberg, Adele, and David Robson, Smalltalk-
+The Java RMI system will be released with JDK 1.1.             80: The Language and Its Implementation.
+Early access versions of this system can be obtained           Addison-Wesley (1983).
+from the http://java.sun.com web site.                     [6] Gosling, James, Bill Joy, and Guy Steele, The
+                                                               Java™ Language Specification. Addison-Wesley
+Acknowledgments                                                (1996).
+We would like to thank Eduardo Pelegri-Llopart and         [7] Hamilton, G., and P. Kougiouris, “The Spring
+Peter Kessler for useful discussions during the devel-         Nucleus: A Microkernel for Objects.” USENIX
+opment of this system.                                         Summer Conference (July 1993).
+[8] Hamilton, Graham, Michael L. Powell, and James
+     G. Mitchell, Subcontract: A Flexible Base for
+     Distributed Programming. Sun Microsystems
+     Laboratories Technical Report, SMLI TR-93-13
+     (April 1993).
+[9] Mullender, Sape (ed.), Distributed Systems
+     (second edition). Addison-Wesley (1993).
+[10] Nelson, Greg (ed.), Systems Programming with
+     Modula-3. Prentice Hall (1991).
+[11] The Object Management Group, Common Object
+     Request Broker: Architecture and Specification.
+     OMG Document Number 91.12.1 (1991).
+[12] Pinson, Lewis J. and Richard S. Wiener, Objective
+     C: Object-Oriented Programming Techniques.
+     Addison-Wesley (1991).
+[13] Rago, Steven A., UNIX System V Network
+     Programming. Addison-Wesley (1993).
+[14] Riggs, Roger, Jim Waldo, Ann Wollrath, and
+     Krishna Bharat, “Pickling State in the Java™
+     System.” The 2nd USENIX Conference on
+     Object-Oriented Technologies. (1996).
+[15] Waldo, Jim, Geoff Wyant, Ann Wollrath, and Sam
+     Kendall, A Note on Distributed Computing. Sun
+     Microsystems Laboratories Technical Report,
+     SMLI TR-94-29 (November 1994).
+[16] Wollrath, Ann, Geoff Wyant, and Jim Waldo,
+     “Simple Activation for Distributed Objects.” 1st
+     USENIX Conference on Object-Oriented
+     Technologies. Monterey, CA (June 1995), pp. 1-
+     11.
+

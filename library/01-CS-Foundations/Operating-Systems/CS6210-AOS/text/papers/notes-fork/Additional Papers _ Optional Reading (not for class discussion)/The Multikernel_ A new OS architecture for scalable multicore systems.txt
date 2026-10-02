@@ -1,0 +1,1166 @@
+                           The Multikernel: A New OS Architecture
+                               for Scalable Multicore Systems
+
+       Andrew Baumann∗, Paul Barham†, Pierre-Evariste Dagand‡, Tim Harris†, Rebecca Isaacs†,
+            Simon Peter∗, Timothy Roscoe∗, Adrian Schüpbach∗, and Akhilesh Singhania∗
+           ∗                                                     †                                                          ‡
+               Systems Group, ETH Zurich                             Microsoft Research, Cambridge                              ENS Cachan Bretagne
+
+
+
+ABSTRACT                                                                                                   App                  App                      App        App
+
+Commodity computer systems contain more and more processor
+cores and exhibit increasingly diverse architectural tradeoffs, in-                        Agreement
+                                                                                                          OS node   OS node           OS node                      OS node
+
+cluding memory hierarchies, interconnects, instruction sets and                            algorithms      State     State             State      Async messages    State
+                                                                                                          replica   replica           replica                      replica
+variants, and IO configurations. Previous high-performance com-
+puting systems have scaled in specific cases, but the dynamic nature                      Arch-specific
+                                                                                             code
+of modern client and server workloads, coupled with the impossi-
+bility of statically optimizing an OS for all workloads and hardware
+                                                                                          Heterogeneous
+variants pose serious challenges for operating system structures.                              cores
+                                                                                                            x86       x64              ARM                          GPU
+   We argue that the challenge of future multicore hardware is best
+met by embracing the networked nature of the machine, rethinking                                                                        Interconnect
+
+OS architecture using ideas from distributed systems. We investi-
+gate a new OS structure, the multikernel, that treats the machine as a                                        Figure 1: The multikernel model.
+network of independent cores, assumes no inter-core sharing at the
+lowest level, and moves traditional OS functionality to a distributed
+system of processes that communicate via message-passing.                                    Such hardware, while in some regards similar to earlier paral-
+   We have implemented a multikernel OS to show that the ap-                              lel systems, is new in the general-purpose computing domain. We
+proach is promising, and we describe how traditional scalability                          increasingly find multicore systems in a variety of environments
+problems for operating systems (such as memory management) can                            ranging from personal computing platforms to data centers, with
+be effectively recast using messages and can exploit insights from                        workloads that are less predictable, and often more OS-intensive,
+distributed systems and networking. An evaluation of our prototype                        than traditional high-performance computing applications. It is
+on multicore systems shows that, even on present-day machines,                            no longer acceptable (or useful) to tune a general-purpose OS de-
+the performance of a multikernel is comparable with a conventional                        sign for a particular hardware model: the deployed hardware varies
+OS, and can scale better to support future hardware.                                      wildly, and optimizations become obsolete after a few years when
+                                                                                          new hardware arrives.
+Categories and Subject Descriptors: D.4.7 [Operating Systems]:                               Moreover, these optimizations involve tradeoffs specific to hard-
+Organization and Design                                                                   ware parameters such as the cache hierarchy, the memory consis-
+                                                                                          tency model, and relative costs of local and remote cache access,
+General Terms: Design, Experimentation, Performance
+                                                                                          and so are not portable between different hardware types. Often,
+Keywords: Scalability, multicore processors, message passing                              they are not even applicable to future generations of the same archi-
+                                                                                          tecture. Typically, because of these difficulties, a scalability prob-
+                                                                                          lem must affect a substantial group of users before it will receive
+1.     INTRODUCTION                                                                       developer attention.
+Computer hardware is changing and diversifying faster than system                            We attribute these engineering difficulties to the basic struc-
+software. A diverse mix of cores, caches, interconnect links, IO                          ture of a shared-memory kernel with data structures protected by
+devices and accelerators, combined with increasing core counts,                           locks, and in this paper we argue for rethinking the structure of
+leads to substantial scalability and correctness challenges for OS                        the OS as a distributed system of functional units communicat-
+designers.                                                                                ing via explicit messages. We identify three design principles: (1)
+                                                                                          make all inter-core communication explicit, (2) make OS structure
+                                                                                          hardware-neutral, and (3) view state as replicated instead of shared.
+                                                                                             The model we develop, called a multikernel (Figure 1), is not
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are                 only a better match to the underlying hardware (which is net-
+not made or distributed for profit or commercial advantage and that copies                worked, heterogeneous, and dynamic), but allows us to apply in-
+bear this notice and the full citation on the first page. To copy otherwise, to           sights from distributed systems to the problems of scale, adaptivity,
+republish, to post on servers or to redistribute to lists, requires prior specific        and diversity in operating systems for future hardware.
+permission and/or a fee.
+SOSP’09, October 11–14, 2009, Big Sky, Montana, USA.                                         Even on present systems with efficient cache-coherent shared
+Copyright 2009 ACM 978-1-60558-752-3/09/10 ...$10.00.                                     memory, building an OS using message-based rather than shared-
+
+
+
+                                                                                     29
+data communication offers tangible benefits: instead of sequen-
+                                                                                                                              CPU CPU CPU CPU
+tially manipulating shared data structures, which is limited by the           PCIe         0        2       4        6         L1    L1        L1   L1
+latency of remote data access, the ability to pipeline and batch mes-
+sages encoding remote operations allows a single core to achieve                                                               L2    L2        L2   L2
+greater throughput and reduces interconnect utilization. Further-             PCIe         1        3       5        7                    L3
+more, the concept naturally accommodates heterogeneous hard-
+ware.                                                                                  HyperTransport links                    RAM              RAM
+   The contributions of this work are as follows:
+                                                                                      Figure 2: Node layout of an 8×4-core AMD system
+     • We introduce the multikernel model and the design principles
+       of explicit communication, hardware-neutral structure, and
+       state replication.                                                        This illustrates a general problem: any OS design tied to a par-
+                                                                              ticular synchronization scheme (and data layout policy) cannot ex-
+     • We present a multikernel, Barrelfish, which explores the im-           ploit features of different hardware. Current OS designs optimize
+       plications of applying the model to a concrete OS implemen-            for the common hardware case; this becomes less and less efficient
+       tation.                                                                as hardware becomes more diverse. Worse, when hardware vendors
+                                                                              introduce a design that offers a new opportunity for optimization,
+     • We show through measurement that Barrelfish satisfies our
+                                                                              or creates a new bottleneck for existing designs, adapting the OS to
+       goals of scalability and adaptability to hardware characteris-
+                                                                              the new environment can be prohibitively difficult.
+       tics, while providing competitive performance on contempo-
+       rary hardware.                                                            Even so, operating systems are forced to adopt increasingly com-
+                                                                              plex optimizations [27, 46, 51, 52, 57] in order to make efficient use
+In the next section, we survey trends in hardware which further               of modern hardware. The recent scalability improvements to Win-
+motivate our rethinking of OS structure. In Section 3, we introduce           dows7 to remove the dispatcher lock touched 6000 lines of code in
+the multikernel model, describe its principles, and elaborate on our          58 files and have been described as “heroic” [58]. The Linux read-
+goals and success criteria. We describe Barrelfish, our multikernel           copy update implementation required numerous iterations due to
+implementation, in Section 4. Section 5 presents an evaluation of             feature interaction [50]. Backporting receive-side-scaling support
+Barrelfish on current hardware based on how well it meets our cri-            to Windows Server 2003 caused serious problems with multiple
+teria. We cover related and future work in Sections 6 and 7, and              other network subsystems including firewalls, connection-sharing
+conclude in Section 8.                                                        and even Exchange servers1 .
+
+
+2.     MOTIVATIONS                                                            2.2     Cores are increasingly diverse
+Most computers built today have multicore processors, and future              Diversity is not merely a challenge across the range of commodity
+core counts will increase [12]. However, commercial multiproces-              machines. Within a single machine, cores can vary, and the trend is
+sor servers already scale to hundreds of processors with a single OS          toward a mix of different cores. Some will have the same instruc-
+image, and handle terabytes of RAM and multiple 10Gb network                  tion set architecture (ISA) but different performance characteris-
+connections. Do we need new OS techniques for future multicore                tics [34,59], since a processor with large cores will be inefficient for
+hardware, or do commodity operating systems simply need to ex-                readily parallelized programs, but one using only small cores will
+ploit techniques already in use in larger multiprocessor systems?             perform poorly on the sequential parts of a program [31, 42]. Other
+                                                                              cores have different ISAs for specialized functions [29], and many
+   In this section, we argue that the challenges facing a general-            peripherals (GPUs, network interfaces, and other, often FPGA-
+purpose operating system on future commodity hardware are dif-                based, specialized processors) are increasingly programmable.
+ferent from those associated with traditional ccNUMA and SMP
+machines used for high-performance computing. In a previous pa-                  Current OS designs draw a distinction between general-purpose
+per [8] we argued that single computers increasingly resemble net-            cores, which are assumed to be homogeneous and run a sin-
+worked systems, and should be programmed as such. We rehearse                 gle, shared instance of a kernel, and peripheral devices accessed
+that argument here, but also lay out additional scalability challenges        through a narrow driver interface. However, we are not the only
+for general-purpose system software.                                          researchers to see an increasing need for OSes to manage the soft-
+                                                                              ware running on such cores much as they manage CPUs today [55].
+                                                                              Moreover, core heterogeneity means cores can no longer share a
+2.1     Systems are increasingly diverse                                      single OS kernel instance, either because the performance tradeoffs
+A general-purpose OS today must perform well on an increasingly               vary, or because the ISA is simply different.
+diverse range of system designs, each with different performance
+characteristics [60]. This means that, unlike large systems for high-         2.3     The interconnect matters
+performance computing, such an OS cannot be optimized at design
+or implementation time for any particular hardware configuration.             Even for contemporary cache-coherent multiprocessors, message-
+                                                                              passing hardware has replaced the single shared interconnect [18,
+   To take one specific example: Dice and Shavit show how a                   33] for scalability reasons. Hardware thus resembles a message-
+reader-writer lock can be built to exploit the shared, banked L2              passing network, as in the interconnect topology of the commodity
+cache on the Sun Niagara processor [40], using concurrent writes              PC server in Figure 2. While on most current hardware the cache-
+to the same cache line to track the presence of readers [20]. On Ni-          coherence protocol between CPUs ensures that the OS can continue
+agara this is highly efficient: the line remains in the L2 cache. On          to safely assume a single shared memory, networking problems
+a traditional multiprocessor, it is highly inefficient: the line ping-
+pongs between the readers’ caches.                                            1 See Microsoft Knowledge Base articles 927168, 927695 and 948496.
+
+
+
+
+                                                                         30
+                             12                                                             to the number of clients, the elapsed time per operation grows lin-
+                                      SHM8
+                                      SHM4                                                  early with the number of client threads. Despite this, for updates
+                                      SHM2
+                             10       SHM1                                                  of four or more cache lines, the RPC latency is lower than shared
+                                      MSG8
+                                      MSG1                                                  memory access (SHM4 vs. MSG8). Furthermore, with an asyn-
+                                      Server
+
+
+
+
+   Latency (cycles × 1000)
+                             8
+                                                                                            chronous or pipelined RPC implementation, the client processors
+                                                                                            can avoid stalling on cache misses and are free to perform other
+                                                                                            operations.
+                             6
+                                                                                               The final curve, labeled Server, shows time spent performing
+                                                                                            each update operation as measured at the server end of the RPC
+                             4
+                                                                                            channel. Since it excludes queuing delay, this cost is largely in-
+                                                                                            dependent of the number of threads (and in fact decreases initially
+                             2                                                              once there are enough outstanding client requests to keep the server
+                                                                                            100% utilized). The cache efficiency of the single server is such
+                             0                                                              that it can perform twice as many updates per second as all 16
+                                  2            4   6   8           10   12   14   16
+                                                                                            shared-memory threads combined. The per-operation cost is dom-
+                                                           Cores
+                                                                                            inated by message send and receive, and since these costs are sym-
+Figure 3: Comparison of the cost of updating shared state using                             metric at the client end, we infer that the difference between the
+shared memory and message passing.                                                          Server and MSGn lines represents the additional cycles that would
+                                                                                            be available to the client for useful work if it were to use asyn-
+                                                                                            chronous messaging.
+like routing and congestion are well-known concerns on large-scale                             This example shows scalability issues for cache-coherent shared
+multiprocessors, and are now issues in commodity intra-machine                              memory on even a small number of cores. Although current OSes
+interconnects [18]. Future hardware will comprise fewer chips but                           have point-solutions for this problem, which work on specific plat-
+exhibit network effects inside the chip, such as with ring [38, 61]                         forms or software systems, we believe the inherent lack of scala-
+and mesh networks [68, 70]. The implication is that system soft-                            bility of the shared memory model, combined with the rate of in-
+ware will have to adapt to the inter-core topology, which in turn                           novation we see in hardware, will create increasingly intractable
+will differ between machines and become substantially more im-                              software engineering problems for OS kernels.
+portant for performance than at present.
+                                                                                            2.5    Cache coherence is not a panacea
+2.4                          Messages cost less than shared memory                          As the number of cores and the subsequent complexity of the inter-
+In 1978 Lauer and Needham argued that message-passing and                                   connect grows, hardware cache-coherence protocols will become
+shared-memory operating systems are duals, and the choice of one                            increasingly expensive. As a result, it is a distinct possibility that
+model over another depends on the machine architecture on which                             future operating systems will have to handle non-coherent mem-
+the OS is built [43]. Of late, shared-memory systems have been                              ory [12, 49, 69], or will be able to realize substantial performance
+the best fit for PC hardware in terms of both performance and good                          gains by bypassing the cache-coherence protocol [70].
+software engineering, but this trend is reversing. We can see evi-                             It is already the case that programmable peripherals like NICs
+dence of this by an experiment that compares the costs of updating                          and GPUs do not maintain cache coherence with CPUs. Further-
+a data structure using shared memory with the costs using message                           more, many multicore processors have already demonstrated the
+passing. The graph in Figure 3 plots latency against number of                              use of non-coherent shared memory [15, 26, 68], and Mattson et
+cores for updates of various sizes on the 4×4-core AMD system                               al. [49] argue that the overhead of cache coherence restricts the
+(described in Section 4.1).                                                                 ability to scale up to even 80 cores.
+    In the shared memory case, threads pinned to each core directly
+update the same small set of memory locations (without locking)                             2.6    Messages are getting easier
+and the cache-coherence mechanism migrates data between caches                              There are legitimate software engineering issues associated with
+as necessary. The curves labeled SHM1–8 show the latency per                                message-based software systems, and one might therefore ques-
+operation (in cycles) for updates that directly modify 1, 2, 4 and                          tion the wisdom of constructing a multiprocessor operating sys-
+8 shared cache lines respectively. The costs grow approximately                             tem based on a “shared nothing” model as we propose. There are
+linearly with the number of threads and the number of modified                              two principal concerns, the first to do with not being able to access
+cache lines. Although a single core can perform the update opera-                           shared data, and the second to do with the event-driven program-
+tion in under 30 cycles, when 16 cores are modifying the same data                          ming style that results from asynchronous messaging.
+it takes almost 12,000 extra cycles to perform each update. All of                             However, the convenience of shared data is somewhat superfi-
+these extra cycles are spent with the core stalled on cache misses                          cial. There are correctness and performance pitfalls when using
+and therefore unable to do useful work while waiting for an update                          shared data structures, and in scalable shared-memory programs
+to occur.                                                                                   (particularly high-performance scientific computing applications),
+    In the case of message passing, client threads issue a lightweight                      expert developers are very careful about details such as lock gran-
+remote procedure call [10], (which we assume fits in a 64-byte                              ularity and how fields are laid out within structures. By fine-tuning
+cache line), to a single server process that performs the update on                         code at a low level, one can minimize the cache lines needed to hold
+their behalf. The curves labeled MSG1 and MSG8, show the cost of                            the shared data and reduce contention for cache line ownership.
+this synchronous RPC to the dedicated server thread. As expected,                           This reduces interconnect bandwidth and the number of processor
+the cost varies little with the number of modified cache lines since                        stalls incurred when cache contents are stale.
+they remain in the server’s local cache. Because each request is                               The same kind of expertise is also applied to make commodity
+likely to experience some queuing delay at the server proportional                          operating systems more scalable. As we have shown above, this
+
+
+
+                                                                                       31
+leads to a challenge in evolving the system as tradeoffs change,
+because the knowledge required for effective sharing of a particular
+data structure is encoded implicitly in its implementation. Note
+that this means programmers must think carefully about a shared-
+memory program in terms of messages sent by the cache-coherence                       Figure 4: Spectrum of sharing and locking disciplines.
+protocol in response to loads and stores to data locations.
+   The second concern with message passing is the resultant “stack            have been driven by hardware developments that exposed scalabil-
+ripping” and obfuscation of control flow due to the event-driven              ity bottlenecks, particularly the adoption of multiple processors in
+nature of such programs. However, traditional monolithic kernels              commodity PCs. Mainstream OSes are currently moving towards
+are essentially event-driven systems, even on multiprocessors. OS             the center, where several “hot” data structures are partitioned or
+developers are perhaps more accustomed to thinking in terms of                replicated across cores. Research systems take this even further
+state machines and message handlers than other programmers.                   with mechanisms like clustered objects that improve the locality
+   Finally, we note that a message-passing, event-driven program-             of partitioned data [24]. In contrast, we propose an OS architec-
+ming model is also the norm for many other programming do-                    ture positioned at the extreme right of the spectrum, where all state
+mains, such as graphical user interface programming, some types               is replicated by default and consistency is maintained using agree-
+of network server, and large-scale computation on clusters (where             ment protocols.
+it has completely replaced the “distributed shared virtual memory”
+paradigm). This has meant that the programmability of message-
+passing or event-driven systems is an active research area with
+                                                                              3.     THE MULTIKERNEL MODEL
+promising results that seem a natural fit for the multikernel model,          In this section we present our OS architecture for heterogeneous
+such as the Tame/Tamer C++ libraries [41] and the X10 parallel                multicore machines, which we call the multikernel model. In a
+programming language [16]. As the need for multicore program-                 nutshell, we structure the OS as a distributed system of cores that
+ming environments at the user level becomes more pressing, we ex-             communicate using messages and share no memory (Figure 1). The
+pect tools like these to support a message-passing abstraction will           multikernel model is guided by three design principles:
+become widespread.
+                                                                                   1. Make all inter-core communication explicit.
+2.7    Discussion                                                                  2. Make OS structure hardware-neutral.
+The architecture of future computers is far from clear but two trends              3. View state as replicated instead of shared.
+are evident: rising core counts and increasing hardware diversity,
+both between cores within a machine, and between systems with                 These principles allow the OS to benefit from the distributed sys-
+varying interconnect topologies and performance tradeoffs.                    tems approach to gain improved performance, natural support for
+                                                                              hardware heterogeneity, greater modularity, and the ability to reuse
+   This upheaval in hardware has important consequences for a
+                                                                              algorithms developed for distributed systems.
+monolithic OS that shares data structures across cores. These sys-
+tems perform a delicate balancing act between processor cache                    After discussing the principles in detail below, in Section 4 we
+size, the likely contention and latency to access main memory, and            explore the implications of these principles by describing the im-
+the complexity and overheads of the cache-coherence protocol. The             plementation of Barrelfish, a new operating system based on the
+irony is that hardware is now changing faster than software, and the          multikernel model.
+effort required to evolve such operating systems to perform well on
+new hardware is becoming prohibitive.                                         3.1      Make inter-core communication explicit
+   Increasing system and interconnect diversity, as well as core het-         Within a multikernel OS, all inter-core communication is per-
+erogeneity, will prevent developers from optimizing shared mem-               formed using explicit messages. A corollary is that no memory
+ory structures at a source-code level. Sun Niagara and Intel Ne-              is shared between the code running on each core, except for that
+halem or AMD Opteron systems, for example, already require                    used for messaging channels. As we have seen, using messages to
+completely different optimizations, and future system software will           access or update state rapidly becomes more efficient than shared-
+have to adapt its communication patterns and mechanisms at run-               memory access as the number of cache-lines involved increases.
+time to the collection of hardware at hand. It seems likely that              We can expect such effects to become more pronounced in the fu-
+future general-purpose systems will have limited support for hard-            ture. Note that this does not preclude applications sharing memory
+ware cache coherence, or drop it entirely in favor of a message-              between cores (see Section 4.8), only that the OS design itself does
+passing model. An OS that can exploit native message-passing                  not rely on it.
+would be the natural fit for such a design.                                      Explicit communication patterns facilitate reasoning about the
+   We believe that now is the time to reconsider how the OS should            use of the system interconnect. In contrast to implicit communica-
+be restructured to not merely cope with the next generation of hard-          tion (such as distributed shared memory, or the messages used for
+ware, but efficiently exploit it. Furthermore, rather than evolving an        cache coherence), the knowledge of what parts of shared state are
+inherently shared-memory model of OS structure to deal with com-              accessed when and by who is exposed. It is, of course, established
+plex tradeoffs and limited sharing, we take the opposite approach:            practice in OS kernels to design point-solution data structures that
+design and reason about the OS as a distributed, non-shared system,           can be updated using only one or two cache misses on particular
+and then employ sharing to optimize the model where appropriate.              architectures, but it is hard to evolve such operations as hardware
+   Figure 4 depicts a spectrum of sharing and locking disciplines.            changes, and such optimizations ignore the wider picture of larger
+Traditional operating systems, such as Windows and variants of                state updates in the OS involving multiple structures.
+Unix, have evolved from designs at the far left of the continuum                 We have previously argued that as the machine increasingly re-
+towards finer-grained locking and more replication. These changes             sembles a network, the OS will inevitably behave as a distributed
+
+
+
+                                                                         32
+system [8]. Explicit communication allows the OS to deploy well-               A final advantage is to enable late binding of both the proto-
+known networking optimizations to make more efficient use of the            col implementation and message transport. For example, different
+interconnect, such as pipelining (having a number of requests in            transports may be used to cores on IO links, or the implementation
+flight at once), and batching (sending a number of requests in one          may be fitted to the observed workload by adjusting queue lengths
+message, or processing a number of messages together). In Sec-              or polling frequency. In Section 5.1 we show how a topology-aware
+tion 5.2 we show the benefit of such techniques in the case of dis-         multicast message protocol can outperform highly optimized TLB
+tributed capability management.                                             shootdown mechanisms on commodity operating systems.
+   This approach also enables the OS to provide isolation and re-
+source management on heterogeneous cores, or to schedule jobs               3.3    View state as replicated
+effectively on arbitrary inter-core topologies by placing tasks with
+reference to communication patterns and network effects. Further-           Operating systems maintain state, some of which, such as the Win-
+more, the message abstraction is a basic requirement for spanning           dows dispatcher database or Linux scheduler queues, must be ac-
+cores which are not cache-coherent, or do not even share memory.            cessible on multiple processors. Traditionally that state exists as
+                                                                            shared data structures protected by locks, however, in a multikernel,
+   Message passing allows operations that might require commu-
+                                                                            explicit communication between cores that share no memory leads
+nication to be split-phase, by which we mean that the operation
+                                                                            naturally to a model of global OS state replicated across cores.
+sends a request and immediately continues, with the expectation
+that a reply will arrive at some time in the future. When requests             Replication is a well-known technique for OS scalability [4, 24],
+and responses are decoupled, the core issuing the request can do            but is generally employed as an optimization to an otherwise
+useful work, or sleep to save power, while waiting for the reply.           shared-memory kernel design. In contrast, any potentially shared
+A common, concrete example is remote cache invalidations. In a              state in a multikernel is accessed and updated as if it were a lo-
+highly concurrent scenario, provided that completing the invalida-          cal replica. In general, the state is replicated as much as is useful,
+tion is not required for correctness, it can be more important not          and consistency is maintained by exchanging messages. Depend-
+to waste time waiting for the operation to finish than to perform it        ing on the consistency semantics required, updates can therefore be
+with the smallest possible latency.                                         long-running operations to coordinate replicas, and so are exposed
+                                                                            in the API as non-blocking and split-phase. We provide examples
+   Finally, a system based on explicit communication is amenable
+                                                                            of different update semantics in Section 4.
+to human or automated analysis. The structure of a message-
+passing system is naturally modular, because components com-                   Replicating data structures can improve system scalability by re-
+municate only through well-defined interfaces. Consequently it              ducing load on the system interconnect, contention for memory,
+can be evolved and refined more easily [23] and made robust to              and overhead for synchronization. Bringing data nearer to the cores
+faults [30]. Indeed, a substantial theoretical foundation exists for        that process it will result in lowered access latencies.
+reasoning about the high-level structure and performance of a sys-             Replication is required to support domains that do not share
+tem with explicit communication between concurrent tasks, rang-             memory, whether future general-purpose designs or present-day
+ing from process calculi such as Hoare’s communicating sequential           programmable peripherals, and is inherent in the idea of specializ-
+processes and the π-calculus, to the use of queuing theory to ana-          ing data structures for particular core designs. Making replication
+lyze the performance of complex networks                                    of state intrinsic to the multikernel design makes it easier to pre-
+                                                                            serve OS structure and algorithms as underlying hardware evolves.
+3.2    Make OS structure hardware-neutral                                      Furthermore, replication is a useful framework within which to
+                                                                            support changes to the set of running cores in an OS, either when
+A multikernel separates the OS structure as much as possible from           hotplugging processors, or when shutting down hardware subsys-
+the hardware. This means that there are just two aspects of the             tems to save power. We can apply standard results from the dis-
+OS as a whole that are targeted at specific machine architectures –         tributed systems literature to maintaining the consistency of OS
+the messaging transport mechanisms, and the interface to hardware           state across such changes.
+(CPUs and devices). This has several important potential benefits.
+                                                                               Finally, a potentially important optimization of the multikernel
+   Firstly, adapting the OS to run on hardware with new per-                model (which we do not pursue in this paper) is to privately share a
+formance characteristics will not require extensive, cross-cutting          replica of system state between a group of closely-coupled cores or
+changes to the code base (as was the case with recent scalability           hardware threads, protected by a shared-memory synchronization
+enhancements to Linux and Windows). This will become increas-               technique like spinlocks. In this way we can introduce (limited)
+ingly important as deployed systems become more diverse.                    sharing behind the interface as an optimization of replication.
+   In particular, experience has shown that the performance of an
+inter-process communication mechanism is crucially dependent on             3.4    Applying the model
+hardware-specific optimizations (we describe those used in Bar-
+relfish in Section 4.6). Hardware-independence in a multikernel             Like all models, the multikernel, while theoretically elegant, is an
+means that we can isolate the distributed communication algo-               idealist position: no state is shared and the OS acts like a fully
+rithms from hardware implementation details.                                distributed system. This has several implications for a real OS.
+   We envision a number of different messaging implementations                 We discussed previously (in Section 2.6) the software engineer-
+(for example, a user-level RPC protocol using shared memory, or a           ing concerns of message-passing systems in general. Within the op-
+hardware-based channel to a programmable peripheral). As we saw             erating system kernel, which typically consists of a smaller amount
+in Section 2.5, hardware platforms exist today without cache coher-         of code written by expert programmers, software development
+ence, and even without shared memory, and are likely to become              challenges are more easily managed. However, the drawback of
+more widespread. Once the message transport is optimized, we can            a idealist message-passing abstraction here is that certain platform-
+implement efficient message-based algorithms independently of the           specific performance optimizations may be sacrificed, such as mak-
+hardware details or memory layout.                                          ing use of a shared L2 cache between cores.
+
+
+
+                                                                       33
+   The performance and availability benefits of replication are
+achieved at the cost of ensuring replica consistency. Some oper-
+ations will inevitably experience longer latencies than others, and
+the extent of this penalty will depend on the workload, the data vol-
+umes and the consistency model being applied. Not only that, the
+model supports multiple implementations of the agreement proto-
+cols used to maintain consistency. This increases the burden on
+the developer who must understand the consistency requirements
+for the data, but on the other hand, can also precisely control the
+degree of consistency. For example, a global flush of the TLB on                                  Figure 5: Barrelfish structure
+each CPU is order-insensitive and can be achieved by issuing a sin-
+gle multicast request, whereas other operations may require more
+elaborate agreement protocols.                                                  The 4×4-core AMD system has a Supermicro H8QM3-2 board
+   From an OS research perspective, a legitimate question is to what          with 4 quad-core 2.5GHz AMD Opteron 8380 processors con-
+extent a real implementation can adhere to the model, and the con-            nected in a square topology by four HyperTransport links. Each
+sequent effect on system performance and scalability. To address              core has a private 512kB L2 cache, and each processor has a 6MB
+this, we have implemented Barrelfish, a substantial prototype oper-           L3 cache shared by all 4 cores.
+ating system structured according to the multikernel model.                     The 8×4-core AMD system has a Tyan Thunder S4985 board
+   Specifically, the goals for Barrelfish are that it:                        with M4985 quad CPU daughtercard and 8 quad-core 2GHz AMD
+                                                                              Opteron 8350 processors with the interconnect in Figure 2. Each
+     • gives comparable performance to existing commodity oper-               core has a private 512kB L2 cache, and each processor has a 2MB
+       ating systems on current multicore hardware;                           L3 cache shared by all 4 cores.
+
+     • demonstrates evidence of scalability to large numbers of               4.2     System structure
+       cores, particularly under workloads that stress global OS data
+       structures;                                                            The multikernel model calls for multiple independent OS instances
+                                                                              communicating via explicit messages. In Barrelfish, we factor the
+     • can be re-targeted to different hardware, or make use of a             OS instance on each core into a privileged-mode CPU driver and
+       different mechanism for sharing, without refactoring;                  a distinguished user-mode monitor process, as in Figure 5 (we dis-
+                                                                              cuss this design choice below). CPU drivers are purely local to a
+     • can exploit the message-passing abstraction to achieve good            core, and all inter-core coordination is performed by monitors. The
+       performance by pipelining and batching messages;                       distributed system of monitors and their associated CPU drivers en-
+     • can exploit the modularity of the OS to place OS functional-           capsulate the functionality found in a typical monolithic microker-
+       ity according to the hardware topology or load.                        nel: scheduling, communication, and low-level resource allocation.
+                                                                                 The rest of Barrelfish consists of device drivers and system ser-
+In the next section we describe Barrelfish, and in Section 5 we ex-           vices (such as network stacks, memory allocators, etc.), which run
+plore the extent to which it achieves these goals.                            in user-level processes as in a microkernel. Device interrupts are
+                                                                              routed in hardware to the appropriate core, demultiplexed by that
+                                                                              core’s CPU driver, and delivered to the driver process as a message.
+4.     IMPLEMENTATION
+While Barrelfish is a point in the multikernel design space, it is not        4.3     CPU drivers
+the only way to build a multikernel. In this section we describe our
+implementation, and note which choices in the design are derived              The CPU driver enforces protection, performs authorization, time-
+from the model and which are motivated for other reasons, such as             slices processes, and mediates access to the core and its associ-
+local performance, ease of engineering, policy freedom, etc. – we             ated hardware (MMU, APIC, etc.). Since it shares no state with
+have liberally borrowed ideas from many other operating systems.              other cores, the CPU driver can be completely event-driven, single-
+                                                                              threaded, and nonpreemptable. It serially processes events in the
+                                                                              form of traps from user processes or interrupts from devices or
+4.1     Test platforms                                                        other cores. This means in turn that it is easier to write and de-
+Barrelfish currently runs on x86-64-based multiprocessors (an                 bug than a conventional kernel, and is small2 enabling its text and
+ARM port is in progress). In the rest of this paper, reported per-            data to be located in core-local memory.
+formance figures refer to the following systems:                                 As with an exokernel [22], a CPU driver abstracts very little but
+   The 2×4-core Intel system has an Intel s5000XVN motherboard                performs dispatch and fast local messaging between processes on
+with 2 quad-core 2.66GHz Xeon X5355 processors and a single ex-               the core. It also delivers hardware interrupts to user-space drivers,
+ternal memory controller. Each processor package contains 2 dies,             and locally time-slices user-space processes. The CPU driver is in-
+each with 2 cores and a shared 4MB L2 cache. Both processors                  voked via standard system call instructions with a cost comparable
+are connected to the memory controller by a shared front-side bus,            to Linux on the same hardware.
+however the memory controller implements a snoop filter to reduce                The current CPU driver in Barrelfish is heavily specialized for
+coherence traffic crossing the bus.                                           the x86-64 architecture. In the future, we expect CPU drivers
+   The 2×2-core AMD system has a Tyan Thunder n6650W board                    for other processors to be similarly architecture-specific, including
+with 2 dual-core 2.8GHz AMD Opteron 2220 processors, each                     2 The x86-64 CPU driver, including debugging support and libraries, is
+with a local memory controller and connected by 2 HyperTrans-                 7135 lines of C and 337 lines of assembly (counted by David A. Wheeler’s
+port links. Each core has its own 1MB L2 cache.                               “SLOCCount”), 54kB of text and 370kB of static data (mainly page tables).
+
+
+
+
+                                                                         34
+                 System           cycles (σ)     ns                             The threads package in the default Barrelfish user library pro-
+                 2×4-core Intel      845 (32)   318                          vides an API similar to POSIX threads. We anticipate that lan-
+                 2×2-core AMD        757 (19)   270                          guage runtimes and parallel programming libraries will take ad-
+                 4×4-core AMD       1463 (21)   585                          vantage of the ability to customize its behavior, but in the meantime
+                 8×4-core AMD       1549 (20)   774                          the library provides enough support for implementing the more tra-
+                                                                             ditional model of threads sharing a single process address space
+                      Table 1: LRPC latency                                  across multiple cores, as we describe in Section 4.8.
+
+                                                                             4.6    Inter-core communication
+data structure layout, whereas the monitor source code is almost             In a multikernel, all inter-core communication occurs with mes-
+entirely processor-agnostic.                                                 sages. We expect to use different transport implementations for
+    The CPU driver implements a lightweight, asynchronous (split-            different hardware scenarios. However, the only inter-core commu-
+phase) same-core interprocess communication facility, which de-              nication mechanism available on our current hardware platforms
+livers a fixed-size message to a process and if necessary unblocks           is cache-coherent memory. Barrelfish at present therefore uses a
+it. More complex communication channels are built over this using            variant of user-level RPC (URPC) [10] between cores: a region
+shared memory. As an optimization for latency-sensitive opera-               of shared memory is used as a channel to transfer cache-line-sized
+tions, we also provide an alternative, synchronous operation akin            messages point-to-point between single writer and reader cores.
+to LRPC [9] or to L4 IPC [44].                                                  Inter-core messaging performance is critical for a multiker-
+    Table 1 shows the one-way (user program to user program) per-            nel, and our implementation is carefully tailored to the cache-
+formance of this primitive. On the 2×2-core AMD system, L4 per-              coherence protocol to minimize the number of interconnect mes-
+forms a raw IPC in about 420 cycles. Since the Barrelfish figures            sages used to send a message. For example, on the fast path for
+also include a scheduler activation, user-level message dispatching          a HyperTransport-based system, the sender writes the message se-
+code, and a pass through the thread scheduler, we consider our per-          quentially into the cache line, while the receiver polls on the last
+formance to be acceptable for the moment.                                    word of the line, thus ensuring that in the (unlikely) case that it
+                                                                             polls the line during the sender’s write, it does not see a partial
+4.4    Monitors                                                              message. In the common case, this causes two round trips across
+                                                                             the interconnect: one when the sender starts writing to invalidate
+Monitors collectively coordinate system-wide state, and encapsu-             the line in the receiver’s cache, and one for the receiver to fetch
+late much of the mechanism and policy that would be found in the             the line from the sender’s cache. The technique also performs well
+kernel of a traditional OS. The monitors are single-core, user-space         between cores with a shared cache.
+processes and therefore schedulable. Hence they are well suited to              As an optimization, pipelined URPC message throughput can be
+the split-phase, message-oriented inter-core communication of the            improved at the expense of single-message latency through the use
+multikernel model, in particular handling queues of messages, and            of cache prefetching instructions. This can be selected at channel
+long-running remote operations.                                              setup time for workloads likely to benefit from it.
+   On each core, replicated data structures, such as memory alloca-             Receiving URPC messages is done by polling memory. Polling
+tion tables and address space mappings, are kept globally consistent         is cheap because the line is in the cache until invalidated; in addi-
+by means of an agreement protocol run by the monitors. Applica-              tion, keeping the endpoints in an array can allow a hardware stride
+tion requests that access global state are handled by the monitors,          prefetcher to further improve performance. However, it is unrea-
+which mediate access to remote copies of state.                              sonable to spin forever; instead, a dispatcher awaiting messages on
+   Monitors perform some further housekeeping functions in Bar-              URPC channels will poll those channels for a short period before
+relfish. As described in Section 4.6, monitors are responsible for           blocking and sending a request to its local monitor to be notified
+interprocess communication setup, and for waking up blocked lo-              when messages arrive. At present, dispatchers poll incoming chan-
+cal processes in response to messages from other cores. A monitor            nels for a predetermined time before blocking, however this can be
+can also idle the core itself (to save power) when no other processes        improved by adaptive strategies similar to those used in deciding
+on the core are runnable. Core sleep is performed either by waiting          how long to spin on a shared-memory spinlock [37].
+for an inter-processor interrupt (IPI) or, where supported, the use             All message transports are abstracted behind a common inter-
+of MONITOR and MWAIT instructions.                                           face, allowing messages to be marshaled, sent and received in a
+                                                                             transport-independent way. As in most RPC systems, marshaling
+4.5    Process structure                                                     code is generated using a stub compiler to simplify the construc-
+                                                                             tion of higher-level services. A name service is used to locate other
+The multikernel model leads to a somewhat different process struc-           services in the system by mapping service names and properties to
+ture than a typical monolithic multiprocessor OS. A process in Bar-          a service reference, which can be used to establish a channel to the
+relfish is represented by a collection of dispatcher objects, one            service. Channel setup is performed by the monitors.
+on each core on which it might execute. Communication in Bar-
+relfish is not actually between processes but between dispatchers               Table 2 shows the URPC single-message latency and sustained
+(and hence cores).                                                           pipelined throughput (with a queue length of 16 messages); hop
+                                                                             counts for AMD refer to the number of HyperTransport hops be-
+   Dispatchers on a core are scheduled by the local CPU driver,              tween sender and receiver cores.
+which invokes an upcall interface that is provided by each dis-
+                                                                                Table 3 compares the overhead of our URPC implementation
+patcher. This is the mechanism used in Psyche [48] and scheduler
+                                                                             with L4’s IPC on the 2×2-core AMD system3 . We see that inter-
+activations [3], and contrasts with the Unix model of simply resum-
+                                                                             core messages are cheaper than intra-core context switches in direct
+ing execution. Above this upcall interface, a dispatcher typically
+runs a core-local user-level thread scheduler.                               3 L4 IPC figures were measured using L4Ka::Pistachio of 2009-02-25.
+
+
+
+
+                                                                        35
+    System             Cache             Latency       Throughput              take: the capability code is unnecessarily complex, and no more
+                                    cycles (σ)   ns    msgs/kcycle             efficient than scalable per-processor memory managers used in con-
+    2×4-core Intel     shared         180 (34)    68         11.97             ventional OSes like Windows and Linux. All cores must still keep
+                       non-shared     570 (50)   214          3.78             their local capability lists consistent, to avoid situations such as
+    2×2-core AMD       same die       450 (25)   161          3.42             user-level acquiring a mapping to a hardware page table.
+                       one-hop        532 (26)   190          3.19
+    4×4-core AMD       shared         448 (12)   179          3.57
+                                                                                  However, one benefit has been uniformity: most operations re-
+                       one-hop        545 (11)   218          3.53             quiring global coordination in Barrelfish can be cast as instances of
+                       two-hop        558 (11)   223          3.51             capability copying or retyping, allowing the use of generic consis-
+    8×4-core AMD       shared         538 (8)    269          2.77             tency mechanisms in the monitors. These operations are not spe-
+                       one-hop        613 (6)    307          2.79             cific to capabilities, and we would have to support them with any
+                       two-hop        618 (7)    309          2.75             other accounting scheme.
+                     Table 2: URPC performance                                    Page mapping and remapping is an operation which requires
+                                                                               global coordination – if an address space mapping is removed or
+                                                                               its rights are reduced, it is important that no stale information re-
+                                                                               mains in a core’s TLB before any action occurs that requires the
+                     Latency   Throughput    Cache lines used
+                      cycles   msgs/kcycle   Icache Dcache                     operation to have completed. This is implemented by a one-phase
+                                                                               commit operation between all the monitors.
+         URPC           450           3.42        9         8
+         L4 IPC         424           2.36       25        13                     A more complex problem is capability retyping, of which revo-
+                                                                               cation is a special case. This corresponds to changing the usage of
+             Table 3: Messaging costs on 2×2-core AMD                          an area of memory and requires global coordination, since retyp-
+                                                                               ing the same capability in different ways (e.g. a mappable frame
+                                                                               and a page table) on different cores leads to an inconsistent sys-
+                                                                               tem. All cores must agree on a single ordering of the operations to
+cost, but also have less cache impact and do not incur a TLB flush.            preserve safety, and in this case, the monitors initiate a two-phase
+They can also be pipelined to trade off latency for throughput.                commit protocol to ensure that all changes to memory usage are
+                                                                               consistently ordered across the processors.
+4.7    Memory management
+Although a multikernel OS is itself distributed, it must consistently
+                                                                               4.8    Shared address spaces
+manage a set of global resources, such as physical memory. In                  We are interested in investigating language runtimes that extend the
+particular, because user-level applications and system services may            multikernel model to user-space applications. However, for most
+make use of shared memory across multiple cores, and because OS                current programs, Barrelfish supports the traditional process model
+code and data is itself stored in the same memory, the allocation              of threads sharing a single virtual address space across multiple
+of physical memory within the machine must be consistent – for                 dispatchers (and hence cores) by coordinating runtime libraries on
+example, the system must ensure that one user process can never                each dispatcher. This coordination affects three OS components:
+acquire a virtual mapping to a region of memory used to store a                virtual address space, capabilities, and thread management, and is
+hardware page table or other OS object.                                        an example of how traditional OS functionality can be provided
+    Any OS faces the same problem of tracking ownership and type               over a multikernel.
+of in-memory objects. Most systems use some kind of unique iden-                  A shared virtual address space can be achieved by either sharing
+tifiers together with accounting information, such as file descriptors         a hardware page table among all dispatchers in a process, or repli-
+in Unix or object handles in Windows, managed by data structures               cating hardware page tables with consistency achieved by message
+in shared memory. For Barrelfish, we decided to use a capabil-                 protocols. The tradeoff between these two is similar to that investi-
+ity system modeled on that of seL4 [39]. In this model, all mem-               gated in Corey [13]; the former is typically more efficient, however
+ory management is performed explicitly through system calls that               the latter may reduce cross-processor TLB invalidations (because it
+manipulate capabilities, which are user-level references to kernel             is possible to track which processors may have cached a mapping),
+objects or regions of physical memory. The model has the useful                and is also the only way to share an address space between cores
+property of removing dynamic memory allocation from the CPU                    that do not support the same page table format.
+driver, which is only responsible for checking the correctness of                 As well as sharing the address space, user applications also ex-
+operations that manipulate capabilities to memory regions through              pect to share capabilities (for example, to mappable memory re-
+retype and revoke operations.                                                  gions) across cores. However, a capability in a user’s address space
+    All virtual memory management, including allocation and ma-                is merely a reference to a kernel-level data structure. The monitors
+nipulation of page tables, is performed entirely by user-level code            provide a mechanism to send capabilities between cores, ensuring
+[28]. For instance, to allocate and map in a region of memory, a               in the process that the capability is not pending revocation, and is of
+user process must first acquire capabilities to sufficient RAM to              a type that may be transferred. The user-level libraries that perform
+store the required page tables. It then retypes these RAM capabil-             capability manipulation invoke the monitor as required to maintain
+ities to page table capabilities, allowing it to insert the new page           a consistent capability space between cores.
+tables into its root page table; although the CPU driver performs                 Cross-core thread management is also performed in user space.
+the actual page table and capability manipulations, its sole task              The thread schedulers on each dispatcher exchange messages to
+is checking their correctness. The user process may then allocate              create and unblock threads, and to migrate threads between dis-
+more RAM capabilities, which it retypes to mappable frame capa-                patchers (and hence cores). Barrelfish is responsible only for multi-
+bilities, and finally inserts into its page tables to map the memory.          plexing the dispatchers on each core via the CPU driver scheduler,
+    We chose capabilities so as to cleanly decentralize resource al-           and coordinating the CPU drivers to perform, for example, gang
+location in the interests of scalability. In hindsight, this was a mis-        scheduling or co-scheduling of dispatchers. This allows a variety
+
+
+
+                                                                          36
+of spatio-temporal scheduling policies from the literature [62, 65]                  Some of this state can be naturally partitioned, but (as we saw in
+to be applied according to OS policy.                                             Section 1) the engineering effort to do this piecemeal in the process
+                                                                                  of evolving an OS for scalability can be prohibitive. Furthermore,
+4.9     Knowledge and policy engine                                               state which is inherently shared in current systems requires more
+                                                                                  effort to convert to a replication model. Finally, the shared-memory
+Dealing with heterogeneous hardware and choosing appropriate                      single-kernel model cannot deal with cores that are heterogeneous
+system mechanisms is a crucial task in a multikernel. Barrelfish                  at the ISA level.
+employs a service known as the system knowledge base (SKB) [60],
+                                                                                     In contrast, starting with a multikernel model, as in Barrelfish,
+which maintains knowledge of the underlying hardware in a sub-
+                                                                                  allows these issues to be addressed from the outset. From a research
+set of first-order logic.4 It is populated with information gath-
+                                                                                  perspective, Barrelfish can be seen as a useful “proving ground” for
+ered through hardware discovery (including ACPI tables, PCI bus
+                                                                                  experimenting with such ideas in an environment freed from the
+probes, and CPUID data), online measurement (such as URPC
+                                                                                  constraints of an existing complex monolithic system.
+communication latency and bandwidth between all core pairs in the
+system), and pre-asserted facts that cannot be discovered or mea-
+sured (such as the interconnect topology of various system boards,                5.    EVALUATION
+and quirks that correct known flaws in discovered information, such
+                                                                                  In this section we evaluate how well Barrelfish meets the goals
+as ACPI tables). Using this rich repository of data, the SKB allows
+                                                                                  in Section 3.4: good baseline performance, scalability with cores,
+concise expression of optimization queries, for example to allo-
+                                                                                  adaptability to different hardware, exploiting the message-passing
+cate device drivers to cores in a topology-aware manner, to select
+                                                                                  abstraction for performance, and sufficient modularity to make use
+appropriate message transports for inter-core communication, and
+                                                                                  of hardware topology-awareness. We start with a detailed case-
+to provide the topology information necessary for NUMA-aware
+                                                                                  study of TLB shootdown, and then look at other workloads de-
+memory allocation.
+                                                                                  signed to exercise various parts of the OS.
+   As one example, we describe in Section 5.1 how the SKB is
+used to construct a cache- and topology-aware network for efficient
+communication within multicore machines. Space precludes fur-                     5.1    Case study: TLB shootdown
+ther discussion of policy decisions, but we believe that such a high-             TLB shootdown – the process of maintaining TLB consistency by
+level, declarative approach to reasoning about the machine hard-                  invalidating entries when pages are unmapped – is one of the sim-
+ware (augmented with online measurements) is an essential part of                 plest operations in a multiprocessor OS that requires global coor-
+a multikernel-based system.                                                       dination. It is also a short, but latency-critical, operation and so
+                                                                                  represents a worst-case comparison for a multikernel.
+4.10      Experiences                                                                In Linux and Windows, inter-processor interrupts (IPIs) are used:
+Barrelfish is one concrete implementation of the multikernel model                a core that wishes to change a page mapping writes the operation
+in Section 3, and its structure differs substantially from that of                to a well-known location and sends an interrupt to every core that
+a monolithic OS like Linux or indeed a hypervisor like Xen [7].                   might have the mapping in its TLB. Each core takes the trap, ac-
+However, we emphasize that Barrelfish is not the only way to build                knowledges the IPI by writing to a shared variable, invalidates the
+a multikernel.                                                                    TLB entry, and resumes. The initiating core can continue imme-
+                                                                                  diately after every IPI has been acknowledged, since by the time
+   In particular, the factoring of the OS node into separate CPU
+                                                                                  each core resumes to user space the TLB entry is guaranteed to be
+driver and monitor components is not required by the model; our
+                                                                                  flushed. This has low latency, but can be disruptive as each core
+experience is that it is not optimal for performance, but has com-
+                                                                                  immediately takes the cost of a trap (about 800 cycles). The TLB
+pelling engineering advantages. The downside of the separation
+                                                                                  invalidation itself is fast, taking 95-320 cycles on a current x86-64
+is that invocations from processes to the OS are now mostly lo-
+                                                                                  core.
+cal RPC calls (and hence two context switches) rather than system
+calls, adding a constant overhead on current hardware of several                     In Barrelfish, we use messages for shootdown. In the naive al-
+thousand cycles. However, this is constant as the number of cores                 gorithm, the local monitor broadcasts invalidate messages to the
+increases. Moving the monitor into kernel space would remove this                 others and waits for all the replies. We would expect this to show
+penalty, at the cost of a more complex kernel-mode code base.                     higher latency than the IPI approach, since the remote monitors
+   In addition, our current network stack (which runs a separate in-              handle the messages only when “convenient”. However, fortu-
+stance of lwIP [47] per application) is very much a placeholder. We               nately, the message-passing paradigm allows us to improve on this
+are interested in appropriate network stack design for multikernels,              approach without significantly restructuring the code. In particular,
+and in particular we feel many ideas from RouteBricks [21] are                    we can exploit knowledge about the specific hardware platform, ex-
+applicable to a scalable end-system multikernel.                                  tracted from the system knowledge base at runtime, to achieve very
+                                                                                  good TLB shootdown performance.
+   The principal difference between current OS designs and the
+multikernel model is not the location of protection or trust bound-                  Figure 6 shows the costs of the raw inter-core messaging mecha-
+aries between system components, but rather the reliance on shared                nisms (without TLB invalidation) for four URPC-based TLB shoot-
+data as the default communication mechanism. Examples from                        down protocols on the 8×4-core AMD system.
+monolithic systems include process, thread, and virtual machine                      In the Broadcast protocol, the master monitor uses a single
+control blocks, page tables, VFS objects, scheduler queues,5 net-                 URPC channel to broadcast a shootdown request to every other
+work sockets and inter-process communication buffers.                             core. Each slave core polls the same shared cache, waiting for the
+4 The initial implementation of the SKB is based on a port of the ECLi PSe        master to modify it, and then acknowledges with individual UR-
+constraint programming system [5].                                                PCs to the master. This performs badly due to the cache-coherence
+5 Systems with per-processor run queues implement load balancing and              protocol used by AMD64 processors [1, section 7.3]. When the
+thread migration either via a work stealing or work offloading model. In          master updates the line, it is invalidated in all other caches. Each
+both cases this involves access to the run queues of remote processors.           slave core then pulls the new copy from the master’s cache. With N
+
+
+
+                                                                             37
+                             14                                                                                                                      60
+                                               Broadcast                                                                                                        Windows
+                                                  Unicast                                                                                                           Linux
+                                                 Multicast                                                                                                      Barrelfish
+                             12       NUMA-Aware Multicast                                                                                           50
+
+                             10
+
+
+
+
+   Latency (cycles × 1000)                                                                                                 Latency (cycles × 1000)
+                                                                                                                                                     40
+
+                             8
+                                                                                                                                                     30
+                             6
+
+                                                                                                                                                     20
+                             4
+
+                                                                                                                                                     10
+                             2
+
+
+                             0                                                                                                                        0
+                                  2   4   6   8   10   12    14   16   18   20   22   24   26   28   30   32                                              2    4    6    8   10   12   14      16   18   20   22   24   26   28   30   32
+                                                                  Cores                                                                                                                        Cores
+
+
+                             Figure 6: Comparison of TLB shootdown protocols                                                                                  Figure 7: Unmap latency on 8×4-core AMD
+
+                                                                                                                                                     30
+cores, the data crosses the interconnect N times, and latency grows                                                                                                 Single-operation latency
+                                                                                                                                                                       Cost when pipelining
+linearly with the number of cores.
+                                                                                                                                                     25
+   The Unicast protocol sends individual requests to each slave over
+
+
+
+
+                                                                                                                       Cycles per operation × 1000
+unicast URPC so that the cache lines are only shared by two cores.
+While this performs much better than the broadcast protocol, par-                                                                                    20
+
+ticularly for a small number of cores, it still has linear scalability.
+The flatter curve below eight cores is likely to be the processor’s                                                                                  15
+hardware “stride prefetcher” predicting correctly which cache lines
+are likely to be accessed in the master’s receive loop.                                                                                              10
+   The HyperTransport interconnect is effectively a broadcast net-
+work, where each read or write operation results in probes being                                                                                     5
+sent to all other nodes. However, newer 4-core Opteron processors
+have a shared on-chip L3 cache and appear as a single HyperTrans-
+                                                                                                                                                     0
+port node, and so cache lines shared only by these cores will not                                                                                         2    4   6     8   10   12   14   16 18        20   22   24   26   28   30   32
+result in interconnect traffic. This motivates using an explicit two-                                                                                                                       Cores
+
+level multicast tree for shootdown messages. Hence in the Multi-
+cast protocol, the master sends a URPC message to the first core                                                                                          Figure 8: Two-phase commit on 8×4-core AMD
+of each processor, which forwards it to the other three cores in the
+package. Since they all share an L3 cache, this second message is
+much cheaper, but more importantly all eight processors can send in                                                 line protocol, and so in practice is much slower. These include the
+parallel without interconnect contention. As shown in Figure 6, the                                                 fixed overhead of LRPC to the local monitor, the per-message cost
+multicast protocol scales significantly better than unicast or broad-                                               of marshaling and event demultiplexing, scheduling effects in the
+cast.                                                                                                               monitors, and variable overhead when a core’s monitor is not cur-
+                                                                                                                    rently its polling channels.
+   Finally, we devised a protocol that takes advantage of the NUMA
+nature of the machine by allocating URPC buffers from memory                                                           Nevertheless, as Figure 7 shows, the complete message-based
+local to the multicast aggregation nodes, and having the master                                                     unmap operation in Barrelfish quickly outperforms the equivalent
+send requests to the highest latency nodes first. Once again, there                                                 IPI-based mechanisms in Linux 2.6.26 and Windows Server 2008
+are many analogies to networked systems which motivate these                                                        R2 Beta, Enterprise Edition. The error bars on the graphs are stan-
+changes. The resulting protocol, labeled NUMA-Aware Multicast                                                       dard deviation. We show the latency to change the permissions of
+on Figure 6 scales extremely well across the 32-way system, show-                                                   a page mapped by a varying number of cores, using mprotect on
+ing steps only when the number of levels in the tree increases.                                                     Linux and VirtualProtect on Windows. Despite the fact that up
+   This communication protocol has good performance for the 8×4-                                                    to 32 user-level processes are involved in each unmap operation,
+core AMD system, but relies on hardware knowledge (including the                                                    performance scales better than Linux or Windows, both of which
+interconnect topology and memory locality) that differs widely be-                                                  incur the cost of serially sending IPIs. The large overhead on top of
+tween systems, and only works when initiated from the first core.                                                   the baseline protocol figures is largely due to inefficiencies in the
+In Barrelfish, we use a query on the system knowledge base to con-                                                  message dispatch loop of the user-level threads package, which has
+struct a suitable multicast tree at runtime: for every source core                                                  not been optimized.
+in the system, the SKB computes an optimal route consisting of
+one multicast aggregation node per processor socket, ordered by                                                     5.2                              Messaging performance
+decreasing message latency, and its children. These routes are cal-
+culated online at startup, and used to configure inter-monitor com-
+                                                                                                                    Two-phase commit
+munication.                                                                                                         As we discussed in Section 4, Barrelfish uses a distributed two-
+   End-to-end unmap latency: The complete implementation of                                                         phase commit operation for changing memory ownership and usage
+unmapping pages in Barrelfish adds a number of costs to the base-                                                   via capability retyping. This necessarily serializes more messages
+
+
+
+                                                                                                               38
+                                                 Barrelfish   Linux           the packets on another core on a different socket. We measure
+       Throughput (Mbit/s)                           2154         1823        application-level UDP throughput at the sink, and also use hard-
+       Dcache misses per packet                        21           77        ware performance counters to measure cache misses and utilization
+       source → sink HT traffic* per packet           467          657        of the HyperTransport interconnect. We also compare with Linux,
+       sink → source HT traffic* per packet           188          550        pinning both source and sink to cores using libnuma.
+       source → sink HT link utilization              8%          11%
+                                                                                 Table 4 shows that Barrelfish achieves higher throughput, fewer
+       sink → source HT link utilization              3%           9%
+       *
+                                                                              cache misses, and lower interconnect utilization, particularly in the
+           HyperTransport traffic is measured in 32-bit dwords.               reverse direction from sink to source. This occurs because sending
+      Table 4: IP loopback performance on 2×2-core AMD                        packets as URPC messages avoids any shared-memory other than
+                                                                              the URPC channel and packet payload; conversely, Linux causes
+                                                                              more cache-coherence traffic for shared-memory synchronization.
+                                                                              Barrelfish also benefits by avoiding kernel crossings.
+than TLB shootdown, and is consequently more expensive. Never-
+theless, as Figure 8 shows, using the same multicast technique as             5.3    Compute-bound workloads
+with shootdown we achieve good scaling and performance. If there
+are enough operations to perform, we can also pipeline to amortize            In this section we use compute-bound workloads, in the form of
+the latency. The “cost when pipelining” line shows that a typical             the NAS OpenMP benchmark suite [36] and the SPLASH-2 paral-
+capability retype operation consumes fewer cycles than IPI-based              lel application test suite [63], to exercise shared memory, threads,
+TLB-shootdowns on Windows and Linux.                                          and scheduling. These benchmarks perform no IO and few virtual
+                                                                              memory operations but we would expect them to be scalable.
+The cost of polling                                                              The Barrelfish user-level scheduler supports POSIX-like threads,
+                                                                              and allows processes to share an address space across multiple
+It is reasonable to ask whether polling to receive URPC messages              cores as in a traditional OS. We compare applications running un-
+is a wasteful strategy under real workloads and job mixes. This               der Linux and Barrelfish on the same hardware, using GCC 4.3.3
+depends on a number of factors such as scheduling policy and mes-             as the compiler, with the GNU GOMP OpenMP runtime on Linux,
+saging load, but we present a simplistic model here: assume we poll           and our own implementation over Barrelfish.
+for P cycles before sleeping and waiting for an IPI, which costs C               Figure 9 shows the results of five applications from the 4×4-core
+cycles. If a message arrives at time t, the overhead (cost in extra           AMD machine6 . We plot the compute time in cycles on Barrelfish
+cycles) of message reception is therefore:                                    and Linux, averaged over five runs; error bars show standard devia-
+                                                                              tion. These benchmarks do not scale particularly well on either OS,
+                              
+                              t
+                                        if t ≤ P,
+                  overhead = 
+                              
+                                                                              but at least demonstrate that despite its distributed structure, Bar-
+                               P + C otherwise.
+                              
+                                                                              relfish can still support large, shared-address space parallel code
+– and the latency of the message is:                                          with little performance penalty. The differences we observe are
+                                                                             due to our user-space threads library vs. the Linux in-kernel imple-
+                             0
+                                    if t ≤ P,                                mentation – for example, Linux implements barriers using a system
+                   latency = 
+                             
+                             C
+                                    otherwise.                               call, whereas our library implementation exhibits different scaling
+                                                                              properties under contention (in Figures 9a and 9c).
+In the absence of any information about the distribution of message
+arrival times, a reasonable choice for P is C, which gives upper              5.4    IO workloads
+bounds for message overhead at 2C, and the latency at C.
+   Significantly, for Barrelfish on current hardware, C is around             The experiments in this section are designed to exercise device
+6000 cycles, suggesting there is plenty of time for polling before            drivers, interrupts and OS buffering using high-bandwidth IO, with
+resorting to interrupts. C in this case includes context switch over-         the aim again of exposing any performance penalty due to the mul-
+head but not additional costs due to TLB fills, cache pollution, etc.         tikernel architecture.
+
+IP loopback                                                                   Network throughput
+IP loopback (with no physical network card to impose a bottle-                We first measure the UDP throughput of Barrelfish when commu-
+neck) can be a useful stress-test of the messaging, buffering, and            nicating over Gigabit Ethernet using an Intel e1000 card. This
+networking subsystems of the OS, since in many systems a loop-                exercises DMA, inter-process communication, networking and
+back interface is often used for communication between networked              scheduling.
+services on the same host, such as a web application and database.               Using Barrelfish on the 2×4-core Intel machine, we ran an e1000
+   Linux and Windows use in-kernel network stacks with packet                 driver and a single-core application that listens on a UDP socket
+queues in shared data structures, thus loopback utilization requires          and echos every received packet back to the sender. The network
+kernel interaction and shared-memory synchronization. On Bar-                 stack is lwIP [47] linked as a library in the application’s domain.
+relfish, we achieve the equivalent functionality for point-to-point           Receive and transmit buffers are allocated by lwIP and passed to the
+links by connecting two user-space IP stacks via URPC. By execut-             network card driver, which manages the card’s receive and transmit
+ing a packet generator on one core and a sink on a different core, we         rings. The two processes communicate over a URPC channel, al-
+can compare the overhead induced by an in-kernel shared-memory                lowing us to vary the placement of the driver and client on cores.
+IP stack compared to a URPC approach.                                            We use two load generators, also with e1000 NICs, running
+   Our experiment runs on the 2×2-core AMD system and con-                    Linux and the ipbench daemon [71], which generates UDP traffic
+sists of a UDP packet generator on one core sending packets of                6 The remaining OpenMP applications depend upon thread-local storage,
+fixed 1000-byte payload to a sink that receives, reads, and discards          which Barrelfish does not yet support.
+
+
+
+
+                                                                         39
+                 90                                                                                   250                                                                                                          16
+                                                                Barrelfish                                                                                      Barrelfish                                                                                   Barrelfish
+                 80                                                 Linux                                                                                           Linux                                                                                        Linux
+                                                                                                                                                                                                                   14
+                 70                                                                                   200
+                                                                                                                                                                                                                   12
+                 60
+                                                                                                                                                                                                                   10
+
+
+  Cycles × 108                                                                         Cycles × 108                                                                                             Cycles × 108
+                                                                                                      150
+                 50
+                                                                                                                                                                                                                   8
+                 40
+                                                                                                      100                                                                                                          6
+                 30
+                                                                                                                                                                                                                   4
+                 20                                                                                    50
+                 10                                                                                                                                                                                                2
+
+                 0                                                                                      0                                                                                                          0
+                      2   4    6                  8        10      12        14   16                             2        4        6        8             10         12       14       16                                2        4        6    8       10      12        14   16
+                                              Cores                                                                                     Cores                                                                                                   Cores
+
+                  (a) OpenMP conjugate gradient (CG)                                             (b) OpenMP 3D fast Fourier transform (FT)                                                                                   (c) OpenMP integer sort (IS)
+
+                                                      25                                                                                                        90
+                                                                                                      Barrelfish                                                                                                             Barrelfish
+                                                                                                          Linux                                                 80                                                               Linux
+                                                      20                                                                                                        70
+
+                                                                                                                                                                60
+
+
+
+                                   Cycles × 108                                                                                                  Cycles × 108
+                                                      15
+                                                                                                                                                                50
+
+                                                                                                                                                                40
+                                                      10
+                                                                                                                                                                30
+
+                                                      5                                                                                                         20
+
+                                                                                                                                                                10
+
+                                                      0                                                                                                          0
+                                                            2        4        6    8          10            12       14       16                                          2        4        6                  8        10      12        14   16
+                                                                                   Cores                                                                                                                   Cores
+
+                                                                (d) SPLASH-2 Barnes-Hut                                                                                       (e) SPLASH-2 radiosity
+
+                                                  Figure 9: Compute-bound workloads on 4×4-core AMD (note different scales on y-axes)
+
+
+at a configurable rate and measures the achieved echo throughput.                                                                               (316 Mbit/s). The performance gain is mainly due to avoiding
+We obtained UDP echo payload throughput of up to 951.7 Mbit/s,                                                                                  kernel-user crossings by running entirely in user space and com-
+at which point we are close to saturating the card. By comparison,                                                                              municating over URPC.
+Linux 2.6.26 on the same hardware also achieves 951 Mbit/s; note                                                                                   Finally, we use the same load pattern to execute web-based SE-
+that we pinned the Linux inetd server to a single core to prevent                                                                               LECT queries modified from the TPC-W benchmark suite on a
+sub-optimal process migration in this experiment.                                                                                               SQLite [64] database running on the remaining core of the ma-
+                                                                                                                                                chine, connected to the web server via URPC. In this configuration
+Web server and relational database                                                                                                              we can sustain 3417 requests per second (17.1 Mbit/s), and are bot-
+                                                                                                                                                tlenecked at the SQLite server core.
+Our final IO example is of serving both static and dynamic web
+content from a relational database. This scenario, while still syn-
+thetic, is closer to a realistic I/O bound application configuration.                                                                           5.5                  Summary
+   The 2×2-core AMD machine is used with an Intel e1000 NIC.                                                                                    It would be wrong to draw any quantitative conclusions from our
+First, the machine serves a 4.1kB static web page to a set of clients,                                                                          large-scale benchmarks; the systems involved are very different.
+and we measure the throughput of successful client requests using                                                                               An enormous investment has been made in optimizing Linux and
+httperf [54] on a cluster of 17 Linux clients.                                                                                                  Windows for current hardware, and conversely our system is in-
+   On Barrelfish, we run separate processes for the web server                                                                                  evitably more lightweight (it is new, and less complete). Instead,
+(which uses the lwIP stack), e1000 driver, and a timer driver (for                                                                              they should be read as indication that Barrelfish performs reason-
+TCP timeouts). These communicate over URPC, allowing us to                                                                                      ably on contemporary hardware, our first goal from Section 3.4.
+experiment with placement of domains on cores. The best per-                                                                                       We make stronger claims for the microbenchmarks. Barrelfish
+formance was achieved with the e1000 driver on core 2, the web                                                                                  can scale well with core count for these operations, and can easily
+server on core 3 (both cores on the same physical processor), and                                                                               adapt to use more efficient communication patterns (for example,
+other system services (including the timer) on core 0.                                                                                          tailoring multicast to the cache architecture and hardware topol-
+   For comparison, we also run lighttpd [45] 1.4.23 over Linux                                                                                  ogy). Finally we can also demonstrate the benefits of pipelining
+2.6.26 on the same hardware; we tuned lighttpd by disabling all                                                                                 and batching of request messages without requiring changes to the
+extension modules and logging, increasing the maximum number                                                                                    OS code performing the operations.
+of connections and file descriptors to 1,500,000, using the Linux                                                                                  Since the Barrelfish user environment includes standard C and
+epoll event handler mechanism, and enabling hardware check-                                                                                     math libraries, virtual memory management, and subsets of the
+summing, scatter gather and TCP segmentation offload on the net-                                                                                POSIX threads and file IO APIs, porting applications is mostly
+work interface.                                                                                                                                 straightforward. In the course of this evaluation we ported a web
+   The Barrelfish e1000 driver does not yet support the offload                                                                                 server, network stack [47], and various drivers, applications and
+features, but is also substantially simpler. It sustained 18697 re-                                                                             libraries to Barrelfish, which gives us confidence that our OS de-
+quests per second (640 Mbit/s), versus 8924 for lighttpd on Linux                                                                               sign offers a feasible alternative to existing monolithic systems.
+
+
+
+                                                                                                                                       40
+Nevertheless, bringing up a new OS from scratch is a substantial              systems, an argument complementary to our own. We see this as
+undertaking, and limits the extent to which we can fully evaluate             further evidence that the shared-memory model is not a complete
+the multikernel architecture. In particular, this evaluation does not         solution for large-scale multiprocessors, even at the OS level.
+address complex application workloads, or higher-level operating                 Prior work on “distributed operating systems” [66] aimed to
+system services such as a storage system. Moreover, we have not               build a uniform OS from a collection of independent computers
+evaluated the system’s scalability beyond currently-available com-            linked by a network. There are obvious parallels with the mul-
+modity hardware, or its ability to integrate heterogeneous cores.             tikernel approach, which seeks to build an OS from a collection
+                                                                              of cores communicating over links within a machine, but also im-
+6.    RELATED WORK                                                            portant differences: firstly, a multikernel may exploit reliable in-
+                                                                              order message delivery to substantially simplify its communica-
+Although a new point in the OS design space, the multikernel                  tion. Secondly, the latencies of intra-machine links are lower (and
+model is related to much previous work on both operating systems              less variable) than between machines. Finally, much prior work
+and distributed systems.                                                      sought to handle partial failures (i.e. of individual machines) in a
+   In 1993 Chaves et al. [17] examined the tradeoffs between mes-             fault-tolerant manner, whereas in Barrelfish the complete system is
+sage passing and shared data structures for an early multiprocessor,          a failure unit. That said, extending a multikernel beyond a single
+finding a performance tradeoff biased towards message passing for             machine to handle partial failures is a possibility for the future that
+many kernel operations.                                                       we discussion briefly below.
+   Machines with heterogeneous cores that communicate using                      Despite much work on distributed shared virtual memory sys-
+messages have long existed. The Auspex [11] and IBM System/360                tems [2, 56], performance and scalability problems have limited
+hardware consisted of heterogeneous cores with partially shared               their widespread use in favor of explicit message-passing models.
+memory, and unsurprisingly their OSes resembled distributed sys-              There are parallels with our argument that the single-machine pro-
+tems in some respects. We take inspiration from this; what is new             gramming model should now also move to message passing. Our
+is the scale of parallelism and the diversity of different machines on        model can be more closely compared with that of distributed shared
+which a general-purpose OS must run. Similarly, explicit commu-               objects [6, 32], in which remote method invocations on objects are
+nication has been used on large-scale multiprocessors such as the             encoded as messages in the interests of communication efficiency.
+Cray T3 or IBM Blue Gene, to enable scalability beyond the limits
+of cache-coherence.
+                                                                              7.    EXPERIENCE AND FUTURE WORK
+   The problem of scheduling computations on multiple cores that
+have the same ISA but different performance tradeoffs is being ad-            The multikernel model has been strongly influenced by the process
+dressed by the Cypress project [62]; we see this work as largely              of building a concrete implementation. Though not by any means
+complementary to our own. Also related is the fos system [69]                 yet a mature system, we have learned much from the process.
+which targets scalability through space-sharing of resources.                    Perhaps unsurprisingly, queuing effects become very important
+   Most work on OS scalability for multiprocessors to date has                in a purely message-oriented system, and we encountered a number
+focused on performance optimizations that reduce sharing. Tor-                of performance anomalies due to extreme sensitivity to message
+nado and K42 [4, 24] introduced clustered objects, which optimize             queue lengths. Understanding such effects has been essential to
+shared data through the use of partitioning and replication. How-             performance debugging. Scheduling based on queue lengths, as in
+ever, the base case, and the means by which replicas communi-                 Scout [53], may be a useful technique to apply here.
+cate, remains shared data. Similarly, Corey [13] advocates reducing              When implementing transports based on cache-coherent shared
+sharing within the OS by allowing applications to specify sharing             memory, we found it important to understand exactly the cache-
+requirements for OS data, effectively relaxing the consistency of             coherence protocol. We experimented with many URPC imple-
+specific objects. As in K42, however, the base case for commu-                mentations, with often unexpected results that were explained by a
+nication is shared memory. In a multikernel, we make no specific              careful analysis of cache line states and interconnect messages.
+assumptions about the application interface, and construct the OS                Related future work includes efficient multicast, incast and any-
+as a shared-nothing distributed system, which may locally share               cast URPC transports. As we found in the case of unmap, there
+data (transparently to applications) as an optimization.                      are cases where a multicast tree is more efficient for performing
+   We see a multikernel as distinct from a microkernel, which                 global operations than many point-to-point links, and we expect
+also uses message-based communication between processes to                    such transports will be important for scalability to many cores.
+achieve protection and isolation but remains a shared-memory,                    Our current implementation is based on homogeneous Intel and
+multithreaded system in the kernel. For instance, Barrelfish has              AMD multiprocessors, and so does not represent a truly hetero-
+some structural similarity to a microkernel, in that it consists of a         geneous environment. A port is in progress to the ARM processor
+distributed system of communicating user-space processes which                architecture, which will allow us to run a Barrelfish CPU driver and
+provide services to applications. However, unlike multiprocessor              monitor on programmable network cards. This will also allow us to
+microkernels, each core in the machine is managed completely in-              experiment with specializing data structures and code for different
+dependently – the CPU driver and monitor share no data structures             processors within the same operating system.
+with other cores except for message channels.                                    There are many ideas for future work that we hope to explore.
+   That said, some work in scaling microkernels is related: Uhlig’s           Structuring the OS as a distributed system more closely matches
+distributed TLB shootdown algorithm is similar to our two-phase               the structure of some increasingly popular programming models
+commit [67]. The microkernel comparison is also informative: as               for datacenter applications, such as MapReduce [19] and Dryad
+we have shown, the cost of a URPC message is comparable to that               [35], where applications are written for aggregates of machines.
+of the best microkernel IPC mechanisms in the literature [44], with-          A distributed system inside the machine may help to reduce the
+out the cache and TLB context switch penalties.                               “impedance mismatch” caused by the network interface – the same
+   Disco and Cellular Disco [14, 25] were based on the premise                programming framework could then run as efficiently inside one
+that large multiprocessors can be better programmed as distributed            machine as between many.
+
+
+
+                                                                         41
+   Another area of interest is file systems. Barrelfish currently uses               [7] P. Barham, B. Dragovic, K. Fraser, S. Hand, T. Harris, A. Ho,
+a conventional VFS-style file-oriented API backed by NFS. It may                         R. Neugebauer, I. Pratt, and A. Warfield. Xen and the art of virtu-
+be fruitful to draw on techniques from high-performance cluster file                     alization. In Proceedings of the 19th ACM Symposium on Operating
+                                                                                         Systems Principles, pages 164–177, Oct. 2003.
+systems and the parallel IO models of cloud computing providers
+                                                                                     [8] A. Baumann, S. Peter, A. Schüpbach, A. Singhania, T. Roscoe,
+to construct a scalable, replicated file system inside the computer.                     P. Barham, and R. Isaacs. Your computer is already a distributed sys-
+   Barrelfish is at present a rather uncompromising implementation                       tem. Why isn’t your OS? In Proceedings of the 12th Workshop on Hot
+of a multikernel, in that it never shares data. As we noted in Sec-                      Topics in Operating Systems, May 2009.
+tion 2.1, some machines are highly optimized for fine-grained shar-                  [9] B. N. Bershad, T. E. Anderson, E. D. Lazowska, and H. M. Levy.
+ing among a subset of processing elements. A next step for Bar-                          Lightweight remote procedure call. ACM Transactions on Computer
+relfish is to exploit such opportunities by limited sharing behind                       Systems, 8(1):37–55, 1990.
+                                                                                    [10] B. N. Bershad, T. E. Anderson, E. D. Lazowska, and H. M. Levy.
+the existing replica-oriented interfaces. This also raises the issue of
+                                                                                         User-level interprocess communication for shared memory multi-
+how to decide when to share, and whether such a decision can be                          processors. ACM Transactions on Computer Systems, 9(2):175–198,
+automated.                                                                               1991.
+                                                                                    [11] S. Blightman. Auspex Architecture – FMP Past & Present.
+8.    CONCLUDING REMARKS                                                                 Internal document, Auspex Systems Inc., September 1996.
+                                                                                         http://www.bitsavers.org/pdf/auspex/eng-doc/848_Auspex_
+Computer hardware is changing faster than system software, and                           Architecture_FMP_Sep96.pdf.
+in particular operating systems. Current OS structure is tuned for                  [12] S. Borkar. Thousand core chips: a technology perspective. In Pro-
+a coherent shared memory with a limited number of homogeneous                            ceedings of the 44th Annual Design Automation Conference, pages
+processors, and is poorly suited to efficiently manage the diversity                     746–749, 2007.
+                                                                                    [13] S. Boyd-Wickizer, H. Chen, R. Chen, Y. Mao, F. Kaashoek, R. Mor-
+and scale of future hardware architectures.
+                                                                                         ris, A. Pesterev, L. Stein, M. Wu, Y. Dai, Y. Zhang, and Z. Zhang.
+   Since multicore machines increasingly resemble complex net-                           Corey: An operating system for many cores. In Proceedings of the 8th
+worked systems, we have proposed the multikernel architecture as                         USENIX Symposium on Operating Systems Design and Implementa-
+a way forward. We view the OS as, first and foremost, a distributed                      tion, pages 43–57, Dec. 2008.
+system which may be amenable to local optimizations, rather than                    [14] E. Bugnion, S. Devine, K. Govil, and M. Rosenblum. Disco: run-
+centralized system which must somehow be scaled to the network-                          ning commodity operating systems on scalable multiprocessors. ACM
+                                                                                         Transactions on Computer Systems, 15(4):412–447, 1997.
+like environment of a modern or future machine. By basing the OS
+                                                                                    [15] C. Caşcaval, J. G. Castaños, L. Ceze, M. Denneau, M. Gupta,
+design on replicated data, message-based communication between                           D. Lieber, J. E. Moreira, K. Strauss, and H. S. Warren, Jr. Evaluation
+cores, and split-phase operations, we can apply a wealth of expe-                        of a multithreaded architecture for cellular computing. In Proceedings
+rience and knowledge from distributed systems and networking to                          of the 8th IEEE Symposium on High-Performance Computer Architec-
+the challenges posed by hardware trends.                                                 ture, pages 311–322, 2002.
+   Barrelfish, an initial, relatively unoptimized implementation of                 [16] P. Charles, C. Grothoff, V. Saraswat, C. Donawa, A. Kielstra,
+the multikernel, already demonstrates many of the benefits, while                        K. Ebcioglu, C. von Praun, and V. Sarkar. X10: an object-oriented ap-
+                                                                                         proach to non-uniform cluster computing. In Proceedings of the ACM
+delivering performance on today’s hardware competitive with ex-                          Symposium on Object-Oriented Programming Systems, Languages,
+isting, mature, monolithic kernels. Its source code is available at                      and Applications, pages 519–538, 2005.
+http://www.barrelfish.org/.                                                         [17] E. M. Chaves, Jr., P. C. Das, T. J. LeBlanc, B. D. Marsh, and M. L.
+                                                                                         Scott. Kernel–Kernel communication in a shared-memory multipro-
+Acknowledgments                                                                          cessor. Concurrency: Practice and Experience, 5(3):171–191, 1993.
+                                                                                    [18] P. Conway and B. Hughes. The AMD Opteron northbridge architec-
+We would like to thank our shepherd, Jeff Dean, the anonymous                            ture. IEEE Micro, 27(2):10–21, 2007.
+reviewers, and Tom Anderson, Steven Hand, and Michael Scott for                     [19] J. Dean and S. Ghemawat. MapReduce: simplified data processing
+their helpful suggestions for how to improve this paper and Bar-                         on large clusters. In Proceedings of the 6th USENIX Symposium on
+relfish in general. We would also like to thank Jan Rellermeyer,                         Operating Systems Design and Implementation, pages 137–150, 2004.
+Ankush Gupta, and Animesh Trivedi for their contributions to Bar-                   [20] D. Dice and N. Shavit. TLRW: return of the read-write lock. In Pro-
+                                                                                         ceedings of the 4th ACM SIGPLAN Workshop on Transactional Com-
+relfish, and Charles Gray for the term “CPU driver”.                                     puting, Feb. 2009.
+                                                                                    [21] M. Dobrescu, N. Egi, K. Argyraki, B.-G. Chun, K. Fall, G. Iannac-
+References                                                                               cone, A. Knies, M. Manesh, and S. Ratnasamy. RouteBricks: Exploit-
+ [1] AMD. AMD64 Architecture Programmer’s Manual Volume 2: System                        ing Parallelism to Scale Software Routers. In Proceedings of the 22nd
+     Programming, Sept. 2007. Publication number 24593.                                  ACM Symposium on Operating Systems Principles, Oct. 2009.
+ [2] C. Amza, A. L. Cox, S. Dwarkadas, P. Keleher, H. Lu, R. Rajamony,              [22] D. R. Engler, M. F. Kaashoek, and J. O’Toole, Jr. Exokernel: An oper-
+     W. Yu, and W. Zwaenepoel. TreadMarks: Shared memory computing                       ating system architecture for application-level resource management.
+     on networks of workstations. IEEE Computer, 29(2), 1996.                            In Proceedings of the 15th ACM Symposium on Operating Systems
+ [3] T. E. Anderson, B. N. Bershad, E. D. Lazoswka, and H. M. Levy.                      Principles, pages 251–266, Dec. 1995.
+     Scheduler activations: Effective kernel support for the user-level man-        [23] M. Fähndrich, M. Aiken, C. Hawblitzel, O. Hodson, G. C. Hunt, J. R.
+     agement of threads. ACM Transactions on Computer Systems, 10:53–                    Larus, and S. Levi. Language support for fast and reliable message-
+     79, 1992.                                                                           based communication in Singularity OS. In Proceedings of the Eu-
+ [4] J. Appavoo, D. Da Silva, O. Krieger, M. Auslander, M. Os-                           roSys Conference, pages 177–190, 2006.
+     trowski, B. Rosenburg, A. Waterland, R. W. Wisniewski, J. Xeni-                [24] B. Gamsa, O. Krieger, J. Appavoo, and M. Stumm. Tornado: Max-
+     dis, M. Stumm, and L. Soares. Experience distributing objects in an                 imising locality and concurrency in a shared memory multiprocessor
+     SMMP OS. ACM Transactions on Computer Systems, 25(3), 2007.                         operating system. In Proceedings of the 3rd USENIX Symposium on
+ [5] K. R. Apt and M. G. Wallace. Constraint Logic Programming using                     Operating Systems Design and Implementation, pages 87–100, Feb.
+     ECLi PSe . Cambridge University Press, 2007.                                        1999.
+ [6] H. E. Bal, R. Bhoedjang, R. Hofman, C. Jacobs, K. Langen-                      [25] K. Govil, D. Teodosiu, Y. Huang, and M. Rosenblum. Cellular Disco:
+     doen, T. Rühl, and M. F. Kaashoek. Performance evaluation of the                    resource management using virtual clusters on shared-memory multi-
+     Orca shared-object system. ACM Transactions on Computer Systems,                    processors. In Proceedings of the 17th ACM Symposium on Operating
+     16(1):1–40, 1998.                                                                   Systems Principles, pages 154–169, 1999.
+
+
+
+
+                                                                               42
+[26] M. Gschwind. The Cell Broadband Engine: exploiting multiple lev-             [51] J. M. Mellor-Crummey and M. L. Scott. Algorithms for scalable syn-
+     els of parallelism in a chip multiprocessor. International Journal of             chronization on shared-memory multiprocessors. ACM Transactions
+     Parallel Programming, 35(3):233–262, 2007.                                        on Computer Systems, 9:21–65, 1991.
+[27] D. Guniguntala, P. E. McKenney, J. Triplett, and J. Walpole. The             [52] Microsoft. Receive-side Scaling enhancements in Windows Server
+     read-copy-update mechanism for supporting real-time applications                  2008.       http://www.microsoft.com/whdc/device/network/ndis_rss.
+     on shared-memory multiprocessor systems with Linux. IBM Systems                   mspx.
+     Journal, 47(2):221–236, 2008.                                                [53] D. Mosberger and L. L. Peterson. Making paths explicit in the Scout
+[28] S. M. Hand. Self-paging in the Nemesis operating system. In Proceed-              operating system. In Proceedings of the 2nd USENIX Symposium on
+     ings of the 3rd USENIX Symposium on Operating Systems Design and                  Operating Systems Design and Implementation, pages 153–167, Oct.
+     Implementation, pages 73–86, Feb. 1999.                                           1996.
+[29] J. Held, J. Bautista, and S. Koehl. From a few cores to                      [54] D. Mosberger and J. Tin. httperf: A tool for measuring web server per-
+     many: A tera-scale computing research overview. White pa-                         formance. Performance Evaluation Review, 26(3):31–37, Dec. 1998.
+     per, Intel, Sept. 2006. ftp://download.intel.com/research/platform/          [55] E. B. Nightingale, O. Hodson, R. McIlroy, C. Hawblitzel, and
+     terascale/terascale_overview_paper.pdf.                                           G. Hunt. Helios: Heterogeneous multiprocessing with satellite ker-
+[30] J. N. Herder, H. Bos, B. Gras, P. Homburg, and A. S. Tanenbaum.                   nels. In Proceedings of the 22nd ACM Symposium on Operating Sys-
+     MINIX 3: A highly reliable, self-repairing operating system. Operat-              tems Principles, 2009.
+     ing Systems Review, 40(3):80–89, July 2006.                                  [56] J. Protić, M. Tomašević, and V. Milutinović. Distributed shared mem-
+[31] M. D. Hill and M. R. Marty. Amdahl’s law in the multicore era. IEEE               ory: Concepts and systems. IEEE Parallel and Distributed Technol-
+     Computer, 41(7):33–38, 2008.                                                      ogy, 4(2):63–79, 1996.
+[32] P. Homburg, M. van Steen, and A. Tanenbaum. Distributed shared ob-           [57] M. Russinovich. Inside Windows Server 2008 kernel changes. Mi-
+     jects as a communication paradigm. In Proceedings of the 2nd Annual               crosoft TechNet Magazine, Mar. 2008.
+     ASCI Conference, pages 132–137, June 1996.                                   [58] M. Russinovich. Inside Windows 7. Microsoft MSDN Channel9, Jan.
+[33] Intel Corporation. QuickPath architecture white paper, 2008.                      2009.
+[34] E. Ipek, M. Kirman, N. Kirman, and J. F. Martinez. Core fusion: ac-          [59] K. Sankaralingam, R. Nagarajan, H. Liu, C. Kim, J. Huh, D. Burger,
+     commodating software diversity in chip multiprocessors. In Proceed-               S. W. Keckler, and C. R. Moore. Exploiting ILP, TLP, and DLP with
+     ings of the 34th International Symposium on Computer Architecture,                the polymorphous TRIPS architecture. In Proceedings of the 30th In-
+     pages 186–197, 2007.                                                              ternational Symposium on Computer Architecture, pages 422–433,
+[35] M. Isard, M. Budiu, Y. Yu, A. Birrell, and D. Fetterly. Dryad: dis-               2003.
+     tributed data-parallel programs from sequential building blocks. In          [60] A. Schüpbach, S. Peter, A. Baumann, T. Roscoe, P. Barham, T. Harris,
+     Proceedings of the EuroSys Conference, pages 59–72, 2007.                         and R. Isaacs. Embracing diversity in the Barrelfish manycore operat-
+[36] H. Jin, M. Frumkin, and J. Yan. The OpenMP implementation of NAS                  ing system. In Proceedings of the Workshop on Managed Many-Core
+     parallel benchmarks and its performance. Technical Report NAS-99-                 Systems, June 2008.
+     011, NASA Advanced Supercomputing Division, Moffett Field, CA,               [61] L. Seiler, D. Carmean, E. Sprangle, T. Forsyth, M. Abrash, P. Dubey,
+     USA, Oct. 1999.                                                                   S. Junkins, A. Lake, J. Sugerman, R. Cavin, R. Espasa, E. Gro-
+[37] A. R. Karlin, K. Li, M. S. Manasse, and S. Owicki. Empirical stud-                chowski, T. Juan, and P. Hanrahan. Larrabee: a many-core x86
+     ies of competitve spinning for a shared-memory multiprocessor. In                 architecture for visual computing. ACM Transactions on Graphics,
+     Proceedings of the 13th ACM Symposium on Operating Systems Prin-                  27(3):1–15, 2008.
+     ciples, pages 41–55, 1991.                                                   [62] D. Shelepov and A. Fedorova. Scheduling on heterogeneous multi-
+[38] M. Kistler, M. Perrone, and F. Petrini. Cell multiprocessor communi-              core processors using architectural signatures. In Proceedings of the
+                                                                                       Workshop on the Interaction between Operating Systems and Com-
+     cation network: Built for speed. IEEE Micro, 26(3):10–23, 2006.
+                                                                                       puter Architecture, 2008.
+[39] G. Klein, K. Elphinstone, G. Heiser, J. Andronick, D. Cock, P. Der-
+                                                                                  [63] Stanford parallel applications for shared memory (SPLASH-2). http:
+     rin, D. Elkaduwe, K. Engelhardt, R. Kolanski, M. Norrish, T. Sewell,
+                                                                                       //www-flash.stanford.edu/apps/SPLASH/.
+     H. Tuch, and S. Winwood. seL4: Formal verification of an OS kernel.
+                                                                                  [64] SQLite database engine. http://www.sqlite.org/.
+     In Proceedings of the 22nd ACM Symposium on Operating Systems
+                                                                                  [65] D. Tam, R. Azimi, and M. Stumm. Thread clustering: sharing-aware
+     Principles, Oct. 2009.
+                                                                                       scheduling on SMP-CMP-SMT multiprocessors. In Proceedings of
+[40] P. Kongetira, K. Aingaran, and K. Olukotun. Niagara: A 32-way mul-
+                                                                                       the EuroSys Conference, pages 47–58, 2007.
+     tithreaded Sparc processor. IEEE Micro, 25(2):21–29, 2005.
+                                                                                  [66] A. S. Tanenbaum and R. van Renesse. Distributed operating systems.
+[41] M. Krohn, E. Kohler, and M. F. Kaashoek. Events can make sense.                   ACM Computing Surveys, 17(4):419–470, 1985.
+     In Proceedings of the 2007 Annual USENIX Technical Conference,               [67] V. Uhlig. Scalability of Microkernel-Based Systems. PhD thesis, Com-
+     pages 1–14, 2007.                                                                 puter Science Department, University of Karlsruhe, Germany, June
+[42] R. Kumar, D. M. Tullsen, P. Ranganathan, N. P. Jouppi, and K. I.                  2005.
+     Farkas. Single-ISA heterogeneous multi-core architectures for multi-         [68] S. Vangal, J. Howard, G. Ruhl, S. Dighe, H. Wilson, J. Tschanz, D. Fi-
+     threaded workload performance. In Proceedings of the 31st Interna-                nan, P. Iyer, A. Singh, T. Jacob, S. Jain, S. Venkataraman, Y. Hoskote,
+     tional Symposium on Computer Architecture, pages 64–75, 2004.                     and N. Borkar. An 80-tile 1.28TFLOPS network-on-chip in 65nm
+[43] H. C. Lauer and R. M. Needham. On the duality of operating systems                CMOS. In International Solid-State Circuits Conference, pages 98–
+     structures. In 2nd International Symposium on Operating Systems,                  589, Feb. 2007.
+     IRIA, 1978. Reprinted in Operating Systems Review, 13(2), 1979.              [69] D. Wentzlaff and A. Agarwal. Factored operating systems (fos): The
+[44] J. Liedtke. On µ-kernel construction. In Proceedings of the 15th ACM              case for a scalable operating system for multicores. Operating Systems
+     Symposium on Operating Systems Principles, pages 237–250, Dec.                    Review, 43(2), Apr. 2009.
+     1995.                                                                        [70] D. Wentzlaff, P. Griffin, H. Hoffmann, L. Bao, B. Edwards, C. Ramey,
+[45] lighttpd webserver. http://www.lighttpd.net/.                                     M. Mattina, C.-C. Miao, J. F. Brown, III, and A. Agarwal. On-
+[46] Linux scalability effort. http://lse.sourceforge.net/.                            chip interconnection architecture of the Tile Processor. IEEE Micro,
+[47] lwIP. http://savannah.nongnu.org/projects/lwip/.                                  27(5):15–31, 2007.
+[48] B. D. Marsh, M. L. Scott, T. J. LeBlanc, and E. P. Markatos. First-          [71] I. Wienand and L. Macpherson. ipbench: A framework for distributed
+     class user-level threads. In Proceedings of the 13th ACM Symposium                network benchmarking. In AUUG Winter Conference, Melbourne,
+     on Operating Systems Principles, pages 110–121, Oct. 1991.                        Australia, Sept. 2004.
+[49] T. G. Mattson, R. Van der Wijngaart, and M. Frumkin. Programming
+     the Intel 80-core network-on-a-chip terascale processor. In Proceed-
+     ings of the 2008 International Conference on Supercomputing, pages
+     1–11, 2008.
+[50] P. E. McKenney and J. Walpole. Introducing technology into the
+     Linux kernel: A case study. Operating Systems Review, 42(5):4–17,
+     July 2008.
+
+
+
+
+                                                                             43
+

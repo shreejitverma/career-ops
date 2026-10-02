@@ -1,0 +1,466 @@
+The Mathematics of                                            about all these algorithms without recourse to spe-
+                                                              cific computing devices or computer programming
+Algorithm Design                                              languages, instead expressing them using the lan-
+Jon Kleinberg                                                 guage of mathematics. In fact, the notion of an
+                                                              algorithm as we now think of it was formalized
+Cornell University, Ithaca NY USA.
+                                                              in large part by the work of mathematical logi-
+                                                              cians in the 1930s, and algorithmic reasoning is
+1    The Goals of Algorithm Design                            implicit in the past several millenia of mathemati-
+                                                              cal activity. (For example, equation-solving meth-
+When computer science began to emerge as a sub-               ods have always tended to have a strong algorith-
+ject at universities in the 1960s and 1970s, it drew          mic flavor; the geometric constructions of the an-
+some amount of puzzlement from the practitioners              cient Greeks were inherently algorithmic as well.)
+of more established fields. Indeed, it is not initially       Today, the mathematical analysis of algorithms
+clear why computer science should be viewed as a              occupies a central position in computer science;
+distinct academic discipline. The world abounds               reasoning about algorithms independently of the
+with novel technologies, but we don’t generally               specific devices on which they run can yield in-
+create a separate field around each one; rather,              sight into general design principles and fundamen-
+we tend to view them as by-products of existing               tal constraints on computation.
+branches of science and engineering. What is spe-                At the same time, computer science research
+cial about computers?                                         struggles to keep two diverging views in focus:
+   Viewed in retrospect, such debates highlighted             this more abstract view that formulates algorithms
+an important issue: computer science is not so                mathematically, and the more applied view that
+much about the computer as a specific piece of                the public generally associates with the field, the
+technology as it is about the more general phe-               one that seeks to develop applications such as In-
+nomenon of computation itself, the design of pro-             ternet search engines, electronic banking systems,
+cesses that represent and manipulate information.             medical imaging software, and the host of other
+Such processes turn out to obey their own inherent            creations we have come to expect from computer
+laws, and they are performed not only by comput-              technology. The tension between these two views
+ers but by people, by organizations, and by sys-              means that the field’s mathematical formulations
+tems that arise in nature. We will refer to these             are continually being tested against their imple-
+computational processes as algorithms. For the                mentation in practice; it provides novel avenues
+purposes of our discussion in this article, one can           for mathematical notions to influence widely used
+think of an algorithm informally as a step-by-step            applications; and it sometimes leads to new mathe-
+sequence of instructions, expressed in a stylized             matical problems motivated by these applications.
+language, for solving a problem.                                 The goal of this short article is to illustrate this
+   This view of algorithms is general enough to cap-          balance between the mathematical formalism and
+ture both the way a computer processes data and               the motivating applications of computing. We be-
+the way a person performs calculations by hand.               gin by building up to one of the most basic defi-
+For example, the rules for adding and multiplying             nitional questions in this vein: how should we for-
+numbers that we learn as children are algorithms;             mulate the notion of efficient computation?
+the rules used by an airline company for schedul-
+ing flights constitute an algorithm; and the rules
+used by a search engine like Google for ranking               2    Two Representative Problems
+Web pages constitute an algorithm. It is also fair
+to say that the rules used by the human brain to              To make the discussion of efficiency more concrete,
+identify objects in the visual field constitute a kind        and to illustrate how one might think about an
+of algorithm, though we are currently a long way              issue like this, we first discuss two representative
+from understanding what this algorithm looks like             problems — both fundamental in the study of algo-
+or how it is implemented on our neural hardware.              rithms — that are similar in their formulation but
+   A common theme here is that one can reason                 very different in their computational difficulty.
+
+                                                          1
+2
+
+
+    a)                  24
+                                                            b)
+
+          8                               12                           8                                  12
+                                                                                     20
+
+         10                               14                          10
+                                                                                                 7
+
+                   22
+                                     11                                                              11
+
+Figure 1: Solutions to instance of (a) the Traveling Salesman Problem and (b) the Minimum Spanning Tree
+Problem, on the same set of points. The dark lines indicate the pairs of cities that are connected by the
+respective optimal solutions, and the lighter lines indicate all pairs that are not connected.
+
+
+   The first in this pair is the Traveling Salesman      in a “good” order; it has been used for problems
+Problem (TSP), and it is defined as follows. We          that run from planning the motion of robotic arms
+imagine a salesman contemplating a map with n            drilling holes on printed circuit boards (where the
+cities (he is currently located in one of them). The     “cities” are the locations where the holes must be
+map gives the distance between each pair of cities,      drilled) to ordering genetic markers on a chromo-
+and the salesman wishes to plan the shortest pos-        some in a linear sequence (with the markers con-
+sible tour that visits all n cities and returns to the   stituting the cities, and the distances derived from
+starting point. In other words, we are seeking an        probabilistic estimates of proximity). The MST is
+algorithm that takes as input the set of all dis-        a basic issue in the design of efficient communi-
+tances among pairs of cities, and produces a tour        cation networks; this follows the motivation given
+of minimum total length. Figure 1(a) depicts the         above, with fiber-optic cable acting in the role of
+optimal solution to a small instance of the TSP;         “roads.” The MST also plays an important role in
+the circles represent the cities, the dark line seg-     the problem of clustering data into natural group-
+ments (with lengths labeling them) connect cities        ings. Note for example how the points on the left
+that the salesman visits consecutively on the tour,      side of Figure 1(b) are joined to the points on the
+and the light line segments connect all the other        right side by a relatively long link; in clustering ap-
+pairs of cities, which are not visited consecutively.    plications, this can be taken as evidence that the
+   A second problem is the Minimum Spanning              left and right points form natural groupings.
+Tree Problem (MST). Here we imagine a construc-             It is not hard to come up with an algorithm for
+tion firm with access to the same map of n cities,       solving the TSP. We first list every possible way
+but with a different goal in mind. They wish to          of ordering the cities (other than the starting city,
+build a set of roads connecting certain pairs of the     which is fixed in advance). Each ordering defines
+cities on the map, so that after these roads are         a tour – the salesman could visit the cities in this
+built there is a route from each of the n cities to      order and then return to the start – and for each
+each other. (A key point here is that each road          ordering we could compute the total length of the
+must go directly from one city to another.) Their        tour, by traversing the cities in this order and sum-
+goal is to build such a road network as cheaply as       ming the distances from each city to the next. As
+possible — in other words, using as little total road    we perform this calculation for all possible orders,
+material as possible. Figure 1(b) depicts the op-        we keep track of the order that yields the smallest
+timal solution to the instance of the MST defined        total distance, and at the end of the process we
+by the same set of cities used for part (a).             return this tour as the optimal solution.
+   Both of these problems have a wide range of              While this algorithm does solve the problem, it
+practical applications. The TSP is a basic problem       is extremely inefficient. There are n−1 cities other
+concerned with sequencing a given set of objects         than the starting point, and any possible sequence
+3. COMPUTATIONAL EFFICIENCY                                                                                  3
+
+of them defines a tour, so we need to consider            needs to sort the pairs of cities by their distances,
+(n − 1)(n − 2)(n − 3) · · · (3)(2)(1) = (n − 1)! possi-   and then make a single pass through this sorted
+ble tours. Even for n = 30 cities, this is an astro-      list to decide which roads to build.
+nomically large quantity; on the fastest computers           This discussion has provided us with a fair
+we have today, running this algorithm to comple-          amount of insight into the nature of the TSP
+tion would take longer than the life expectancy           and MST problems. Rather than experimenting
+of the Earth. The difficulty is that the algorithm        with actual computer programs, we described al-
+we have just described is performing brute-force          gorithms in words, and made claims about their
+search: the “search space” of possible solutions to       performance that could be stated and proved as
+the TSP is very large, and the algorithm is doing         mathematical theorems. But what can we abstract
+nothing more than plowing its way through this            from these examples, if we want to talk about com-
+entire space, considering every possible solution.        putational efficiency in general?
+   For most problems, there is a comparably inef-
+ficient algorithm that simply performs brute-force
+search. Things tend to get interesting when one 3 Computational Efficiency
+finds a way to improve significantly over this brute-
+                                                       Most interesting computational problems share the
+force approach.
+                                                       following feature with the TSP and the MST: an
+   The Minimum Spanning Tree Problem provides input of size n implicitly defines a search space of
+a nice example of how such an improvement can possible solutions whose size grows exponentially
+happen. Rather than considering all possible road with n. One can appreciate this explosive growth
+networks on the given set of cities, suppose we try rate as follows: if we simply add one to the size
+the following myopic, “greedy” approach to the of the input, the time required to search the entire
+MST. We sort all the pairs of cities in order of in- space increases by a multiplicative factor. We’d
+creasing distance, and then work through the pairs prefer algorithms to scale more reasonably: their
+in this order. When we get to a pair of cities, say running times should only increase by a multiplica-
+A and B, we test if there is already a way to travel tive factor when the input itself increases by a mul-
+from A to B in the collection of roads constructed tiplicative factor. Running times that are bounded
+thus far. If there is, then it would be superfluous by a polynomial function of the input size — in
+to build a direct road from A to B — our goal, other words, proportional to n raised to some fixed
+remember, is just to make sure every pair is con- power — exhibit this property. For example, if an
+nected by some sequence of roads, and A and B are algorithm requires at most n2 steps on an input of
+already connected in this case. But if there is no size n, then it requires at most (2n)2 = 4n2 steps
+way to get from A to B using what’s already been on an input twice as large.
+built, then we construct the direct road from A           In part because of arguments like this, computer
+to B. (As an example of this reasoning, note that scientists in the 1960s adopted polynomial time as
+the potential road of length 14 in Figure 1(a) would a working definition of efficiency: an algorithm is
+not get built by this MST algorithm; by the time deemed to be efficient if the number of steps it re-
+this direct route is considered, its endpoints are al- quires on an input of size n grows like n raised
+ready joined by the sequence of two shorter roads to a fixed power. Using the concrete notion of
+of length 7 and 11 as depicted in Figure 1(b).)        polynomial time as a surrogate for the fuzzier con-
+   It is not at all obvious that the resulting road cept of efficiency is the kind of modeling decision
+network should have the minimum possible cost, that ultimately succeeds or fails based on its util-
+but in fact this is true. In other words, one can ity in guiding the development of real algorithms.
+prove a theorem that says, essentially, “On every And in this regard, polynomial time has turned out
+input, the algorithm just described produces an to be a definition of surprising power in practice:
+optimal solution.” The payoff from this theorem problems for which one can develop a polynomial-
+is that we now have a way to compute an optimal time algorithm have turned out in general to be
+road network by an algorithm that is much, much highly tractable, while those for which we lack
+more efficient than brute-force search: it simply polynomial-time algorithms tend to pose serious
+4
+
+challenges even for modest input sizes.                tive topic of research, drawing on techniques from
+                                                       information theory, Fourier analysis, and other ar-
+   A concrete mathematical formulation of effi-
+                                                       eas. None of this says that polynomial time is
+ciency provides a further benefit: it becomes pos-
+                                                       losing its relevance to algorithm design; it is still
+sible to pose, in a precise way, the conjecture that
+                                                       the standard benchmark for efficiency. But new
+certain problems cannot be solved by efficient algo-
+                                                       computing applications tend to push the limits of
+rithms. The Traveling Salesman Problem is a nat-
+                                                       current definitions, and in the process raise new
+ural candidate for such a conjecture; after decades
+                                                       mathematical problems.
+of failed attempts to find an efficient algorithm
+for the TSP, one would like to be able to prove
+a theorem that says, “There is no polynomial- 4 Algorithms for Computationally
+time algorithm that finds an optimal solution to
+                                                            Intractable Problems
+every instance of the TSP.” A theory known as
+NP-completeness provides a unifying framework In the previous section we discussed how re-
+for thinking about such questions; it shows that a searchers have identified a large class of natu-
+large class of computational problems, containing ral problems, including the TSP, for which it is
+literally thousands of naturally arising problems strongly believed that no efficient algorithm exists.
+(including the TSP), are equivalent with respect While this explains our difficulties in solving these
+to polynomial-time solvability. There is an efficient problems optimally, it leaves open a natural ques-
+algorithm for one if and only if there is an efficient tion: what should we do when actually confronted
+algorithm for all. It is a major open problem to de- by such a problem in practice?
+cide whether or not these problems have efficient         There are a number of different strategies for ap-
+algorithms; the deeply held sense that that they do
+                                                       proaching such computationally intractable prob-
+not has become the “P 6= N P ” conjecture, which
+                                                       lems. One of these is approximation: for problems
+has begun to appear on lists of the most prominent
+                                                       like the TSP that involve choosing an optimal so-
+problems in mathematics.
+                                                       lution from among many possibilities, we could try
+   Like any attempt to make an intuitive notion to formulate an efficient algorithm that is guaran-
+mathematically precise, polynomial time as a defi- teed to produce a solution almost as good as the
+nition of efficiency in practice begins to break down optimal one. The design of such approximation al-
+around its boundaries. There are algorithms for gorithms is an active area of research; we can see
+which one can prove a polynomial bound on the a basic example of this process by considering the
+running time, but which are hopelessly inefficient TSP. Suppose we are given an instance of the TSP,
+in practice. Conversely, there are well-known al- specified by a map with distances, and we set our-
+gorithms (such as the standard simplex method selves the task of constructing a tour whose total
+for linear programming) that require exponential length is at most twice that of the shortest tour.
+running time on certain pathological instances, but At first this goal seems a bit daunting: since we
+which run quickly on almost all inputs encountered don’t know how to compute the optimal tour (or
+in real life. And for computing applications that its length), how will we guarantee that the solution
+work with massive datasets, an algorithm with we produce is short enough? It turns out, however,
+a polynomial running time may not be efficient that this can be done by exploiting an interesting
+enough; if the input is a trillion bytes long (as connection between the TSP and MST problems,
+can easily occur when dealing with snapshots of a relationship between the respective optimal so-
+the Web, for example) even an algorithm whose lutions to each problem on the same set of cities.
+running time depends quadratically on the input           Consider an optimal solution to the MST prob-
+would be unusable in practice. For such applica- lem on the given set of cities, consisting of a net-
+tions, one generally needs algorithms that scale lin- work of roads; recall that this is something we can
+early in the size of the input — or, more strongly, compute efficiently. Now, the salesman interested
+that operate by “streaming” through the input in in finding a short tour for these cities can use this
+one or two passes, solving the problem as they go. optimal road network to visit the cities as follows.
+The theory of such streaming algorithms is an ac- Starting at one city, he follows roads until he hits
+5. MATHEMATICS AND ALGORITHM DESIGN: RECIPROCAL INFLUENCES                                                 5
+
+a dead end — a city with no new roads exiting            length. Determining how deeply this analogy goes
+it. He then backs up, re-tracing his steps until he      is an interesting research issue.
+gets to a junction with a road he hasn’t yet taken,
+and he proceeds down this new road. For exam-
+ple, starting in the upper left corner of Figure 1(b),   5   Mathematics and Algorithm De-
+the salesman would follow the road of length 8 and           sign: Reciprocal Influences
+then choose one of the roads of length 10 or 20; if
+he selects the former, then after reaching the dead-     Many branches of mathematics have contributed
+end he would back up to this junction again and          to aspects of algorithm design, and the issues
+continue the tour by following the road of length        raised by the analysis of new algorithmic problems
+20. A tour constructed this way traverses each           have in a number of cases suggested novel mathe-
+road twice (once in each direction), so if we let m      matical questions.
+denote the total length of all roads in the optimal         Combinatorics and graph theory have been qual-
+MST solution, we have found a tour of length 2m.         itatively transformed by the growth of computer
+                                                         science, to the extent that algorithmic questions
+  How does this compare to t, the length of the          have become thoroughly intertwined with the
+best possible tour? Let’s argue first that t ≥ m.        mainstream of research in these areas. Techniques
+This is true because in the space of all possible so-    from probability have also become fundamental to
+lutions to the MST, one option is to build roads be-     many areas of computer science: probabilistic al-
+tween cities that the salesman visits consecutively      gorithms draw power from the ability to make ran-
+in the optimal TSP tour, for a total mileage of t;       dom choices while they are executing, and proba-
+on the other hand, m is the total length of the          bilistic models of the input to an algorithm allow
+shortest possible road network, and hence t cannot       one to try capturing more accurately the family
+be smaller than m. So we’ve concluded that the           of problem instances that arise in practice. This
+optimal solution to the TSP has length at least m;       style of analysis provides a steady source of new
+combined with the previous conclusion, that our          questions in discrete probability.
+algorithm is producing a tour of length 2m, we
+                                                            A computational perspective is often useful
+have an approximation to within a factor of two of
+                                                         in thinking about “characterization” problems in
+optimal, as we had wanted.
+                                                         mathematics. For example, the general issue of
+   People trying to solve large instances of compu-      characterizing prime numbers has an obvious al-
+tationally hard problems in practice frequently use      gorithmic component: given a number n as in-
+algorithms that have been observed empirically to        put, how efficiently can we determine whether it
+give nearly optimal solutions, even when no guar-        is prime? (There exist algorithms that are expo-
+antees on their performance have been proved. Lo-        nentially better than √ the approach of dividing n
+cal search algorithms form one widely-used class         by all numbers up to n.) Problems in knot the-
+of approaches like this. A local search algorithm        ory such as the characterization of unknotted loops
+starts with an initial solution and repeatedly mod-      have a similar algorithmic side. Suppose we are
+ifies it by making some “local” change to its struc-     given a circular loop of string in three dimensions
+ture, looking for a way to improve its quality. In       (described as a jointed chain of line segments), and
+the case of the TSP, a local search algorithm would      it wraps around itself in complicated ways. How
+seek simple improving modifications to its current       efficiently can we determine whether it is truly
+tour; for example, it might look at sets of cities       knotted, or whether by moving it around we can
+that are visited consecutively and see if visiting       fully untangle it? One can engage in this activ-
+them in the opposite order would shorten the tour.       ity with many similar mathematical issues; it is
+Researchers have drawn connections between local         clear that the corresponding algorithmic versions
+search algorithms and phenomena in nature; for           are extremely concrete as problems, though they
+example, just as a large molecule contorts itself in     may lose part of the original intent of the mathe-
+space trying to find a minimum-energy conforma-          maticians who posed the questions more generally.
+tion, we can imagine the TSP tour in a local search         Rather than attempting to enumerate the inter-
+algorithm modifying itself as it tries to reduce its     section of algorithmic ideas with all the different
+6
+
+branches of mathematics, we conclude this article      well for the top few items, placing prominent news
+with two case studies that involve the design of al-   sites like The New York Times and The Financial
+gorithms for particular applications, and the ways     Times at the head of the list, but will quickly be-
+in which mathematical ideas arise in each instance.    come noisy after this.
+                                                         It is possible to make much more effective use of
+                                                       the latent information in the links. Consider pages
+6   Web Search and Eigenvectors                        that link to many of the sites ranked highly by this
+                                                       simple voting scheme; it is natural to expect that
+As the World Wide Web grew in popular-
+                                                       these are authored by people with a good sense for
+ity throughout the 1990s, computer science re-
+                                                       where the interesting newspapers are, and so we
+searchers grappled with a difficult problem: the
+                                                       could run the voting again, this time giving more
+Web contains a vast amount of useful informa-
+                                                       voting power to these pages that selected many
+tion, but its anarchic structure makes it very hard
+                                                       of the highly-ranked sites. This revote may ele-
+for users, unassisted, to find the specific informa-
+                                                       vate certain lesser-known newspapers, favored by
+tion they’re looking for. Thus, early in the Web’s
+                                                       the Web pages authors who are more knowledge-
+history, people began to develop search engines
+                                                       able on the topic; in response to the results of this
+that would index the information on the Web,
+                                                       revote, we could further sharpen our weighting of
+and produce relevant Web pages in response to
+                                                       the voters. This “principle of repeated improve-
+user queries. But of the thousands or millions
+                                                       ment” uses the information contained in a set of
+of pages relevant to a topic on the Web, which
+                                                       page quality estimates to produce a more refined
+few should the search engine present to a user?
+                                                       set of estimates. If we perform these refinements
+This is the ranking problem: how to determine
+                                                       repeatedly, will they converge to a stable solution?
+the “best” resources on a given topic. Note the
+contrast with concrete problems like the Traveling        In fact, this sequence of refinements can be
+Salesman. There, the goal (the shortest tour) was      viewed as an algorithm to compute the principal
+not in doubt; the difficulty was simply in comput-     eigenvector of a particular matrix; this both estab-
+ing an optimal solution efficiently. For the search    lishes the convergence of the process and charac-
+engine ranking problem, on the other hand, for-        terizes the end result. To establish this connec-
+malizing the goal is a large part of the challenge     tion, we introduce some notation. Each Web page
+— what do we mean by the “best” page on a topic?       is assigned two scores: an authority weight, mea-
+In other words, an algorithm to rank Web pages is      suring its quality as a primary source on the topic;
+really providing a definition of Web page quality      and a hub weight, measuring its power as a voter
+as well as the means to evaluate this definition.      for the highest-quality content. Pages may score
+   The first search engines ranked each Web page       highly in one of these measures but not the other
+based purely on the text it contained. These ap-       — one shouldn’t expect a prominent newspaper
+proaches began to break down as the Web grew,          to simultaneously serve as a good guide to other
+because they didn’t take into account the qual-        newspapers — but there is also nothing to prevent
+ity judgments encoded in the Web’s hyperlinks: in      a page from scoring well in both. One round of
+browsing the Web, we often discover high-quality       voting can now be viewed as follows. We update
+resources because they are “endorsed” through the      the authority weight of each page by summing the
+links they receive from other pages. This insight      hub weights of all pages that point to it (receiv-
+led to a second generation of search engines that      ing links from highly-weighted voters makes you a
+determined rankings using link analysis.               better authority); we then re-weight all the voters,
+   The simplest such analysis would just count the     updating each page’s hub weight by summing the
+number of links to a page: in response to the query    authority weights of the pages it points to (linking
+“newspapers,” for example, one could rank pages        to high-quality content makes you a better hub).
+by the number of incoming links they receive from        How do eigenvectors come into this? Suppose
+other pages containing the term — in effect, al-       we define a matrix M with one row and one col-
+lowing pages containing the term “newspapers” to       umn for each page under consideration; the (i, j)
+vote on the result. Such a scheme will generally do    entry equals 1 if page i links to page j, and
+7. DISTRIBUTED ALGORITHMS                                                                                  7
+
+it equals 0 otherwise. We encode the author-            well as a number of other Web search tools. In
+ity weights in a vector a, where the coordinate         practice, current search engines (including Google
+ai is the authority weight of page i. The hub           and Teoma) use highly refined versions of these
+weights can be similarly written as a vector h.         basic measures, often combining features of each;
+Using the definition of matrix-vector multiplica-       understanding how relevance and quality measures
+tion, we can now check that the updating of hub         are related to large-scale eigenvector computations
+weights in terms of authority weights is simply         remains an active research topic.
+the act of setting h equal to M a; correspond-
+ingly, setting a equal to M T h updates the author-
+ity weights. (Here M T denotes the transpose of         7   Distributed Algorithms
+the matrix M .) Running these updates n times
+each from starting vectors a0 and h0 , we obtain        Thus far we have been discussing algorithms that
+a = (M T (M (M T (M · · · (M T (M a0 )) · · · )))) =    run on a single computer. As a concluding topic,
+(M T M )n a0 . This is the power iteration method       we briefly touch on a broad area in computer sci-
+for computing the principal eigenvector of M T M ,      ence concerned with computations that are dis-
+in which we repeatedly multiply some fixed start-       tributed over multiple communicating computers.
+ing vector by larger and larger powers of M T M .       Here the problem of efficiency is compounded by
+(As we do this, we also divide all coordinates of the   concerns over maintaining coordination and con-
+vector by a scaling factor to prevent them from         sistency among the communicating processes.
+growing unboundedly.) Hence this eigenvector is            As a simple example illustrating these issues,
+the stable set of authority weights toward which        consider a network of automatic bank teller ma-
+our updates are converging. By completely sym-          chines (ATMs). When you withdraw an amount
+metric reasoning, the hub weights are converging        of money x at one of these ATMs, it must do
+toward the principal eigenvector of M M T .             two things: (1) notify a central bank computer to
+                                                        deduct x from your account, and (2) emit the cor-
+   A related link-based measure is PageRank, de-        rect amount of money in physical bills. Now, sup-
+fined by a different procedure that is also based       pose that in between steps (1) and (2), the ATM
+on repeated refinement. Instead of drawing a dis-       crashes so that you don’t get your money; you’d
+tinction between the voters and the voted-on, one       like it to be the case that the bank doesn’t subtract
+posits a single kind of quality measure that as-        x from your account anyway. Or suppose that the
+signs a weight to each page. A current set of page      ATM executes both of steps (1) and (2), but its
+weights is then updated by having each page dis-        message to the bank is lost; the bank would like
+tribute its weight uniformly among the pages it         for x to be eventually subtracted from your ac-
+links to. In other words, receiving links from high-    count anyway. The field of distributed computing
+quality pages raises one’s own quality. This too        is concerned with designing algorithms that oper-
+can be written as multiplication by a matrix, ob-       ate correctly in the presence of such difficulties.
+tained from M T by dividing each row’s entries by
+                                                           As a distributed system runs, certain processes
+the number of outgoing links from the correspond-
+                                                        may experience long delays, some of them may fail
+ing page; repeated updates again converge to an
+                                                        in mid-computation, and some of the messages be-
+eigenvector. (There is a further wrinkle here: re-
+                                                        tween them may be lost. This leads to significant
+peated updating in this case tends to cause all
+                                                        challenges in reasoning about distributed systems,
+weight to pool at “dead-end” pages that have no
+                                                        because this pattern of failures can cause each pro-
+outgoing links and hence nowhere to pass their
+                                                        cess to have a slightly different view of the compu-
+weight. Thus, to obtain the PageRank measure
+                                                        tation. It’s easily possible for there to be two runs
+used in applications, one adds a tiny quantity  > 0
+                                                        of the system, with different patterns of failure,
+in each iteration to the weight of each page; this is
+                                                        that are “indistinguishable” from the point of view
+equivalent to using a slightly modified matrix.)
+                                                        of some process P ; in other words, P will have the
+  PageRank is one of the main ingredients in the        same view of each, simply because the differences
+search engine Google; hubs and authorities form         in the runs didn’t affect any of the communica-
+the basis for Ask Jeeves’ search engine Teoma, as       tions that it received. This can pose a problem
+8
+
+if P ’s final output is supposed to depend on its to survey this field in a book edited by Lawler et al.
+having noticed that the two runs were different.      [7]. Approximation algorithms and local search al-
+   A major advance in the study of such systems gorithms for computationally intractable problems
+came about in the 1990s, when a connection was are discussed in books edited by Hochbaum [5] and
+made to techniques from algebraic topology. Con- by Aarts and Lenstra [1] respectively. Web search
+sider for simplicity a system with 3 processes, and the role of link analysis is covered in a book by
+though everything we say generalizes to any num- Chakrabarti [2]; beyond Web applications, there
+ber of processes. We consider the set of all possible are a number of other interesting connections be-
+runs of the system; each run defines a set of three tween eigenvectors and network structures, as de-
+views, one held by each process. We now imagine scribed by Chung [3]. Distributed algorithms are
+the views associated with a single run as the three covered in a book by Lynch [8], and the topolog-
+corners of a triangle, and we glue these triangles ical approach to analyzing distributed algorithms
+together according to the following rule: for any is reviewed by Rajsbaum [9].
+two runs that are indistinguishable to some pro-
+cess P , we paste the two corresponding triangles Bibliography
+together at their corners associated with P . This
+                                                      1. E. Aarts and J.K. Lenstra (eds.). Local Search in
+gives us a potentially very complicated geometric          Combinatorial Optimization. Wiley, 1997.
+object, constructed by applying all these pasting 2. S. Chakrabarti. Mining the Web. Morgan Kauf-
+operations to the triangles; we call this object the       man, 2002.
+complex associated with the algorithm. (If there 3. F.R.K. Chung, Spectral Graph Theory. AMS
+were more than three processes, we would have an           Press, 1997.
+object in a higher number of dimensions.) While it 4. T. Cormen, C. Leiserson, R. Rivest, C. Stein. In-
+                                                           troduction to Algorithms. MIT Press, 2001.
+is far from obvious, researchers have been able to
+                                                      5. D.S. Hochbaum (ed.). Approximation Algorithms
+show that the correctness of distributed algorithms        for NP-hard Problems. PWS Publishing, 1996.
+can be closely connected with the topological prop- 6. J. Kleinberg, É. Tardos. Algorithm Design. Ad-
+erties of the complexes that they define.                  dison Wesley, 2005.
+   This is another powerful example of the way in 7. E. L. Lawler, J. K. Lenstra, A. H. G. Rinnooy
+which mathematical ideas can appear unexpect-              Kan, D. B. Shmoys. The Traveling Salesman
+                                                           Problem: A Guided Tour of Combinatorial Op-
+edly in the study of algorithms, and it has led            timization. Wiley, 1985.
+to new insights into the limits of the distributed 8. N. Lynch. Distributed Algorithms. Morgan Kauf-
+model of computation. Combining the analysis of            mann, 1996.
+algorithms and their complexes with classical re- 9. S. Rajsbaum. Distributed Computing Column
+sults from algebraic topology has in some cases            15. ACM SIGACT News 35:3(2004).
+resolved tricky open problems in this area, estab- 10. M. Sipser. The history and status of the P versus
+                                                           NP question. Proc. 24th ACM Symp. on Theory
+lishing that certain tasks are provably impossible
+                                                           of Computing, 1992.
+to solve in a distributed system.
+
+                                                      Biography of contributor
+8   For Further Reading
+                                                    Jon Kleinberg received his A.B. from Cornell in
+Algorithm design is a standard topic in the un-     1993   and his Ph.D. in computer science from MIT
+dergraduate computer science curriculum, and it     in 1996.    He subsequently spent a year as a Visit-
+is the subject of a number of textbooks includ-     ing  Scientist    at the IBM Almaden Research Cen-
+ing Cormen et al. [4] and a forthcoming book by     ter,  and  is  now   an Associate Professor in the De-
+the author and Éva Tardos [6]. The perspective of  partment     of  Computer    Science at Cornell Univer-
+early computer scientists on how to formalize effi- sity.   He   has    received  research fellowships from
+ciency is discussed by Sipser [10]. The Traveling   the   Packard     and  Sloan   Foundations, and he re-
+Salesman and Minimum Spanning Tree problems         ceived  the   2001   U.S. National  Academy of Sciences
+are fundamental to the field of combinatorial opti- Award    for   Initiatives in  Research for his work on
+mization; the TSP is used as a lens through which   algorithms     in  network  analysis and  Web search.
+

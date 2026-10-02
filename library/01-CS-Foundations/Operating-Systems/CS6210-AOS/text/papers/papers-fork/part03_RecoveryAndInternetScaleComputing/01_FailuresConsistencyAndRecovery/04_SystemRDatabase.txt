@@ -1,0 +1,1233 @@
+The Recovery Manager of the System R Database Manager
+JIM GRAY
+Tandem Computers, 19333 Vallco Parkway, Cupertino, Californta 95014
+PAUL McJONES
+Xerox Corporatwn, 3333 Coyote Htll Road, Palo Alto, Cahfornia 94304
+MIKE BLASGEN, BRUCE LINDSAY, RAYMOND LORIE, TOM PRICE,
+FRANCO PUTZOLU, AND IRVING TRAIGER
+IBM San Jose Research Laboratory, 5600 Cottle Road, San Jose, Cahfornm 95193
+
+
+
+
+                 The recovery subsystem of an experimental data management system is described and
+                 evaluated. The transactmn concept allows application programs to commit, abort, or
+                 partially undo their effects. The DO-UNDO-REDO protocol allows new recoverable types
+                 and operations to be added to the recovery system Apphcation programs can record data
+                 m the transaction log to facilitate application-specificrecovery. Transaction undo and
+                 redo are based on records kept in a transaction log. The checkpoint mechanism is based
+                 on differential fries (shadows). The recovery log is recorded on disk rather than tape.
+                 Keywords and Phrases transactions, database, recovery, reliability
+                 CR Categortes: 4.33
+
+
+
+INTRODUCTION                                                               mation of the database. To transfer funds
+                                                                           f r o m o n e a c c o u n t t o a n o t h e r , for e x a m p l e ,
+Application Interface to System R                                          requires two SQL statements: one to debit
+                                                                           t h e f i r s t a c c o u n t a n d o n e t o c r e d i t t h e sec-
+M a k i n g c o m p u t e r s e a s i e r t o u s e is t h e g o a l       ond account. In addition, the transaction
+of most software. Database management                                      probably records the transfer in a history
+s y s t e m s , in p a r t i c u l a r , p r o v i d e a p r o g r a m -   file for l a t e r r e p o r t i n g a n d f o r a u d i t i n g p u r -
+ming interface to ease the task of writing                                 poses. Figure 1 gives an example of such a
+e l e c t r o n i c b o o k k e e p i n g p r o g r a m s . T h e re-      p r o g r a m w r i t t e n in p s e u d o - P L / I .
+c o v e r y m a n a g e r o f s u c h a s y s t e m in t u r n                  The program effects a consistent trans-
+eases the task of writing fault-tolerant ap-                               formation of the books of a hypothetical
+plication programs.                                                        bank. Its actions are either to
+     S y s t e m R [ASTR76] is a d a t a b a s e s y s t e m
+which supports the relational model of                                     • discover an error,
+d a t a . T h e S Q L l a n g u a g e [CHAM76] p r o -                     • accept the input message, and
+vides operators that manipulate the data-                                  • produce a failure message,
+base. Typically, a user writes a PL/I or
+                                                                           or to
+COBOL program which has imbedded SQL
+statements. A collection of such statements                                • discover no errors,
+is r e q u i r e d t o m a k e a c o n s i s t e n t t r a n s f o r -     • accept the input message,
+
+
+Permismon to copy without fee all or part of this material is granted provided that the copies are not made or
+¢hstnbuted for direct commercial advantage, the ACM copyright notme and the title of the publication and its
+date appear, and notme is given that copying is by pernusmon of the Association for Computing Machinery. To
+copy otherwise, or to republish, reqmres a fee and/or specific permission.
+© 1981 ACM 0010-4892/81/0600-0223 $00.75
+
+
+                                                                                              ComputingSurveys,Vol. 13, No. 2, June 1981
+224        •      J i m Gray et al.
+    CONTENTS                                             its effects cannot be lost due to computer
+                                                         failure;
+                                                       • consistent: the transaction occurs as
+                                                         though it had executed on a system which
+    INTRODUCTION                                         sequentially executes only one transaction
+    Apphcatlon Interface to System R                     at a time.
+    Structure of System R
+    Model of Failures                                     In order to state this intention, the SQL
+    1. DESCRIPTION OF SYSTEM R RECOVERY                programmer brackets the transformations
+       MANAGER
+       1 1 What Is a Transaction?
+                                                       with the SQL statements, BEGIN__
+       1.2 Transactmn Save Points                      TRANSACTION to signal the beginning
+       1 3 Summary                                     of the transaction and COMMIT__
+    2 IMPLEMENTATION OF SYSTEM R                       T R A N S A C T I O N to signal its completion.
+       RECOVERY                                        If the programmer wants to return to the
+       2.1 Files, Versmns, and Shadows
+       2 2 Logs and the DO, UNDO, REDO Protocol
+                                                       beginning of the transaction, the command
+       2.3 Commit Processing                           R E S T O R E _ _ T R A N S A C T I O N will undo
+       2.4 Transactmn UNDO                             all actions since the issuance of the BE-
+       2 5 Transaction Save Points                     GIN__TRANSACTION command (see
+       2.6 System Configuratmn, Startup and Shutdown
+                                                       Figure 1).
+       2.7 System Checkpoint
+       2.8 System Restart                                 The System R recovery manager sup-
+       2 9 Medm Failure                                ports these commands and guarantees an
+       2 10 Managing the Log                           atomic, durable execution.
+       2 11 Recovery and Locking                          System R generally runs several trans-
+    3 EVALUATION
+       3 1 Implementation Cost
+                                                       actions concurrently. The concurrency con-
+       3 2 Execution Cost                              trol mechanism of System R hides such
+       3.3 I/O Cost                                    concurrency from the programmer by a
+       3.4 Success Rate                                locking technique [EswA76, GRAY78,
+       3.5 Complexity                                  NAUM78] and gives the appearance of a
+       3.6 Dmk-Based Log
+       3 7 Save Points
+                                                       consistent system.
+       3 8 Shadows
+       3.9 Message Recovery, an Oversight              Structure of System R
+       3 10 New Features
+    ACKNOWLEDGMENTS                                    System R consists of an external layer
+    REFERENCES                                         called the Research Data System (RDS),
+                                                       and a completely internal layer called the
+                           A
+
+                           v
+                                                       Research Storage System (RSS) (see
+                                                       Figure 2).
+• debit the source account by AMOUNT,                     The external layer provides a relational
+• credit the destination account by                    data model, and operators thereon. It also
+  AMOUNT,                                              provides catalog management, a data
+• record the transaction in a history file,            dictionary, authorization, and alternate
+  and                                                  views of data. The R D S is manipulated
+• produce a success message.                           using the language SQL [CHAM76]. The
+                                                       SQL compiler maps SQL statements into
+    The programmer who writes such a pro-              sequences of R S S calls.
+gram ensures its correctness by ensuring                 The R S S is a nonsymbolic record-at-a-
+that it performs the desired transformation            time access method. It supports the notions
+on both the database state and the outside             of file, record type, record instance, field
+world (via messages). The programmer and               within record, index (B-tree associative
+the user both want the execution to be                 and sequential access path), parent-child
+• atomic: either all actions are performed             set (an access path supporting the
+   (the transaction has an effect) or the re-          operations P A R E N T , FIRST__CHILD,
+  sults of all actions are undone (the trans-          NEXT__SIBLING,            PREVIOUS__SIB-
+  action has no effect);                               LING with direct pointers), and cursor
+• durable: once the transaction completes,             (which navigates over access paths to locate
+
+Computing Surveys, Vol. 13, No 2, June 1981
+                 The Recovery Manager of the System R Database Manager                             °       225
+
+      FUNDS__TRANSFER. PROCEDURE,
+        $BEGIN__TRANSACTION;
+        ON ERROR DO;                                                          /* in case of error */
+                     $RESTORE_TRANSACTION,                                    /* undo all work */
+                     GET I N P U T MESSAGE;                                   /* reacquire input */
+                     P U T MESSAGE ('TRANSFER FAILED');                       /* report failure */
+                     GO TO COMMIT;
+                     END;
+        GET I N P U T MESSAGE;                                                /* get and parse input */
+        EXTRACT A C C O U N T ~ E B I T , A C C O U N T _ C R E D I T ,
+          AMOUNT FROM MESSAGE,
+        $UPDATE ACCOUNTS                                                      /* do debit */
+                             SET BALANCE ffi BALANCE - A M O U N T
+              W H E R E ACCOUNTS. N U M B E R = ACCOUNT__DEBIT;
+        $UPDATE ACCOUNTS                                                      /* do credit */
+                             SET BALANCE = BALANCE + A M O U N T
+              W H E R E ACCOUNTS. N U M B E R = A C C O U N T _ C R E D I T ;
+        $INSERT INTO HISTORY                                                   /* keep audit trail */
+             <DATE, MESSAGE>;
+        P U T MESSAGE ('TRANSFER DONE');                                       /* report success */
+      COMMIT:                                                                  /* commit updates */
+        $COMMIT TRANSACTION
+        END;                                                                   /* end of program */
+
+           Figure 1. A snnple PL/I-SQL program whmh transfers funds from one account to another.
+
+Application Programs in P L / I or COBOL, plus SQL       here. RSS provides actions to create in-
+Research Data System (RDS)                               stances of these objects and to retrieve,
+* Supports the relational data model                     modify, and delete them.
+• Supports the relational language SQL                      The RSS support of data is substantially
+• Does naming and authorization                          more sophisticated than that normally
+• Compiles SQL statements into RSS call sequences        found in an access method; it supports vari-
+Research Storage System (RSS)                            able-length fields, indices on multiple fields,
+• Provides nonsymbolic record-at-a-time database ac-     multiple record types per file, interffle and
+  cess                                                   intraffle sets, physical clustering of records
+• Maps records onto operating system files               by attribute, and a catalog describing the
+• Provides transaction concept (recovery and locking)    data, which is kept as a file which may be
+Operating System                                         manipulated like any other data.
+• Provides file system to manage disks                       Another major contribution of the RSS
+• Provides I/O system to manage terminals                is its support of the notion of transaction,
+• Provides process structure (multlprogramming)           a unit of recovery consisting of an applica-
+Hardware                                                  tion-specified sequence of RSS actions. An
+                                                          application declares the start of a transac-
+Figure 2. System R consists of two layers above the       tion by issuing a BEGIN action. Thereafter
+operating system. The RSS provides the transaction        all RSS actions by that application are
+concept, recovery notions, and a record-at-a-time data    within the scope of that transaction until
+access method. The RDS accepts application P L / I or     the application issues a COMMIT or an
+COBOL programs containing SQL statements. It
+translates them into COBOL or P L / I programs plus       ABORT action. The RSS assumes all re-
+subroutines which represent the compilation of the        sponsibility for running concurrent trans-
+SQL statements into RSS calls.                            actions and for assuring that each transac-
+                                                          tion sees a consistent view of the database.
+records). Unfortunately, these objects have               The RSS is also responsible for recovering
+the nonstandard names "segment," "rela-                   the data to their most recent consistent
+tion," "tuple," "field," "image," "link," and             state in the event of transaction, action,
+"scan" in the System R documentation.                     system, or media failure or a user request
+The former, more standard, names are used                 to cancel the transaction.
+
+                                                                      Computing Surveys, Vol. 13, No. 2, June 1981
+226        •      Jim Gray et al.
+  A final component of System R is the          Table 1.   Frequency and Recovery Time of Failures
+operating system. System R runs under the                  Recovery manager trade-offs
+VM/370 [GRAY75] and the MVS operating
+system on IBM S/370 processors. The Sys-                                                 Recovery
+tem R recovery manager is also part of the      Fault               Frequency              tune
+SQL/DS product running on DOS/CICS.             Transaction     Several per unnute   Milliseconds
+The operating system provides processes, a        abort
+                                                System          Several per month    Seconds
+simple file system, and terminal manage-          restart
+ment.                                           Media failure   Several per year     Minutes
+  System R allocates an operating system
+process for each user to run both the user's
+application program and the System R da-        restart the most recently committed state
+tabase manager. Application programs are        is reconstructed from the surviving disk
+written in a conventional programming lan-      state by referencing a log of recent activity
+guage (e.g., COBOL or PL/I) augmented           to restore the work of committed and
+with the SQL language. A SQL preproces-         aborted transactions. This process com-
+sor maps the SQL statements to sequences        pletes within a matter of seconds or min-
+of RSS calls. Typically, a single application   utes.
+program or group of programs (main plus             Occasionally, the integrity of the disk
+subroutines) constitute a transaction. In       state will be lost at restart. This may be
+this paper we ignore the RDS and assume         caused by hardware failure (disk head crash
+that application programs, like those pro-      or disk dropped on the floor) or by software
+duced by the SQL compiler, consist of con-      failure (bad data written on a disk page by
+ventional programs which invoke se-             System R or other program). Such events
+quences of RSS operations.                      are called media failures and initiate a
+                                                reconstruction of the current state from an
+                                                 archive version (old and undamaged ver-
+Model of Failures
+                                                sion of the system state) plus a log of activ-
+The recovery manager eases the task of          ity since that time. This procedure is in-
+writing fault-tolerant programs. It does so     voked once or twice a year and is expected
+by the careful use of redundancy. Choosing      to complete within an hour.
+appropriate redundancy requires a quanti-           If all these recovery procedures fail, the
+tative model of system failures.                user will have lost data owing to an unre-
+   In our experience about 97 percent of all    coverable failure. We have very limited
+transactions execute successfully. Of the       statistics on unrecoverable failures. The
+remainder, almost all fail because of incor-    current release of System R has experi-
+rect user input or because of user cancella-     enced about 25 years of service in a variety
+tion. Occasionally {much less than 1 per-       of installations, and to our knowledge al-
+cent) transactions are aborted by the sys-      most all unrecoverable failures have re-
+tem as a result of some overload such as        sulted from operations errors {e.g., failure
+deadlock. In a typical system running one       to make archive dumps) or from bugs in
+transaction per second, transaction undo        the operating system utility for dumping
+occurs about twice a minute. Because of its      and restoring disks. The fact that the ar-
+frequency, transaction undo must run            chive mechanism is only a minor source of
+about as fast as forward processing of trans-   unrecoverable failure probably indicates
+actions.                                        that it is appropriately designed. Table 1
+   Every few days the system restarts (fol-     summarizes this discussion.
+lowing a crash). Almost all crashes are due         If the archive mechanism fails once every
+to hardware or operating system failures,       hundred years of operation, and if there are
+although System R also initiates crash and       10,000 installations of System R, then it will
+restart whenever it detects damage to its       fail someone once a month. From this per-
+data structures. The state of primary mem-      spective, it might be underdesigned.
+ory is lost after a crash. We assume that the       We assume that System R, the operating
+state of the disks (secondary and tertiary       system, the microcode, and the hardware
+storage) is preserved across crashes, so at      all have bugs in them. However, each of
+
+Computing Surveys, Vol. 13, No. 2, June 1981
+                The Recovery Manager of the System R Database Manager                       •       227
+these systems does quite a bit of checking        it either happens or has no effect--and
+of its data structures (defensive program-        consistent--if any two actions relate to the
+ming}. We postulate that these errors are         same object, they appear to execute in some
+detected and that the system crashes before       serial order. These two qualities are en-
+the data are seriously corrupted. If this         sured by (1) undoing the partial effects of
+assumption is incorrect, then the situation       any actions which fail and (2) locking nec-
+is treated as a media failure. This attitude      essary RSS resources for the duration of
+assumes that the archive and log mecha-           the action.
+nism are very reliable and have failure               RSS actions are rather primitive. In gen-
+modes independent of the other parts of           eral, functions like "hire an employee" or
+the system.                                       "make a deposit in an account" require
+   Some commercial systems are much               several actions. The user, in mapping ab-
+more demanding. They run hundreds of              stractions like "employee" or "account"
+transactions per second, and because they         into such a system, must combine several
+have hundreds of disks, they see disk fail-       actions into an atomic transaction. The
+ures hundreds of times as frequently as           classic example of an atomic transaction is
+typical users of System R {once a week            a funds transfer which debits one account,
+rather than once a year). They also cannot        credits another, writes an activity record,
+tolerate downtimes exceeding a few min-           and does some terminal input or output.
+utes. Although the concepts presented in          The user of such a transaction wants it to
+this paper are applicable to such systems,        be an all-or-nothing affair, in that he does
+much more redundancy is needed to meet            not want only some of the actions to have
+such demands (e.g., duplexed processors           occurred. If the transaction is correctly im-
+and disks, and utilities which can recover        plemented, it looks and acts atomic.
+small parts of the database without having            In a multiuser environment, transactions
+to recover it all every time). The recovery       take on the additional attribute that any
+manager presented here is a textbook one,         two transactions concurrently operating on
+whose basic facilities are only a subset of       common objects appear to run serially (i.e.,
+those provided by more sophisticated sys-         as though there were no concurrency). This
+tems.                                             property is called consistency and is han-
+   The transaction model is an unrealizable       dled by the RSS lock subsystem [ESWA76,
+ideal. At best, careful use of redundancy         GRAY76, GRAY78, NAUM78].
+minimizes the probability of unrecoverable            The application declares a sequence of
+failures and consequent loss of committed         actions to be a transaction by beginning the
+updates. Redundant copies are designed to         sequence with a BEGIN action and ending
+have independent failure modes, making it         it with a COMMIT action. All intervening
+unlikely that all records will be lost at once.   actions by that application (be it one or
+However, Murphy's law ensures that all            several processes) are considered to be
+recovery techniques will sometimes fail. As       parts of a single recovery unit. If the appli-
+seen below, however, System R can tolerate        cation gets into trouble, it may issue the
+any single failure and can often tolerate         ABORT action which undoes all actions in
+multiple failures.                                the transaction. Further, the system may
+                                                  unilaterally abort in-progress transactions
+1. DESCRIPTION OF SYSTEM R RECOVERY               in case of an authorization violation, re-
+   MANAGER                                        source limit, deadlock, system shutdown, or
+                                                  crash. Figure 3 shows the three possible
+1.1 What is a Transaction?
+                                                  outcomes--commit, abort, or system abor-
+                                                  t i o n - o f a transaction, and Figure 4 shows
+The RSS provides actions on the objects it        the outcomes of five sample transactions in
+implements. These actions include opera-          the event of a system crash.
+tions to create, destroy, manipulate, re-             If a transaction either aborts or is
+trieve, and modify RSS objects (files, rec-       aborted, the system must undo all actions
+ord types, record instances, indices, sets,       of that transaction. Once a transaction com-
+and cursors). Each RSS action is atomic--         mits, however, its updates and messages to
+
+                                                              Computmg Surveys, Vol. 13, No. 2, June 1981
+228           •       J i m G r a y e t al.
+  BEGIN               BEGIN           BEGIN              TICKET AGENT        APPLICATION PROGRAM
+  READ                READ            READ                  input message ~ BEGIN
+  WRITE               WRITE           WRITE                                  SAVE {state)
+  READ                READ            READ                                   (actions to reserve first hop)
+                                                                             SAVE (state)
+                                                                             new screen
+  WRITE               ABORT           <==SYSTEMABORTS
+                                                                 next hop •* SAVE (hop)
+  COMMIT                                 TRANSACTION
+                                                                             (actions to reserve next hop)
+Figure 3. The three possible destinms of a transac-
+tion. commits, aborts, or is aborted.                               last hop =* SAVE (hop)
+                                                                                (actions to reserve last hop)
+                                                               prmted ticket    COMMIT (reservation)
+T1        I                   I                      <
+T2                I                    I             <   Figure 5. A multihop airlines reservation transaction
+T3                                         I       I <   using save points. If the application program or ticket
+T4    I                                              <   agent detects an error, the transaction can undo to a
+T5                                               I   <   previous save point and continue forward from there
+                  Time            )             SYSTEM
+                                                 CRASH
+                                                making a multihop airline reservation in-
+                                                volving several ticket agent interactions--
+Figure 4. Five transactions. The effects of actions by
+                                                one per hop. The application program es-
+transactions T1, T2, and T3 will survive a system
+crash because they have committed. This is called
+                                                tabhshes a save point before and after each
+durability. But the effects of transactions T4 and T5
+                                                interaction, with the save point data includ-
+will be undone because they were in progress at the
+time of the crash (had not yet committed).      ing the current state of the program vari-
+                                                ables and the ticket agent screen. If the
+                                                ticket agent makes an error or if a flight is
+the external world must persist--its effects
+                                                unavailable, the agent or program can back
+must be durable. The system will "remem-
+                                                up to the most recent mutually acceptable
+ber" the results of the transaction despite
+any subsequent malfunction. Once the sys- save point, thereby minimizing the agent's
+                                                retyping. Once the entire ticket is com-
+tem commits to "open the cash drawer" or
+"retract the reactor rods," it will honor that posed, the transaction commits the data-
+commitment. The only way to undo the base changes and prints the ticket. The
+effect of a committed transaction is to run program can request a return to save point
+a new transaction which compensates for N by issuing the UNDO N action. Of course
+                                                all the save points may be washed away by
+these effects.
+                                                a system restart or serious deadlock, but
+                                                most error situations can be resolved with
+1.2 Transaction Save Points
+                                                a minimal loss of the ticket agent's work.
+The RSS defines the additional notion of           The System R save point facility is in
+transaction save point. A save point is a contrast to most systems in which each
+firewall which allows transaction undo to message causes the updates of the transac-
+stop short of undoing the entire transaction. tion to be committed. In such systems
+Should a transaction get into trouble (e.g., either the agent must manually delete pre-
+deadlock or authority violation), it may be vious steps of the transaction when some-
+sufficient to back up only as far as an inter- thing goes wrong, or the application pro-
+mediate save point. Each save point is num- gram must implement recovery by keeping
+bered, with the beginning of a transaction an undo log or deferring all updates until
+being save point 1. The application program the last step. Such application program re-
+declares a save point by issuing a SAVE covery schemes complicate the program
+action specifying a save point record to be and may work incorrectly because locks are
+entered in the log. This record may be not held between steps (e.g., the lost update
+retrieved if and when the transaction re- problem described in GRAY76).
+turns to the corresponding save point.             Save points are used by the RDS to
+   Figure 5 illustrates the use of save points. implement certain complex operations.
+It describes a conversational transaction Some RDS operations require many RSS
+
+Computing Surveys, Vol. 13, No 2, June 1981
+                   The Recovery Manager of the System R Database Manager                                •        229
+
+                 S]
+                                         $2
+                                                                            $3
+
+
+
+                                                                                                            A9
+
+
+
+
+   BEGIN                                                                                              COMMIT
+
+Figure 6. An example of nested transactions usmg save points. The transaction T consists of RSS actions A1,
+.... A9. Actions A2, A4, and A7 defined save points $1, $2, and $3 which become nested subtransact]ons of T.
+These are probably RDS actmns which consist of several RSS actmns. Each RSS action is a minitransaction on
+the RSS state. If the RSS actmn gets into trouble, it backs up to the beginning of the action and retries. If that
+fails, undo propagates to the nearest save point that can resolve the issue. This is the spheres of control notatmn
+of DAVI73.
+
+operations, and the RDS guarantees that                    struct groups of actions which are atomic
+each SQL statement is atomic. The RDS                      and durable.
+supports atomic SQL statements by begin-                      This model of recovery is a subset of the
+ning each such complex operation with a                    recovery model formulated by Davies and
+save point and backing up to this save point               Bjork [BJOR73, DAVI73]. Unlike their
+if the RSS or RDS fails at some point                      model, System R transactions have no par-
+during the operation. Figure 6 illustrates                 allelism within a transaction (i.e., if multi-
+the use of save points.                                    ple nodes of a network are needed to exe-
+                                                           cute a single transaction, only one node
+                                                           executes at a time). Further, System R
+1.3 Summary                                                allows only a limited form of transaction
+                                                           nesting via the use of save points (each save
+To summarize, the RSS recovery manager                     point may be viewed as the start of an
+provides the following actions:                            internal transaction). These limitations
+• BEGIN designates the beginning of a                      stem from our inability to find an accepta-
+  transaction.                                             ble implementation for the more general
+• SAVE designates a firewall within the                    model.
+  transaction. If an incomplete transaction
+  is backed up, undo may stop at such a                    2. IMPLEMENTATION OF SYSTEM R
+  point rather than undoing the entire                        RECOVERY
+  transaction.
+• READ__SAVE returns the data saved in                     2.1 Files, Versions, and Shadows
+  the log by the application at a designated
+  save point.                                              All persistent System R data are stored in
+• UNDO undoes the effects of a transaction                 files. A user may define any number of files.
+  to an earlier save point.                                A file, for our purposes, is a paged linear
+                                                           space of up to 68 billion (236) bytes, which
+• ABORT undoes all effects of a transaction
+                                                           has been dynamically allocated on disk in
+   {equivalent to UNDO 0).
+• COMMIT signals successful completion                     units of 4096-byte pages. A buffer manager
+   of transaction and causes updates to be                 maps all the files into a virtual memory
+   committed.                                              buffer pool shared by all System R users.
+                                                           The buffer manager uses a "Least Recently
+Using these primitives, the RDS and appli-                 Used" (LRU) algorithm to regulate occu-
+cation programs using the RDS can con-                     pancy of pages in the pool. The buffer pool
+
+                                                                          Computing Surveys, Vol. 13, No. 2, June 1981
+230           •         J i m Gra~ et al.
+                                                            DIRECTORY
+
+
+                                                                A
+
+
+
+
+                                                                               CURRENT          CHANGED PAGES
+Figure 7. T h e directory s t u c t u r e for                   B
+n o n s h a d o w e d a n d s h a d o w e d files. File A
+is n o t shadowed. File B is s h a d o w e d a n d
+h a s two directory entrms, a c u r r e n t ver-                B
+sion a n d a s h a d o w version.
+
+
+                                                                                                    SHADOW
+                                                                                                      AND
+                                                                                                UNCHANGED PAGES
+                                                                                SHADOW
+
+
+
+
+is volatile and p r e s u m e d not to survive sys-                 once." T h e r e f o r e file save or restore can
+tem restart.                                                        apply to sets of shadowed files.
+    Each file carries a particular recovery                            Although the current version of a file
+protocol and corresponding overhead of re-                          does not survive restart, because r e c e n t up-
+covery. Files are dichotomized as shadowed                          dates to the file m a y still reside in the buffer
+and nonshadowed. N o n s h a d o w e d files                        pool, the shadow version of a file does.
+have no automatic recovery. T h e user is                           H e n c e at R S S restart {i.e., after a crash or
+responsible for making and storing redun-                           shutdown) all nonshadowed files have their
+dant copies of these files. S y s t e m R simply                    values as of the system crash {modulo up-
+updates nonshadowed file pages in the                               dates to central m e m o r y which were not
+buffer pool. Changes to nonshadowed files                           written to disk) and all shadowed files are
+are recorded on disk when the pages are                             reset to their shadow versions. As discussed
+r e m o v e d from the buffer pool (by the L R U                    below, starting from this shadow state, the
+algorithm) and when the file is saved or                            log is used to remove the effects of aborted
+closed.                                                             transactions and to restore the effects of
+    B y contrast, the R S S maintains two on-                       c o m m i t t e d transactions.
+line versions of shadowed files, a shadow                              T h e current and shadow versions of a file
+version and a current version. R S S actions                        are i m p l e m e n t e d in a particularly efficient
+affect only the current version of a file and                       manner. W h e n a shadow page is u p d a t e d in
+never alter the shadow version {except for                          the buffer pool for the first time, a new disk
+file save and restore commands). T h e cur-                         page frame is assigned to it. Thereafter,
+rent version of a file can be S A V E d as the                      when t h a t page is written from the buffer
+shadow version, t h e r e b y making the recent                     pool or read into the buffer pool, the new
+updates to the file permanent; the current                          frame is used (the shadow is never up-
+version can also be R E S T O R E d to the                          dated). Saving a file consists of writing to
+shadow version, t h e r e b y "undoing" all re-                     disk all altered pages of the file currently in
+cent updates to the file (see Figure 7). If                         the buffer pool and t h e n writing to disk the
+data are spread across several files, it is                         new page table, and freeing superseded
+desirable to save or restore all the files "at                      shadow pages. Restoring a file is achieved
+
+Computing Surveys, Vol. 13, No. 2, June 1981
+                The Recovery Manager of the System R Database Manager                          •       231
+
+                                                     TRANSACTION LOG
+
+                 TRANSACTION                 r'                        ,'i~~
+                 DESCRIPTOR             ~    } RECORD.ID,OLDVAL,NEWVAL
+                                             L                         !
+             Figure 8. A transactionlog is the sequenceof changesmadeby this transactlon
+
+
+by discarding pages of that file in the buffer            Table 2.   Recovery Attributes of Flies
+pool, freeing all the new disk pages of that                   No shadow                  Shadow
+file, and returning to the {old) shadow page        No log   Contents un-         Contents equal shadow
+table. The paper by Lorie [LoRI77] de-                        predmtable           after crash
+scribes the implementation in greater de-                     after crash
+taft.                                               Log      Not supported        All updates logged
+                                                                                  Transaction consistent
+                                                                                    after a crash
+2.2 Logs and the DO, UNDO, REDO Protocol
+The shadow-version/current-version di-                 When a shadowed file is defined by a
+chotomy has strong ties to the old-master/          user, it is designated as logged or not
+new-master dichotomy common to most                 logged. The RSS controls the saving and
+batch EDP systems in which, if a run fails,         restoration of logged files and maintains a
+the old master is used for a successive at-         log of all updates to logged files. Users
+tempt; if the run succeeds, the new master          control the saving and restoration of non-
+becomes the old master. Unhappily, this             logged shadowed files. Nonshadowed files
+technique does not seem to generalize to            have none of the virtues or corresponding
+concurrent transactions on a shared file. If        overhead of recovery (see Table 2).
+several transactions concurrently alter a              In retrospect, we regret not supporting
+file, file save or restore is inappropriate         the LOG and NO SHADOW option. As
+because it commits or aborts the updates of         explained in Section 3.8, the log makes
+all transactions to the file. It is desirable to    shadows redundant, and the shadow mech-
+be able to commit or undo updates on a              anism is quite expensive for large files.
+per-transaction basis. Such a facility is re-          Each time a transaction modifies a logged
+quired to support the COMMIT, ABORT,                file, a new record is appended to the log.
+and UNDO actions, as well as to handle              Read actions need generate no log records,
+such problems as deadlock, system over-             but update actions on logged files must
+load, and unexpected user-disconnect. Fur-          enter enough information in the log so that,
+ther, as shown in Figure 4, selective trans-        given the log record at a later time, the
+action back up and commit are required for          action can be completely undone or redone.
+system restart.                                     As seen below, most log writes do not re-
+   We were unable to architect a transaction        quire I/O and can be buffered in central
+mechanism based solely on shadows which             memory.
+supported multiple users and save points.              Every RSS operation on a logged file
+Instead, the shadow mechanism is com-               must be implemented as a set of operations
+bined with an incremental log of all the             (see Figure 9):
+actions a transaction performs. This log is
+used for transaction UNDO and REDO on               • a DO operation, which does the action
+shared files and is used in combination with          and also writes a log record sufficient to
+shadows for system checkpoint and restart.            undo and redo the action;
+Each RSS update action writes a log record          • an UNDO operation, which undoes the
+giving the old and new value of the updated           action given the log record written by the
+object. As Figure 8 shows, these records are          DO action;
+aggregated by transaction and collected in          • a REDO operation, which redoes the ac-
+a common system log file (which is option-            tion given the log record written by the
+ally duplexed).                                       DO action;
+
+                                                                 Computing Surveys, Vol. 13, No. 2, June 1981
+
+                                                                          °   .
+232       •      Jim Gray et al.
+                                                       storage m a n a g e m e n t information. T h e
+                                                       R E D O operation restores the record (and
+                                                       its associated structures) to its new value.
+                                                       T h e display operation returns a text string
+                                                       giving a symbolic display of the log record.
+                                                          Once a log record is recorded, it cannot
+                                                       be updated. H o w e v e r the log manager pro-
+                                                       vides a facility to open read cursors on the
+                                                       log which will traverse the system log or
+                                                       traverse the log of a particular transaction
+                                                       in either direction.
+
+
+ILOORECOROIT                                           2.3 Commit Processing
+                                                       T h e essential p r o p e r t y of a transaction is
+                                                       t h a t it ultimately commits, aborts, or is
+                                                       aborted and t h a t once it commits, its up-
+                                                       dates persist, and once it aborts or is
+                                             STATE I   aborted, its updates are suppressed.
+
+
+                           l
+                                                       Achieving this p r o p e r t y is nontrivial. In
+                                                       order to ensure t h a t a transaction's effects
+
+I
+LOG RECORD I
+
+Figure 9. Three aspects of an acnon Action DO
+                                                       will survive restarts and media failures, the
+                                                       system m u s t be able to redo c o m m i t t e d
+                                                       transactions. S y s t e m R ensures t h a t un-
+generates a new state and a log record. Action UNDO    c o m m i t t e d transactions can be u n d o n e and
+generates an old state from a new state and a log      t h a t c o m m i t t e d transactions can be redone
+record Action REDO generates a new state from an       as follows:
+old state and a log record.
+                                                       (I) T h e transaction log is written to disk
+                                                           before the shadow database is replaced
+• optionally, a D I S P L A Y operation which              by the current database state.
+                                                       (2) T h e transaction c o m m i t action writes
+  translates the log record into a h u m a n -
+  readable format.                                         a c o m m i t log record in the log buffer
+                                                           and t h e n forces all the transaction's log
+   T o give an example of an action and the                records to disk (with the c o m m i t record
+log record it must write, consider the record              being the last such record).
+u p d a t e action. This action must record the
+                                                           A transaction commits at the instant its
+following in the log:
+                                                       c o m m i t record appears on disk. If the sys-
+* file name,                                           t e m crashes prior to t h a t instant, the trans-
+* record identifier,                                   action will be aborted. Because the log is
+• old record value,                                    written before the database (item 1), Sys-
+• new record value.                                    t e m R can always undo any u n c o m m i t t e d
+                                                       updates which have migrated to disk. On
+  T h e log subsystem augments this with               the other hand, if the system crashes sub-
+the additional fields:
+                                                       sequent to the writing of the c o m m i t record
+• transaction identifier,                              to disk, t h e n the transaction will be redone,
+• action identifier,                                   from the shadow state, using the log records
+• timestamp,                                           which were forced to disk b y the commit.
+• length of log record,                                In the terminology of Gray [GRAY78], item
+• pointer to previous log record of this               1 is the "write ahead log protocol."
+  transaction.
+                                                       2.4 Transaction UNDO
+  T h e U N D O operation restores the record
+to its old value and appropriately updates             T h e logic of action U N D O is very simple.
+associated structures such as indices and              It reads a log record, looks at the n a m e of
+
+Computing Surveys, Vol 13, No 2, June 1981
+               The Recovery Manager of the System R Database Manager                       •      233
+
+the action identifier in the log record, and     read action would have to write a log rec-
+invokes the undo operation of that action,       ord. Instead, the state of locks and cursors
+passing it the log record. Recovery is           is only recorded at save points. Assuming
+thereby table driven. This table-driven de-      that all locks are held to end of the trans-
+sign has allowed the addition of new re-         action, transaction backup can reset cursors
+coverable objects and actions to the RSS         without having to reacquire any locks. Fur-
+without any impact on recovery manage-           ther, because these locks are kept in a list
+ment.                                            and are not released, one can remember
+   T h e effect of any uncommitted transac-      them all by remembering the lock at the
+tion can be undone by reading the log of         top of the list. At backup to a save point,
+that transaction backward, undoing each          all subsequent locks are released.
+action in turn. Clearly, this process can be
+stopped halfway, returning the transaction       2.6 System Configuration, Startup, and
+to an intermediate transaction save point.           Shutdown
+Transaction save points allow the transac-
+tion to backtrack.                  "            A System R database is created by install-
+   From this discussion it follows that a        ing a "starter system" and then using Sys-
+transaction's log is a push-down stack; writ-    tem R commands to define and load new
+ing a new log record pushes it onto the          files and to define transactions which ma-
+stack, and undoing a record pops it off the      nipulate these files. Certain operations (e.g.,
+stack (see Figure 8). To minimize log buffer     turning dual logging on and off) require a
+space and log I/O, all transaction logs are      system shutdown and restart, but most op-
+merged into one system log, which is then        erations can be performed while the system
+mapped into a log file. But the log records      is operational. In particular we worked
+of a particular transaction are chained to-      quite hard to avoid functions like SYSGEN
+gether as a linked list anchored off of the      and cold-start.
+transaction descriptor. Notice that UNDO            A monitor process (a task or virtual ma-
+requires that the log be directly addressable    chine) is responsible for system startup,
+while the transaction is uncommitted. For        shutdown, and checkpoints and for servic-
+this reason at least one version of the log      ing system operator commands. If several
+must be on disk (or some other direct-ac-        instances of System R (several different
+cess device). A tape-based log would be          databases) are running on the same ma-
+inconvenient for in-progress transaction         chine, each instance will have a monitor.
+undo.                                            System R users join a particular instance
+                                                 of System R, run transactions in the users'
+2.5 Transaction Save Points                      process, and then leave the system. In the-
+                                                 ory, 254 users may be joined to a system at
+A transaction save point records enough          one time.
+information to restore the transaction's
+view of the RSS as of the save point. T he
+                                                 2.7 System Checkpoint
+user may record up to 64 kilobytes of ap-
+plication data in the log at each save point.    System checkpoints limit the amount of
+   One can easily restore a transaction to its   work (undo and redo) necessary at restart.
+beginning by undoing all its updates and         A checkpoint records information on disk
+then releasing all its locks and dropping all    which helps locate the end of the log at
+its cursors (since no cursors or locks are       restart and correlates the database state
+held at the beginning of the transaction and     with the log state. A checkpoint saves all
+since a list of cursors and locks is main-       logged shadow files so that no work prior
+tained on a per-transaction basis). To re-       to the checkpoint will have to be redone at
+store to a save point, the recovery manager      restart. If checkpoints are taken frequently,
+must know the name and state of each             then restart is fast but the checkpoint over-
+active cursor and the name of each lock          head is high. Balancing the cost of check-
+held at the save point. For performance          points against the cost of restart gives an
+reasons, changes to cursors and locks are        optimum checkpoint interval. Because this
+not recorded in the log. Otherwise, every        optimum depends critically on the cost of
+                                                             Computing Surveys, Vol 13, No. 2, June 1981
+234       •       J i m Gray et al.
+                                               SHADOW
+
+
+
+
+                                                       ~
+                                               DIRECTORY
+                                                            dress of checkpointrecord in log
+
+
+
+
+                                                                                           1
+Figure 10. The directory root points
+at the most recent checkpoint record
+in the log.
+
+                                              LOG
+                                                                                  I CHECKPOINT
+                                                                                    RECORD
+                                                                                                  I
+
+a checkpoint, one wants a cheap checkpoint           step, the log address of the checkpoint
+facility.                                            record is written as part of the directory
+   The simplest form of checkpoint is to re-         record in the shadow version of the state
+cord a transaction-consistent state by               [LoRI77]. The directory root is duplexed on
+quiescing the system, deferring all new              disk, enabling the checkpoint process to
+transactions until all in-progress transac-          tolerate failures while writing the directory
+tions complete, and then recording a logi-           root. At restart the system will be able to
+cally consistent snapshot. However, quiesc-          locate the corresponding checkpoint record
+ing the system causes long interruptions in          by examining the most recent directory root
+system availability and hence argues for             (see Figure 10).
+infrequent checkpoints. This, in turn, in-
+creases the amount of work that is lost at
+                                                     2.8 System Restart
+restart and must be redone. System quiesce,
+consequently, is not a cheap way to obtain           Given a checkpoint of the state at time T
+a transaction-consistent state.                      along with a log of all changes to the state
+   The RSS uses a lower level of consist-            made by transactions prior to time T + E,
+ency, augmented by a transaction log, to             a transaction-consistent version of the state
+produce a transaction-consistent state. The          can be constructed by undoing all updates,
+RSS implements checkpoints which are                 logged prior to time T, of transactions
+snapshots of the system at a time when no            which were uncommitted or aborted by
+RSS actions are in progress (an action-con-          time T + E, and then redoing the updates,
+sistent state). Since RSS actions are short          logged between time T and time T + E, of
+ (less than 10,000 instructions) system avail-       committed transactions.
+ability is not adversely affected by frequent           At system restart the system R code is
+checkpoints. (Long RSS actions, e.g., sort           loaded and the file manager restores any
+or search, occasionally "come up for air" in         shadowed files to their shadow versions. If
+an action-consistent state to allow check-           a shadowed file was not saved at shutdown,
+points to occur.)                                    the then-current version will be replaced by
+    Checkpoints are taken after a specified          its shadow. In particular, all logged files will
+amount of log activity or at system operator         be reset to their state as of the most recent
+request. At checkpoint, a checkpoint record          system checkpoint.
+is written in the log. The checkpoint record            Recovery manager is then given control
+contains a list of all transactions in progress      and it examines the most recent checkpoint
+and pointers to their most recent log rec-           record (which, as Figure 10 shows, is
+ords. After the log records are on disk, all         pointed at by the current directory). If
+logged files are saved (current state replaces       there was no work in progress at the time
+shadows), which involves flushing the da-            of the checkpoint and if the checkpoint is
+tabase buffer pool and the shadow-file di-           the last record in the log, then the system
+rectories to secondary storage. As a last            is restarting from a shutdown in a quiesced
+
+Computing Surveys, Vol. 13, No 2, June 1981
+               The Recovery Manager of the System R Database Manager                                               •      235
+state. No transactions need be undone or         T1           I--I                        +                                   <
+redone, and restart initializes System R and     T2                   I                   +                I                <
+opens up the system for general use.             T3                                       +                    I          J <
+   On the other hand, if work was in prog-       T4       I                         +                                       <
+ress at the checkpoint, or if there are log      T5                                 +                                   [   <
+                                                                               CHECKPOINT                               CRASH
+records after the checkpoint record, then
+this is a restart from a crash. Figure 11        Figure 11. Five t r a n s a c t i o n t y p e s with r e s p e c t to t h e
+illustrates the five possible states of trans-   m o s t r e c e n t c h e c k p o i n t a n d t h e c r a s h point.
+actions at this point:
+                                                 for that transaction. When it reaches the
+• T1 began and ended before the check-           end of the log, the restart manager knows
+  point.                                         all the T2, T3, T4, and T5 transactions. T4-
+• T2 began before the checkpoint and ended       and T5-type transactions are called "losers"
+  before the crash.                              and T2- and T3-type transactions are called
+• T3 began after the checkpoint and ended        "winners." Restart reads the log backward
+  before the crash.                              from the checkpoint, undoing all actions of
+• T4 began before the checkpoint but no          losers, and then reads the log forward from
+  commit record appears in the log.              the checkpoint, redoing all actions of win-
+• T5 began after the checkpoint and appar-       ners. Once this is done, a new checkpoint is
+  ently never ended.                             written so that the restart work will not be
+                                                 lost.
+To honor the commit of T1, T2, and T3
+                                                    Restart must be prepared to tolerate fail-
+transactions requires their updates to ap-
+                                                 ures during the restart process. This prob-
+pear in the system state (done). But T4 and
+                                                 lem is subtle in most systems, but the Sys-
+T5 have not committed and so their up-
+                                                 tem R shadow mechanism makes it fairly
+dates must not appear in the state (un-
+done).                                           straightforward. System R restart does not
+                                                 update the log or the shadow version of the
+   At restart the shadowed files are as they
+                                                 database until restart is complete. Taking
+were at the most recent checkpoint. Notice
+                                                 a system checkpoint signals the end of a
+that none of the updates of T5 are reflected
+                                                 successful restart. System checkpoint is
+in this state, so T5 is already undone. No-
+                                                 atomic, so there are only two cases to con-
+tice also that all of the updates of T1 are in
+                                                 sider. Any failure prior to completing the
+the shadow state, so it need not be redone.
+                                                 checkpoint will return the restart process
+T2 and T3 must be redone from the check-
+                                                 to the original shadow state. Any failure
+point forward. (The updates of the first half
+                                                 after the checkpoint is complete will return
+of T2 are already reflected in the shadow
+                                                 the database to the new (restarted) state.
+state.) On the other hand, T4 must be un-
+done from the checkpoint backward. (Here         2.9 Media Failure
+we are skipping over the following anomaly:
+If, after a checkpoint, T2 backs up to a save    In the event of a system failure which
+point prior to the checkpoint, then some         causes a loss of disk storage integrity, it
+undo work is required for T2.)                   must be possible to continue with a mini-
+   Restart uses the log as follows. It reads     mum of lost work. Such situations are han-
+the most recent checkpoint record and as-        dled by periodically making a copy of the
+sumes that all the transactions active at the    database state and keeping it in an archive.
+time of the checkpoint are of type T4 (ac-       This copy, plus a log of subsequent activity,
+tive at checkpoint, not committed). It then      can be used to reconstruct the current state.
+reads the log in the forward direction start-    T he archive mechanism used by System R
+ing from the checkpoint record. If it en-        periodically dumps a transaction-consistent
+counters a BEGIN record, it notes that this      copy of the database to magnetic tape.
+is a transaction of type T5. If it encounters       It is important that the archive mecha-
+the COMMIT record of a T4 transaction, it        nism have failure modes independent of the
+reclassifies the transaction as type T2. Sim-    failure modes of the on-line storage system.
+ilarly, T5 transactions are reclassified as T3   Using duplexed disks protects against a disk
+transactions if a COMMIT record is found         head crash, but does not protect against
+
+                                                                          Computing Surveys, VoL 13, No. 2, June 1981
+236       °       J i m Gray et al.
+                                               LOG__END
+                                               CHECK_POINT
+                                               LOG_BEGIN[TIll] --
+                                               LOG_BEGIN[T250]
+Figure 12. Bytes between F I R E _
+WALL and L O G _ E N D are needed for
+system restart and hence are kept m the
+log ring buffer.                               LOG_BEGIN[T345]
+
+
+
+                                                                                   11
+                                               LOG__BEGIN[T346]
+                                               LOG__ARCHIVE
+
+
+                                              LOG:
+
+                                               FIRE__WALL           T
+errors in disk programs or fire in the ma-           operating. Gray [GRAY78] describes a
+chine room.                                          "fuzzy" dump mechanism which allows the
+  In the event of a single media failure, the        database to be dumped while it is in oper-
+following occurs:                                    ation (the log is later used to focus the
+                                                     dump on some specified time). IMS and
+• If one of the duplexed on-line logs fails,         other commercial systems provide facilities
+  then a new log is allocated and the good           for dumping and restoring fragments of files
+  version of the duplexed log is copied to           rather than whole databases. We did not
+  the new one.                                       implement one of these fancier designs be-
+• If any other file fails, the most recent           cause the simple approach was adequate
+  surviving dump tape is loaded back into            for our needs.
+  the database, and then all committed up-
+                                                     2.10 Managing the Log
+  date actions subsequent to the check-
+  point record of the archive state are re-          The log is a very long sequence of pages,
+  done using the log.                                each with a unique sequence number.
+                                                     Transactions undo and redo need quick
+Recovery from an archive state appears to            access to the log but most of it can be kept
+the recovery manager as a restart from a             off-line or discarded. Figure 12 illustrates
+very old checkpoint. No special code has             the bookkeeping of the on-line log. The on-
+been written for archive recovery.                   line log file is used to hold the "useful"
+   The most vulnerable part of this system           parts of the log. It is managed as a ring
+is the possible failure of both instances of         buffer, with LOG__END pointing just be-
+the on-line log. Assuming the log software           yond the last useful byte of the log and
+has no bugs, we estimate the mean time               CHECK__POINT pointing at the most re-
+between such coincident failures at about            cent checkpoint. Clearly, all records since
+1000 years. As mentioned in the summary              the checkpoint must be kept on-line in sup-
+to the Introduction, operational errors are          port of transaction redo. Further, transac-
+much more frequent, and so make log fail-            tion undo needs all records of incomplete
+ure a minor source of unrecoverable errors.          transactions on-line (LOG__BEGIN(I) for
+   Although performing a checkpoint causes           active transaction I). Last, one cannot free
+relatively few disk writes and takes only a          the space occupied by a log record in the
+short time, dumping the entire database is           ring until the database is archived (this
+a lengthy operation (10 minutes per 100              point is addressed by LOG_ARCHIVE).
+megabytes).      Maintaining     transaction         So at restart the system may need records
+quiesce for the duration of the dump oper-           back to the         FIRE WALL where
+ation is undesirable, or even impossible,            FIRE__WALL is the minimum of
+depending on the real-time constraints im-           LOG__ARCHIVE, CHECK__POINT, and
+posed by system users. Lorie [LORI77] de-            LOG__BEGIN(I) for each active transac-
+scribes a scheme based on shadows for mak-           tion I. Bytes prior to FIRE__WALL need
+ing an archive dump while the system is              not reside in the on-line ring buffer.
+Computing Surveys, Vol 13, No. 2, June 1981
+                 The Recovery Manager of the System R Database Manager                         *       237
+   If the on-line ring buffer fills, it is because   actions are preempted. To assure that this
+(1) archiving of the log is required, (2) a          rule does not produce unbreakable dead-
+checkpoint is required, or (3) a transaction         lock cycles (ones containing only golden
+has been running for a very long time (and           transactions), the additional rule is adopted
+hence has a very low LOG__BEGIN). The                that only one golden transaction can exe-
+first two problems are solved by periodic            cute at a time (and hence that no deadlock
+archiving and checkpoints. The third prob-           cycle involves more than one golden trans-
+lem is solved by aborting very old transac-          action). A special lock (RSSBACKUP) is
+tions. For many applications, dual on-line           requested in exclusive mode by each golden
+logs of 1 megabyte are adequate, although            transaction before it begins each undo step.
+10 to 100 megabytes are more typical.                This lock is released at the end of each such
+   Duplexing of the log is a system option           undo step.
+which may be changed at each restart. Du-               During restart, locking is turned off. Es-
+plexing is transparent above the log inter-          sentially, the entire database is locked dur-
+face; reads (usually) go to one instance of          ing the restart process which sequentially
+the log, and writes go to both instances. If         executes actions in the order they appear
+one instance fails, the other is used at re-         in the log (making an undo pass followed
+start (on a page-by-page basis).                     by a redo pass).
+
+2.11 Recovery and Locking                            3. EVALUATION
+Recovery has implications for and places             We were apprehensive on several counts
+requirements on the lock subsystem.                  when we first designed the System R recov-
+   In order to blindly undo the actions of           ery system. First, we were skeptical of our
+one transaction without erasing subsequent           ability to write RSS actions which could
+updates by other transactions, it is essential       always undo and redo themselves. Second,
+that all transactions lock all updates in            we were apprehensive about the perform-
+exclusive mode and hold all such locks until         ance and complexity of such programs. And
+the transaction is committed or undone. In           third, we were concerned that the added
+fact System R automatically acquires both            complexity might create more crashes than
+share and exclusive locks and holds them             it cured. In retrospect, the recovery system
+all until the end of the transaction. See            was comparatively easy to write and cer-
+GRAY76 for a detailed discussion of the              tainly has contributed to the system's reli-
+various locking options supported by Sys-            ability.
+tem R.
+   A second issue is that transaction undo
+                                                     3.1 Implementation Cost
+cannot tolerate deadlock (we do not want
+to have to undo undo's). Undo may take               The RSS was designed in 1974 and 1975
+advantage of the fact that it only accesses          and became operational in 1976. Since then
+records the transaction locked in the do             we have had a lot of experience with it.
+step; hence it need not re-request these                Writing recoverable actions (ones which
+locks. (This is a consequence of holding all         can undo and redo themselves) is quite
+exclusive locks until the end of the trans-          hard. Subjectively, writing a recoverable
+action.) But transaction undo may have to            action is 30 percent harder and, objectively,
+set some locks because other RSS actions             it requires about 20 percent more code than
+are in progress and because RSS actions              a nonrecoverable action. In addition, the
+release some locks at the end of each RSS            recovery system itself (log management,
+action (e.g., physical page locks when logi-         system restart, checkpoint, commit, abort,
+cal record locking is the actual granularity).       etc.) contributes about 15 percent of the
+To solve this problem, transactions which            code of the RSS. However, the RSS is less
+are performing transaction undo are                  than half of System R, so these numbers
+marked as "golden." Golden transactions              may be divided in half when assessing the
+are never chosen as deadlock victims;                overall system implementation cost, leaving
+whenever they get into a deadlock with               the marginal cost of implementing recovery
+some other transactions, the other trans-            at about 10 percent.
+
+                                                                Computing Surveys, Vol. 13, No. 2, June 1981
+238       •       Jim Gray et al.
+3.2 Execution Cost                               3.4 Success Rate
+Another component of cost is the instruc-        Perhaps the most significant aspect of the
+tions added to execution of a transaction to     System R recovery manager is the confi-
+support recovery (frequently called "path        dence it inspires in users. During develop-
+length"). Fortunately, most transactions         ment of the system, we routinely crashed
+commit and hence make no use of the undo         the system knowing that the recovery sys-
+or redo code. In the normal case the only        tem will be able to pick up the pieces.
+cost imposed by recovery is the writing of       Recovery from the archive is not unheard
+log records. Further, only update opera-         of, but it is very uncommon. This has cre-
+tions need write log records. Typically, the     ated the problem that some users do not
+cost of keeping a log is less than 5 percent     take precautions to protect themselves
+increased path length. In addition, the ex-      from media failures.
+ecution cost, associated with recovery, of
+                                                 3.5 Complexity
+periodic checkpoints is minimal. Restart is
+quite fast, typically running ten times faster   It seems to be the case that the recovery
+than the original processing (primarily be-      system cures many more failures than it
+cause updates are infrequent). Hence if the      introduces. Among other things this means
+checkpoint interval is 5 minutes, the system     that everybody who coded the RSS under-
+averages 15 seconds to restart. As described     stood the do-undo-redo protocol reasona-
+in the next section, checkpoint is I/O           bly well and that they were able to write
+bound.                                           recoverable actions. As the system has
+                                                 evolved, new people have added new re-
+3.3 I / 0 Cost
+                                                 coverable objects and actions to the system.
+A third component of recovery cost is I/O        Their ability to understand the interface
+added by the recovery system. Each trans-        and to fit into its table-driven structure is
+action commit adds two I/Os to the cost of       a major success of the basic design.
+the transaction when the duplexed log is            The decision to put all responsibility for
+forced to disk (as part of the commit ac-        recovery into the RSS made the RDS much
+tion). This cost is reduced to one extra I/O     simpler. There is essentially no code in the
+if dual logging is not selected. Log force is    RDS to handle transaction management
+suppressed for read-only transactions. De-       beyond the code to externalize the begin,
+pending on the application, log force may        commit, and abort actions and the code to
+be a significant overhead. In an application     report transaction abort to the application
+in which each transaction is a few (50) RSS      program.
+actions, it constitutes a 20 percent I/O over-
+                                                 3.6 Disk-Based Log
+head. The transaction of Figure 1 would
+have about a 25 percent log I/O overhead.        A major departure of the RSS from other
+In another application in which the data-        data managers is the use of a disk-based log
+base is all resident in central memory, the      and its merging of the undo and redo logs.
+log accounts for all of the disk I/O. IMS        The rationale for the use of disk is that
+Fast Path solves this problem by logging         disks cost about as much as tapes {typically
+several transactions in one I/O so that one      $30,000 per unit if controllers are included),
+gets less than one log I/O per transaction.      but disks are more capacious than tapes
+The shadow mechanism when used with              (500 megabytes rather than 50 megabytes
+large databases often implies extra I/O,         per unit) and can be allocated in smaller
+both during normal operation and at check-       units (a disk-based log can use half of the
+point. Lorie's estimates in LoRI77 are cor-      disk cylinders; it is not easy to use half of a
+rect: a checkpoint requires several seconds      tape drive). Further, a disk-based log is
+of I/O after 5 minutes of work on a 100-         consistent with the evolution of tape ar-
+megabyte database. This work increases           chives such as the IBM 3850 and the AM-
+with larger databases and with high trans-       PEX Terabit Store. Last, but most impor-
+action rates. It becomes significant at 10       tant, a disk-based log eliminates operator
+transactions per second or for billion-byte      intervention at system restart. This is es-
+files.                                           sential if restart is to occur automatically
+Computing Surveys, Vol. 13, No. 2, June 1981
+                The Recovery Manager of the System R Database Manager                         •       239
+
+and within seconds. Since restart is infre-         to create and discard user scratch files, to
+quent, operators are likely to make errors          store user work files, and to support logged
+during the restart process (even if they have       files. A major virtue of shadows is that they
+regular "fire drills"). A disk-based log re-        ensure that system restart always begins
+duces opportunities for operator error.             with an RSS action-consistent state. This
+  Several systems observe that the undo             is quite a simplification and probably con-
+log is not needed once a transaction com-           tributes to the success of system restart.
+mits. Hence they separate the undo and                 To understand the problem that shadows
+redo log and discard the undo log at trans-         solve at restart, imagine that System R did
+action commit. Merging the two logs causes          not use shadows but rather updated pages
+the log to grow roughly twice as fast but           in place on the disk. Imagine two pages P1
+leads to a simpler design. Since transactions       and P2 of some file F, and suppose that P1
+typically write only 200 to 500 bytes of log        and P2 are related to one another in some
+data, we do not consider splitting the undo         way. To be specific, suppose that P1 con-
+and redo logs to be worth the effort.               tains a reference R1 to a record R2 on P2.
+                                                    Suppose that a transaction deletes R2 and
+3.7 Save Points                                     invalidates R1 thereby altering P1 and P2.
+Transaction save points are an elegant idea         If the system crashes there are four possi-
+which the RSS can implement cheaply.                bilities:
+Transaction save points are used by the
+RDS to undo complex RDS operations {i.e.,            (1) Neither P1 nor P2 is updated on disk.
+make them atomic). However, transaction              (2) P1 but not P2 is updated on disk.
+save points are not available to application         (3) P2 but not P1 is updated on disk.
+                                                     (4) Both P1 and P2 are updated on disk.
+programs using the SQL language. Unfor-
+tunately, the RDS implementors let P L / I             In states 2 and 3, P1 and P2 are not RSS-
+do most of the storage control, so the RDS           action consistent: either the reference, R1,
+processor does not know how to save its              or referenced object, R2, is missing. System
+state and P L / I does not offer it a facility to    restart must be prepared to redo and undo
+reset its state even if the RDS could re-            in any of these four cases. The shadow
+member the state. The RDS, therefore,                mechanism eliminates cases 2 and 3 by
+does not show the RSS save point facility            checkpointing the state only when it is
+to users.                                            RSS-action consistent {hence restart sees
+   Supporting save points is an unsolved             the shadow version recorded at checkpoint
+language-design issue for SQL. If SQL were           rather than the version current at the time
+imbedded in a language which supported               of the crash). Without the shadow mecha-
+backtrack programming, save points might             nism, the other two cases must be dealt
+be implemented rather naturally. INTER-              with in some way.
+LISP is a natural candidate for this                    One alternative is the "write ahead log"
+[TEIT72], since it already supports the no-          (WAL) protocol used by IMS [IBMa]. IMS
+tion of undo as an integral part of the              log records apply to page updates {rather
+language.                                            than to actions). WAL requires that log
+   We had originally intended to have sys-           records be written to secondary storage
+tem restart reset in-progress transactions           ahead of (i.e., before) the corresponding
+to their most recent save point and then to          updates. Further, it requires that undo and
+invoke the application at an exception entry         redo be restartable: attempting to redo a
+point (rather than abort all uncommitted             done page will have no effect and attempt-
+transactions at restart). (CICS does some-           ing to undo an undone page will have no
+thing like this.) However, the absence of            effect, allowing restart to fail and retry as
+save point support in the RDS and certain            though it were a first attempt. WAL is
+operating system problems precluded this             extensively discussed by Gray [GRAY78].
+feature.                                                There is general consensus that heavy
+                                                     reliance on shadows for large shared files
+3.8 Shadows                                          was a mistake. We recognized this fact
+The file shadow mechanism of System R is             rather late (shadows have several seductive
+a key part of the recovery design. It is used        properties), so late in fact that a major
+                                                                Computing Surveys, Vol. 13, No. 2, June 1981
+240       •      J i m Gray et al.
+rewrite of the RSS is required to reverse            For large fries this means that the direc-
+the decision. Fortunately, the performance        tories cannot reside in primary storage;
+of shadows is not unacceptable. In fact for       they must be paged from secondary storage.
+small databases (fewer than 10 megabytes)         The RSS maintains two buffer pools: a pool
+shadows have excellent performance.               of 4-kilobyte data pages and another pool
+    Our adoption of shadows is largely his-       of 512-byte directory pages. Management
+torical. Lorie implemented a single-user re-      and use of this second pool added complex-
+lational system called XRAM which used            ity inside the RSS. More significantly, di-
+the shadow mechanism to give recovery for         rect processing (hashing or indexing single
+private files. When fries are shared, one         records by key) may suffer a directory I/O
+needs a transaction log of all changes made       for each data I/O.
+to the files by individual users so that the         Another consequence of shadows is that
+changes corresponding to one user may be          "next" in a file is not "next" on the disk
+undone independently of the other users'          (logical sequential does not mean physical
+changes. This transaction log makes the           sequential). When a page is updated for the
+shadow mechanism redundant. Of course             first time, it moves. Unless one is careful,
+the shadow mechanism is still a good recov-       and the RSS is not careful about this, get-
+ery technique for private files. A good sys-      ting the next page frequently involves a
+tem should support both shadows for pri-          disk seek. (Lorie in LORI77 suggests a
+vate files and log-based recovery for shared      shadow scheme which maintains physical
+files. Several other systems, notable QBE         clustering within a cylinder.) So it appears
+[IBMb], the DataComputer [MAre75], and            that shadows are bad for direct (random)
+the Lampson and Sturgis file system               processing and for sequential processing.
+[LAlviP81] have a similar use of shadows. It         Shadows consume an inconsequential
+therefore seems appropriate to present our        amount of disk space for directories (less
+assessment of the shadow mechanism.               than 1 percent). On the other hand, in order
+    The conventional way of describing a          to use the shadow mechanism, one must
+large file (e.g., over a billion bytes) is as a   reserve a large amount (20 percent) of disk
+sequence of allocatmn units. An allocation        space to hold the shadow pages. In fact
+unit is typically a group of disk cylinders,      some batch operations and the system re-
+called an extent. If the file grows, new ex-      start facility may completely rewrite the
+tents are added to the list. A file might be      database. This requires either a 100 percent
+represented by 10 extents and the corre-          shadow overhead or the operation must be
+sponding descriptor might be 200 bytes.           able to tolerate several checkpoints (i.e.,
+Accessing a page consists of accessing the        reclaim shadow) while it is in progress. This
+ extent table to find the location of the ex-     problem complicates system restart (its so-
+ tent containing the page and then accessing      lution was too complex to describe in the
+ the page.                                        system restart section).
+    By contrast, a shadow mechanism is               The RSS recovery system does not use
+ much more complex and expensive. Each            shadowed files for the log; rather, it uses
+ page of the file has an individual descriptor     disk extents (one per log file). However the
+ in the page table. Such descriptors need to      recovery system does use the shadow mech-
+                                                   anism at checkpoint and restart. At check-
+ be at least 4 bytes long and there need to
+                                                  point all the current versions of all recover-
+ be two of them (current and shadow). Fur-
+                                                   able files are made the shadow versions.
+ ther, there are various free-space bit maps
+                                                   This stops the system and triggers a flurry
+ (a bit per page) and other housekeeping           of I/O activity. The altered pages in the
+ items. Hence the directories needed for a         database buffer pool are written to disk,
+ file are about 0.2 percent of the file size       and much directory I/O is done to free
+ (actually 0.2 percent of the maximum file         obsolete pages and to mark the current
+ size). For a billion-byte file this is 2 mega-    pages as allocated. The major work in this
+ bytes of directories rather than the 200          operation is that three I/Os must be done
+ bytes cited for the extent oriented descrip-      for every directory page that has changed
+ tors.                                             since the last checkpoint. If updates to the
+
+Computing Surveys, Vol 13, No 2, June 1981
+                The Recovery Manager of the System R Database Manager                     •      241
+
+ database are randomly scattered, this could     mit processor. Commercial data manage-
+mean three I/Os at checkpoint for each           ment systems do this correctly.
+update in the interval between checkpoints.
+In practice updates are not scattered ran-       3.10 New Features
+domly and so things are not that bad, but
+checkpoint can involve many I/Os.                We recently added two new facilities to the
+   We have devised several schemes to            recovery component and to the SQL inter-
+make the shadow I/O asynchronous to the          face. First the COMMIT command was
+                                                  extended to allow an application to com-
+checkpoint operation and to reduce the
+                                                  bine a COMMIT with a B E G I N and pre-
+quantity of the I/O. It appears, however,
+that much of the I/O is inherent in the          serve the transaction's locks and cursors
+shadow mechanism and cannot be elimi-            while exposing (committing) its updates.
+nated entirely. This means that the RSS          COMMIT now accepts a list of cursors and
+ (System R) must stop transaction process-       locks which are to be kept for the next
+ing for seconds. T h a t in turn means that      transaction. These locks are downgraded
+                                                 from exclusive to shared locks, and all other
+user response times will occasionally be
+quite long.                                      cursors and locks are released. A typical
+   These observations cause us to believe        use of this is an application which scans a
+that we should have adopted the IMS-like         large file. After processing the A's it com-
+approach of using the WAL protocol for           mits and processes the B's, then commits
+large shared files. T h a t is, we should have   and then processes the C's, and so on. In
+supported the log and no-shadow option in        order to maintain cursor positioning across
+Figure 9. If we had done this, the current       each step, the application uses the special
+and shadow directories would be replaced         form of commit which commits one trans-
+by a much smaller set of file descriptors        action and begins the next.
+(perhaps a few thousand bytes). This would          A second extension involved support for
+eliminate the directory buffer pool and its      the two-phase commit protocol required
+attendant page I/O. Further, checkpoint          for distributed systems [GRAY78]. A
+would consist of a log quiesce followed by       PHASE__ONE action was added to the
+writing a checkpoint record and a pointer        RSS and to SQL to allow transactions to
+to the checkpoint record to disk (two or         prepare to commit. This causes the RSS to
+three I/Os rather than hundreds). WAL            log the transaction's locks and to force the
+would not be simpler to program (for ex-         log. Further, at restart there are now three
+ample, WAL requires more detailed log-           kinds of transactions: winners, losers, and
+ging). But the performance of WAL is bet-        in-doubt. In-doubt transactions are redone
+ter for large shared databases (bigger than      and their locks are reacquired at restart.
+100 megabytes).                                  Each such transaction continues to be in-
+                                                 doubt until the transaction coordinator
+                                                 commits or aborts it (or the system opera-
+3.9 Message Recovery, an Oversight
+                                                 tor forces it). During the debugging of this
+As pointed out by the examples in Figures        code, several transactions were in-doubt for
+1 and 4, a transaction's database actions        two weeks and for tens of system restarts.
+and output messages must either all be              At present our major interest is in a
+committed or all be undone. We did not           distributed version of System R. We are
+appreciate this in the initial design of Sys-    extending the System R prototype to sup-
+tem R and hence did not integrate a mes-         port transparent distribution of data among
+sage system with the database system.            multiple database sites.
+Rather, application programs use the
+standard terminal I/O interfaces provided                    ACKNOWLEDGMENTS
+by the operating system, and messages have
+                                                 We have had many stimulating discussions with Dar
+no recovery associated with them. This was       Busa, Earl Jenner, Homer Leonard, Dieter Gawlick,
+a major design error. The output messages        John Nauman, and Ron Obermarck. They helped us
+of a transaction must be logged and their        better understand alternate approaches to recovery.
+delivery must be coordinated by the corn-        John Howard and Mike Mitoma did several expert-
+
+                                                              ComputingSurveys,Vol.13,No 2, June 1981
+242       *      J i m Gray et al.
+ments whmh stress tested the recovery system. Jim       GRAY75 GRAY, J. N., AND WATSON V. "A shared
+Mehl and Bob Yost adapted the recovery manager to              segment and mterprocess communication
+the MVS environment. Tom Szczygielski implemented              facility for VM/370," IBM San Jose Re-
+the two-phase commit protocol. We also owe a great             search Lab. Rep. RJ 1679, May 1975.
+deal to the recovery model formulated by Charlie        GRAY76 GRAY, J. N , LORIE, R A., PUTZOLU,G. F ,
+                                                               AND TRAIGER, 1. L. "Granularity of locks
+Davies and Larry Bjork.
+                                                               and degrees of consistency in a shared data
+                  REFERENCES                                   base," M o d e h n g in data base management
+                                                               systems, G. M. Nijssen, Ed., North-Hol-
+(Note [BLAs79] Is not c]ted in text.)                          land, Amsterdam, 1976, pp. 365-394; also
+ASTR76 ASTRAHAN, M M., BLASGEN, M. W.,                         IBM Research Rep. RJ 1706.
+         -CHAMBERLIN, D. D., ESWARAN, K . P . ,         GRAY78 GRAY, J . N . "Notes on data base operat-
+          GRAY, J. N , GRIFFITHS, P. P., KING, W F ,           ing systems," in Operating systems--an
+          LORIE, R. A, MCJONES, P R., MEHL, J.                 advanced course, R. Bayer, R M. Graham,
+          W., PUTZOLU,G. R., TRAIGER, I. L , WADE,             and G. Seegmuller, Eds., Springer Verlag,
+          B W., AND WATSON, V "System R A                      New York, 1978, pp. 393-481; also IBM
+          relational approach to database manage-              Research Rep. RJ 2188, Feb 1978.
+          ment," A C M Trans Database Syst 1, 2         IBMa   IBM "Information management system/
+          (June 1976), 97-137.                                 vn'tual systems (IMS/VS), programming
+BJOR73    BJORK,L. "Recovery scenario for a D B /              reference manual," I B M Form No. SH20-
+          DC system," m Proc A C M N a t Conf.,                9027-2, sect. 5.
+          1973, pp. 142-146.                            IBMb   I B M "Query by example program de-
+BLAS79 BLASGEN,M. W, GRAY, J. N , MITOMA,                      scription/operators manual," I B M Form
+          M., AND PRICE, T. "The convoy phenom-                N o SH20-2077.
+          enon," A C M Oper. Syst Rev. 14, 2 (April     LAMP81 LAMPSON, B. W., AND STURGIS, H
+          1979), 20-25.                                        E. "Crash recovery in a distributed data
+CHAM76 CHAMBERLIN, D D., ASTRAHAN, M. M.,                      storage system," Commun ACM, to ap-
+          ESWARAN, K. P., GRIFFITHS, P P., LORIE,              pear.
+          R. A., MEHL, J. W, REISNER, R., AND           LORI77 LORIE, R.A. Physmal integrity in a large
+          WADE, B.W. "SEQUEL 2: A unified ap-                  segmented database," A C M Trans Data-
+          proach to data defimtlon, mampulatlon                base Syst 2, 1 (March 1977), 91-104.
+          and control," I B M J Res Dev. 20, 6 (Nov.    MARI75 MARILL, T., AND STERN, D. H "The Da-
+          1976), 560-576                                       tacomputer' A network utility," in Proc
+DAVI73 DAVIES,C.T. "Recovery semantics for a                   A F I P S Nat. Computer Conf , vol. 44, AF-
+          DB/DC system," m Proc. A C M Nat. Conf.,             IPS Press, Arhngton, Va., 1975
+          1973, pp. 136-141.                            NAUM78 NAUMAN, J . S . "Observations on sharing
+ESWA76 ESWARAN,K. E , GRAY, J N., LORIE, R.                    m data base systems," IBM Santa Teresa
+          A., AND TRAIGER, I . L . "On the notions             Lab. Tech. Rep. T R 03.047, May 1978.
+          of consistency and predicate locks in a re-   TEIT72 TEITLEMAN, W. "Automated program-
+          lational database system," Commun. A C M             mlng--The programmer's assmtant," in
+          19, 11 (Nov. 1976), 624-634.                         Proc. Fall Jt. Computer Conf , Dec. 1972
+
+
+Received February 1980, final revision accepted November 1980
+
+
+
+
+ Computing Surveys,Vol 13,No 2,June 1981
+

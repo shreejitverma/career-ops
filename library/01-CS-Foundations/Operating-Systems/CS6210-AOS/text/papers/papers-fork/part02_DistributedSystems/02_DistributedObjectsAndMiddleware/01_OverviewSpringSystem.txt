@@ -1,0 +1,562 @@
+                                     An Overview of the Spring System
+
+               James G. Mitchell, Jonathan J. Gibbons, Graham Hamilton, Peter B. Kessler,
+               Yousef A. Khalidi, Panos Kougiouris, Peter W. Madany, Michael N. Nelson,
+                                Michael L. Powell, and Sanjay R. Radia
+
+                                              Sun Microsystems Inc.
+                                  2550 Garcia Avenue, Mountain View Ca 94303.
+
+
+
+                             Abstract                            new APIs to warrant software development investments
+                                                                 by application developers.
+Spring is a highly modular, distributed, object-oriented
+operating system. This paper describes the goals of the          Because the opportunity to begin afresh in OS design is
+Spring system and provides overviews of the Spring object        increasingly rare, the Spring project has chosen to be dif-
+model, the security model, and the naming architecture.          ferent and to develop the best technology we could. How-
+Implementation details of the Spring microkernel, virtual        ever, we decided that we would innovate only where we
+memory system, file system, and UNIX emulation are sup-          could achieve large increases over existing systems and
+plied.                                                           that we would try to keep as many as possible of their
+                                                                 good features.
+                                                                 What are the biggest problems of existing systems? From
+1      Introduction                                              Sun’s point of view as a supplier of UNIX system technol-
+                                                                 ogy in our Solaris products, the major issues are:
+What would you do if you were given a clean sheet on
+which to design a new operating system? Would you make           • the cost of maintaining, evolving, and delivering the
+the new OS look the same as some existing system or dif-           system, including kernel and non-kernel code (e.g.,
+ferent?                                                            window systems),
+                                                                 • a basis for security that is not particularly flexible, easy
+If you choose to make it look like UNIX, for example,              to use or strongly secure,
+then a better implementation had better be a primary goal.
+Changing the system as seen by application programs              • the difficulty of building distributed, multi-threaded
+would, however, be a very bad thing to do, since you are           applications and services,
+supposedly making it look the same as UNIX in order to           • the difficulty of supporting time-critical media (audio
+run existing software. In fact, if you take this route, you        and video), especially in a networked environment,
+will be strongly pressured to make the new, improved sys-        • the lack of a unified way of locating things by name
+tem binary compatible with the existing one so that users           (e.g., lookup is done differently for files, devices,
+can run all their existing software. Any new functionality          users, etc.).
+that you would like to include would have to be done as a
+                                                                 However, we wanted to keep a number of features that
+strict addition to the system’s existing Application Pro-
+                                                                 have proven themselves in one or more systems; for exam-
+gramming Interfaces (APIs).
+                                                                 ple,
+If you choose to make the new system different than any
+                                                                 • good performance on a wide variety of machines,
+existing system, then you had better make it such an
+                                                                   including multi-processor systems,
+improvement over them that programmers will be willing
+to learn a new set of APIs to take advantage of its              • memory protection, virtual memory, and mapped file
+improved functionality. Indeed, you will have to convince          systems,
+other companies to adopt and support your new APIs so            • access to existing systems via application compatibility
+that there will be sufficient future sales of systems with the     and network interoperability (e.g., standard protocols
+                                                                   and services),
+• window systems and graphical user interfaces.                  server), we use the two terms interchangeably in this
+                                                                 paper.
+Sun’s belief in open systems means that we would like to
+include extending the system by more than one vendor as          The remainder of this paper will discuss
+an important aspect of evolving it.                              • IDL,
+When we looked at these lists, we immediately decided            • the model and implementation of objects in Spring,
+that the Spring system should have a strong and explicit         • the overall structure of the Spring system,
+architecture: one that would pay attention to the interfaces
+between software components, which is really how a sys-          • the Spring Nucleus,
+tem’s structure is expressed. Our architectural goal for         • the implementations of distributed object invocation,
+Spring then became                                                   security, virtual memory, file systems, UNIX compati-
+                                                                     bility, and unified naming.
+• Spring’s components should be defined by strong
+   interfaces and it should be open, flexible and extensible     We will finish by drawing some conclusions from our
+                                                                 experience designing and implementing the system.
+By a strong interface we mean one that specifies what
+some software component does while saying very little
+about how it is implemented
+                                                                 2      Interface Definition Language (IDL)
+This way of stating our purpose led us to develop the idea
+of an Interface Definition Language (IDL) [15] so that we        The Interface Definition Language developed by the
+could define software interfaces without having to tie our-      Spring project is substantially the same as the IDL that has
+selves to a single programming language, which would             been adopted by the Object Management Group as a stan-
+have made the system less open. We also believed that the        dard for defining distributed, object-oriented software
+best way to get many of the system properties we wanted          components. As such, IDL “compilers” are or have been
+was to use an object-oriented approach.                          implemented by a number of companies.
+The marriage of strong interfaces and object-orientation         What does an IDL compiler do? After all, interfaces are
+has been a natural and powerful one. It helps achieve our        not supposed to be implementations, so what is there to
+goals of openness, extensibility, easy distributed comput-       compile? Typically, an IDL compiler is used to produce
+ing, and security. In particular, it has made the operation of   three pieces of source code in some chosen target imple-
+invoking an operation on an object one that is type safe,        mentation language, e.g., C, C++, Smalltalk, etc.:
+secure (if desired), and uniform whether the object and its      1. A language specific form of the IDL interface: For C
+client are collocated in a single address space or machine           and C++ this is a header file with C or C++ definitions
+or are remote from one another.                                      for whatever methods, constants, types, etc. were
+We have used a microkernel approach in concert with IDL              defined in the IDL interface. We will give an example
+interfaces. The Spring Nucleus (part of the microkernel)             below.
+directly supports secure objects with high speed object          2. Client side stub code: Code meant to be dynamically
+invocation between address spaces (and by a system                   linked into a client’s program to access an object that is
+extension, between networked machines). Almost all of                implemented in another address space or on another
+the system is implemented as a suite of object managers              machine.
+(e.g., the file system, which provides file objects) running     3. Server side stub code: Code to be linked into an object
+in non-kernel mode, often in separate address spaces, to             manager to translate incoming remote object invoca-
+protect themselves from applications (and from one                   tions into the run-time environment of the object’s
+another). Consequently, it is as easy to add new system              implementation.
+functionality as it is to write an application in Spring, and
+                                                                 These three outputs from an IDL compiler enable clients
+all such functionality is inherently part of a distributed
+                                                                 and implementations in a particular language, e.g., C++, to
+system.
+                                                                 treat IDL-defined objects as if they were just objects in
+Object managers are themselves objects: for example, a           C++. Thus, a programmer writing in C++ would use an
+file system is an object manager that supports an operation      IDL-to-C++ compiler to get C++ header files and stub
+for opening files by name. The file objects that it returns      code to define objects as if they were implemented in C++.
+from open operations are generally implemented as part of        At the same time, the object’s implementation might be
+the same object manager because it is convenient and nat-        written in C and would, therefore, have used an IDL-to-C
+ural to do so. Because of the similarity of an object man-       compiler to generate the server side stub code to transform
+ager and the traditional notion of a server (e.g., a file
+incoming calls into corresponding C procedure invoca-                       vide special support for these kinds of objects by automat-
+tions on the C “objects” corresponding to the IDL objects.                  ically generating stubs (see Section 2) which take the
+                                                                            arguments for these calls and marshal them for transmis-
+                                                                            sion to the server and which unmarshal any results and
+2.1        An example                                                       return these to the client application. These stubs use our
+To give the flavor of IDL, Figure 1 shows an example of                     subcontract mechanism (see Section 3.3) to communicate
+IDL use to define the Spring IO interface. For the purposes                 with the remote server.
+of this overview, details have been elided, but the example
+is derived from an actual use of IDL.
+                                                                                            client                                 server
+      interface io {                                                                      application                            application
+         raw_data read(in long size) raises (access_denied, alerted,
+                                                                              IDL
+                                                   failure, end_of_data)
+                                                                            interface          client                               server
+           void write(in raw_data data) raises (access_denied, alerted,                        stubs                                stubs
+                                  incomplete_write, failure, end_of_data)
+      };                                                                                  subcontract                            subcontract
+
+                 FIGURE 1.        IO Interface in IDL
+                                                                               FIGURE 2.       A call on a server-based object
+
+The interface defines objects of type IO. In this example,
+any IO object has two operations defined on it, read and                    Typically, server-based objects use the Spring doors com-
+write. The read operation takes a parameter, size, of type                  munication mechanism (see section 5.1) to communicate
+long, and returns an object of type raw_data. The write                     between the client and the server. Most subcontracts opti-
+method returns nothing (void) and takes a single argument,                  mize the case when the client and the server happen to be
+data, whose type is raw_data.                                               in the same address space by simply performing a local
+As noted above, instead of returning normally, a method                     call, rather than calling through the kernel.
+may raise one of a number of defined exceptions.
+A complete description of IDL is given in [15].                             3.2     Serverless objects
+                                                                            Spring also supports serverless objects, where the entire
+                                                                            state of the object is always in the client’s address space.
+3          Objects in Spring                                                This implementation mechanism is suitable for light-
+Although all Spring interfaces are defined in IDL, IDL                      weight objects such as names or raw_data. When a server-
+says nothing about how operations on an object are imple-                   less object is passed between address spaces, the object’s
+mented, or even how an operation request should be con-                     state is copied to the new address space. Thus passing a
+veyed to an object.                                                         serverless object is more like passing a struct, while pass-
+                                                                            ing a server-based object is more like passing a pointer to
+The users of an object merely invoke operations defined in                  its remote state.
+its interface. How and where the operation is actually per-
+formed is the responsibility of the object run-time and of
+the object implementation. Sometimes the operation will                                            client
+be performed in the same address space as the client,                                            application
+sometimes in another address space on the same machine,
+sometimes on another machine.                                                 IDL
+                                                                            interface             object
+We will often use the phrase “invoke an object” as a short
+form for “invoke an operation on an object”.                                                  implementation
+
+
+3.1        Server-based objects                                                   FIGURE 3.     A call on a serverless object
+Many objects in Spring are implemented in servers that
+are in different address spaces from their clients. We pro-
+3.3    Subcontract                                             All other system services, including naming, paging, net-
+                                                               work IO, filesystems, keyboard management, etc., are
+Spring provides a flexible mechanism for plugging in dif-
+                                                               implemented as user-level servers. These servers provide
+ferent kinds of object runtime machinery. This mecha-
+                                                               object-oriented interfaces to the resources they manage
+nism, known as subcontract, allows control over how
+                                                               and clients communicate with system servers by invoking
+object invocation is implemented, over how object refer-
+                                                               these objects.
+ences are transmitted between address spaces, how object
+references are released, and similar object runtime opera-     Spring is inherently distributed. All the services and
+tions [2].                                                     objects available on one node are also available on other
+                                                               nodes in the same distributed system.
+For example, the widely used singleton subcontract pro-
+vides simple access to objects in other address spaces.
+When a client invokes a singleton object, the subcontract
+implements the object invocation by transmitting the
+                                                               5      The nucleus
+request to the address space where the object’s implemen-      The nucleus is Spring’s microkernel. It supports three
+tation lives.                                                  basic abstractions: domains, threads, and doors [1].
+We have also implemented subcontracts that support repli-      Domains are analogous to processes in Unix or to tasks in
+cation. These subcontracts implement object invocation by      Mach. They provide an address space for applications to
+transmitting a request to one or more of a set of servers      run in and act as a container for various kinds of applica-
+that are conspiring to support a replicated object.            tion resources such as threads and doors.
+In addition we have used subcontract to implement a num-       Threads execute within domains. Typically each Spring
+ber of different object runtime mechanisms, including sup-     domain is multi-threaded, with separate threads perform-
+port for cheap objects, for caching, and for crash recovery.   ing different parts of an application.
+                                                               Doors support object-oriented calls between domains. A
+4      Overall system structure                                door describes a particular entry point to a domain, repre-
+                                                               sented by both a PC and a unique value nominated by the
+Spring is organized as a microkernel system. Running in        domain. This unique value is typically used by the object
+kernel mode are the nucleus, which manages processes           server to identify the state of the object; e.g., if the imple-
+and inter-process communication, and the virtual memory        mentation is written in C++ it might be a pointer to a C++
+manager, which controls the memory management hard-            object.
+ware. The nucleus is entered by a trap mechanism. The
+virtual memory manager responds to page faults but also
+provides objects that interact with external pagers (see       5.1    Doors
+Section 8.2) and, in this guise, looks like any other object   Doors are pieces of protected nucleus state. Each domain
+server.                                                        has a table of the doors to which it has access. A domain
+                                                               refers to doors using door identifiers, which are mapped
+                                              Spring           through the domain’s door table into actual doors. A given
+          X11 server         csh             Application
+         libue             libue
+                                                               door may be referenced by several different door identifi-
+                                                               ers in several different domains.
+        unix                                 tty               Possession of a valid door gives the possessor the right to
+        process                              server
+        server          dynamic linker                         send an invocation request to the given door.
+                                               caching         A valid door can only be obtained with the consent of the
+                         authentication
+      TCP/UDP/IP
+                           manager             fs              target domain or with the consent of someone who already
+                                                               has a door identifier for the same door.
+       network            machine            Spring
+       proxy             name server         file system       As far as the target domain is concerned, all invocations
+                                                               on a given door are equivalent. It is only aware that the
+                                          vm
+                                                               invoker has somehow acquired an appropriate door identi-
+            nucleus                       manager              fier. It does not know who the invoker is or which door
+                          Kernel                               identifier they have used.
+FIGURE 4.        Major system components of a Spring node
+                                                                Proxies transparently forward door invocations between
+                                                                domains on different machines. In Figure 6, when a client
+                                                                on machine B invokes door Y, this door invocation goes to
+ Domain                                           Target
+                                                                network proxy B; B forwards the call over the net to its
+                                                  Domain
+                                                                buddy, proxy A; proxy A does a door invocation; and the
+                                                                door invocation then arrives in the server domain.
+
+                                                                     Client      Proxy                  Proxy      Server
+                                                  Target                           B
+    Domain                                                          Domain                                A        Domain
+                                                  Domain
+
+
+         Door          Door          Doors
+                                                                          Door Y                              Door X
+       Identifiers     tables
+
+                                                                       Nucleus B                             Nucleus A
+        FIGURE 5.    Domains, doors, and door tables
+
+                                                                FIGURE 6.     Using proxies to forward a call between machines
+5.2    Object Invocation Via Doors
+Using doors, Spring provides a highly efficient mechanism
+for cross-address-space object invocation. A thread in one      Notice that neither the client nor the server need be aware
+address space can issue a door invocation for an object in      that the proxies exist. The client just performs a normal
+another address space. The nucleus allocates a server           door invocation, the server just sees a normal incoming
+thread in the target address space and quickly transfers        door invocation.
+control to that thread, passing it information associated       Door identifiers are mapped into network handles when
+with the door plus the argument data passed by the calling      they are transmitted over the network, and are mapped
+thread.                                                         back into doors when they are received from the network.
+When the called thread wishes to return, the nucleus deac-      A network handle contains a network address for the cre-
+tivates the calling thread and reactivates the caller thread,   ating proxy, and a set of bits to identify a particular door
+passing it any return data specified by the called thread.      that is exported by this proxy. In theory the set of bits is
+                                                                large enough to make it hard for a malicious user to guess
+For a call with minimal arguments, Spring can execute a
+                                                                the value of a network handle, thereby providing protec-
+low-level cross-address-space door call in 11 µs on a
+                                                                tion against users forging network handles.
+SPARCstation 2, which is significantly faster than using
+more general purpose inter-process communication mech-
+anisms [1].
+                                                                7      Spring’s security model
+Doors can be passed as arguments or results of calls. The
+nucleus will create appropriate door table entries for the      One of Spring’s goals is to provide secure access to
+given doors in the recipient’s door table and give the recip-   objects, so that object implementations can control access
+ient door identifiers for them.                                 to particular data or services. To provide security we sup-
+                                                                port two basic mechanisms, Access Control Lists and soft-
+                                                                ware capabilities.
+6      Network Proxies                                          Any object can support an Access Control List (ACL) that
+To provide object invocation across the network, the            defines which users of groups of users are allowed access
+nucleus invocation mechanism is extended by network             to that object. These Access Control Lists can be checked
+proxies that connect up the nuclei of different machines in     at runtime to determine whether a given client is really
+a transparent way. These proxies are normal user-mode           allowed to access a given object.
+server domains and receive no special support from the          When a given client proves that it is allowed to access a
+nucleus. One Spring machine might include several proxy         given object, the object’s server creates an object reference
+domains that speak different network protocols.                 that acts as a software capability. This object reference
+                                                                uses a nucleus door as part of its representation so that it
+cannot be forged by a malicious user. This door points to a      The use of software capabilities in Spring makes it easy
+front object inside the server. A front object is not a Spring   for application programs to pass objects to servers in a
+object, but rather whatever the server’s language of imple-      way that allows the server to actually use the given object.
+mentation defines an object to be.
+A front object encapsulates information identifying the
+principal (e.g., a user) to which the software capability        8       Virtual Memory
+was issued and the access rights granted to that principal.      Spring implements an extensible, demand-paged virtual
+A given server may create many different front objects,          memory system that separates the functionality of caching
+encapsulating different access rights, all pointing to the       pages from the tasks of storing and retrieving pages [7].
+same piece of underlying state. Later, when the client
+issues an object invocation on the object reference, the
+invocation request is transmitted securely through the           8.1     Overview
+nucleus door and delivered to the front object. The front        A per-machine virtual memory manager (VMM) handles
+object then checks that the request is permissible based on      mapping, sharing, protecting, transferring, and caching of
+the encapsulated access rights, and if so, forwards the          local memory. The VMM depends on external pagers for
+request into the server. For example, if the client issued an    accessing backing store and maintaining inter-machine
+update request, the front object would check that the            coherency.
+encapsulated access included write access.
+                                                                 Most clients of the virtual memory system only deal with
+When a client is given an object reference that is acting as     address space and memory objects. An address space
+a capability they can pass that object reference on to other     object represents the virtual address space of a Spring
+clients. These other clients can then use the object refer-      domain while a memory object is an abstraction of mem-
+ence freely and will receive all the access that was granted     ory that can be mapped into address spaces. An example
+to the original client.                                          of a memory object is a file object (the file interface in
+                                                                 Spring inherits from the memory object interface).
+                                                                 Address space objects are implemented by the VMM.
+                                underlying                       A memory object has operations to set and query the
+            Client                                     ACL
+                                  object                         length, and an operation to bind to the object (see Section
+           Domain                                                8.2). There are no page-in/out or read/write operations on
+                                 front object                    memory objects. The Spring file interface provides file
+           Object                access = rw                     read/write operations (but not page-in/page-out opera-
+          reference            principal = kgh                   tions). Separating the memory abstraction from the inter-
+                                                                 face that provides the paging operations is a feature of the
+                                                                 Spring virtual memory system that we found very useful
+                                                                 in implementing our file system [13]. This separation
+                      Door                                       enables the memory object server to be in a different
+                                          Nucleus
+
+    FIGURE 7.     A client accessing a secure object                                                          address space
+
+
+
+
+For example, say that user X has a file object foo, which
+has a restricted access control list specifying that only X is
+allowed to read the file. However X would like to print the
+file on a printserver P. P is not on the ACL for foo, so it          memory objects
+would not normally have access to foo’s data. However, X
+can obtain an object reference that will act as a software           FIGURE 8.     User’s view of address spaces
+capability, encapsulating the read access that X is allowed          An address space is a linear range of addresses with regions
+to foo. X can then pass that object reference on to the              mapped to memory objects. Each region is mapped to a (part
+printserver P and P will be able to read the file.                   of) a memory object. Each page within a mapped region may
+                                                                     be mapped with read/write/execute permissions and may be
+                                                                     locked in memory.
+machine than the pager object server which provides the
+contents of the memory object.                                           Pager 1                      Pager 2
+                                                                     pager      pager          pager       pager
+                                                                     object     object         object      object
+8.2   Cache and Pager Objects
+In order to allow data to be coherently cached by more
+than one VMM, there needs to be a two-way connection
+between the VMM and an external pager (e.g., a file                  cache       cache       cache                  cache
+server). The VMM needs a connection to the external                  object      object      object                 object
+pager to allow the VMM to obtain and write out data, and
+the external pager needs a connection to the VMM to                           VMM 1                             VMM 2
+allow the provider to perform coherency actions (e.g., to
+invalidate data cached by the VMM). We represent this          FIGURE 9.      Pager-cache object example
+two-way connection as two objects.                             A VMM and an external pager have a two-way pager-cache
+The VMM obtains data by invoking a pager object imple-         object connection. In this example, Pager 1 is the pager for
+mented by an external pager, and an external pager per-        two distinct memory objects cached by VMM 1, so there
+                                                               are two pager-cache object connections, one for each mem-
+forms coherency actions by invoking a cache object
+                                                               ory object. Pager 2 is the pager for a single memory object
+implemented by a VMM.                                          cached at both VMM 1 and VMM 2, so there is a pager-
+When a VMM is asked to map a memory object into an             cache object connection between Pager 2 and each of the
+address space, the VMM must be able to obtain a pager          VMMs.
+object to allow it to manipulate the object’s data. Associ-
+                                                              bility of the external pager implementing the memory
+ated with this pager object must be a cache object that the
+                                                              object. The coherency protocol is not specified by the
+external pager can use for coherency.
+                                                              architecture—external pagers are free to implement what-
+A VMM wants to ensure that two equivalent memory              ever coherency protocol they wish. The cache and pager
+objects (e.g., two memory objects that refer to the same      object interfaces provide basic building blocks for con-
+file on disk), when mapped, will share the data cached by     structing the coherency protocol. Our current external
+the VMM. To do this, the VMM invokes a bind operation         pager implementations use a single-writer/multiple-reader
+on the memory object. The bind operation returns a cach-      per-block coherency protocol [12, 13].
+e_rights object, which is always implemented by the
+VMM itself. If two equivalent memory objects are
+mapped, then the same cache_rights object will be             9      File System
+returned. The VMM uses the returned object to find a
+pager-cache object connection to use, and to find any         The file system architecture defines file objects that are
+pages cached for the memory object.                           implemented by file servers. The file object interface
+                                                              inherits from the memory object and io interfaces. There-
+When a memory object receives a bind operation from a
+                                                              fore, file objects may be memory mapped (because they
+VMM, it must determine if there is already a pager-cache
+                                                              are also memory objects), and they can also be accessed
+object connection for the memory object at the given
+                                                              using the read/write operations of the io interface.
+VMM. If there is no connection, the external pager imple-
+menting the memory object contacts the VMM, and the           Spring includes file systems giving access to files on local
+VMM and the external pager exchange pager, cache, and         disks as well as over the network. Each file system uses
+cache_rights objects. Once the connection is set up, the      the Spring security and naming architectures to provide
+memory object returns the appropriate cache_rights object     access control and directory services.
+to the VMM.                                                   A Spring file system typically consists of several layered
+Typically, there are many pager-cache object channels         file servers [5]. The pager-cache object paradigm is used
+between a given pager and a VMM (see Figure 9 for an          by file systems as a general layering mechanism between
+example).                                                     the different file servers and virtual memory managers.
+                                                              Among other things, this has enabled us to provide per-
+                                                              machine caching of data and attributes to decrease the
+8.3   Maintaining Data Coherency                              number of network accesses for remote files.
+The task of maintaining data coherency between different
+VMMs that are caching a memory object is the responsi-
+9.1    File Server Implementations                             In contrast, Spring provides a uniform name service [17].
+                                                               In principle, any object can be bound to any name. This
+The Spring Storage File System (SFS) is implemented
+                                                               applies whether the object is local to a process, local to a
+using two layers as shown in Figure 10.
+                                                               machine, or resident elsewhere on the network, whether it
+                                                               is transient or persistent; whether it is a standard system
+              SFS                                              object, a process environment object, or a user specific
+                    Coherency layer          All files are     object. Name services and name spaces do not need to be
+                                             exported by
+                                             coherency         segregated by object type. Different name spaces can be
+ Disk drive            Disk layer            layer             composed to create new name spaces.
+                                                               By using a common name service, we avoid burdening cli-
+                                                               ents with the requirement to use different names or differ-
+       FIGURE 10. Spring SFS                                   ent name services depending on what objects are being
+                                                               accessed. Similarly, we avoid burdening all object imple-
+The base disk layer implements an on-disk Unix compati-        mentations with constructing name spaces—the name ser-
+ble file system. It does not, however, implement a coher-      vice provides critical support to integrate new kinds of
+ency algorithm. Instead, an instance of the coherency file     objects and new implementations of existing objects into
+server is stacked on the disk layer, and all files are         Spring. Object implementations maintain control over the
+exported to clients via the coherency layer.                   representation and storage of their objects, who is allowed
+The coherency layer implements a per-block multiple-           access to them, and other crucial details. Although Spring
+reader/single-writer coherency protocol. Among other           has a common name service and naming interface, the
+things, the implementation keeps track of the state of each    architecture allows different name servers with different
+file block (read-only vs. read-write) and of each cache        implementation properties to be used as part of the name
+object that holds the block at any point in time. Coherency    service.
+actions are triggered depending on the state and the cur-      The name service allows an object to be associated with a
+rent request using a single-writer/multiple-reader per-        name in a context, an object that contains a set of name–
+block coherency algorithm. The coherency layer also            to–object associations, or name bindings, and which is
+caches file attributes.                                        used by clients to perform all naming operations. An
+The Caching File System (CFS) is an attribute-caching file     object may be bound to several different names in possibly
+system. Its main function is to interpose itself between       several different contexts at the same time. Indeed, an
+remote files and local clients when they are passed to the     object need not be bound to a name at all.
+local machine so as to increase the efficiency of many         By binding contexts in other contexts we can create a
+operations. Once interposed on, all calls to remote files      naming graph (informally called a name space), a directed
+end up being diverted to the local CFS.                        graph with nodes and labeled edges, where the nodes with
+An interesting aspect of CFS is the manner in which it         outgoing edges are contexts.
+dynamically interposes on individual remote DFS files. A       Unlike naming in traditional systems, Spring contexts and
+caching subcontract is used to contact the local CFS in the    name spaces are first class objects: they can be accessed
+process of unmarshalling file objects. When CFS is asked       and manipulated directly. For example, two applications
+to interpose on a file, it becomes a cache manager for the     can exchange and share a private name space. Tradition-
+remote file by invoking the bind operation on the file as      ally, such applications would have had to build their own
+described in Section 8.2.                                      naming facility, or incorporate the private name space into
+                                                               a larger system–wide name space, and access it indirectly
+                                                               via the root or working context.
+10     Spring Naming                                           Since Spring objects are not persistent by default, naming
+An operating system has various kinds of objects that need     is used to provide persistence [16]. It is expected that
+to be given names, such as users, files, printers, machines,   applications generally will (re)acquire objects from the
+services, etc. Most operating systems provide several          name service. If the part of the name space in which the
+name services, each tailored for a specific kind of object.    object is found is persistent, then the object will have been
+Such type specific name services are usually built into the    made persistent also.
+subsystem implementing those objects. For example, file        A Spring name server managing a persistent part of a
+systems typically implement their own naming service for       name space converts objects to and from their persistent
+naming files (directories).
+form (much like the UNIX file system, which converts              exported via Spring objects implemented by a UNIX pro-
+open files to and from their persistent form). However,           cess server (in a separate domain). See Figure 4.
+since naming is a generic service for an open–ended col-
+                                                                  The UNIX process server implements functions that are
+lection of object types, a context cannot be expected to
+                                                                  not part of the Spring base system and which cannot reside
+know how to make each object type persistent. Spring
+                                                                  in libue.so due to security reasons.
+object managers have ultimate control of the (hidden)
+states of their objects. Therefore we provide a general
+interface between object managers and the name service            11.1 Libue
+that allows persistence to be integrated into the name ser-
+                                                                  When a program is execed, libue.so is dynamically linked
+vice while allowing the implementation to control how its
+                                                                  with the application image in place of libc, thus enabling
+(hidden) objects’ states are mapped to and from a persis-
+                                                                  the application to run unchanged.
+tent representation.
+                                                                  The libue.so library encapsulates some of the functionality
+Because the name service is the most common mechanism
+                                                                  that normally resides in a monolithic UNIX kernel. In par-
+for acquiring objects, it is a natural place for access control
+                                                                  ticular, it delivers signals forwarded by the UNIX process
+and authentication. Since the name service must provide
+                                                                  server, and keeps track of the association between UNIX
+these functions to protect the name space, it is reasonable
+                                                                  file descriptor numbers (fd’s) and Spring file objects.
+to use the same mechanism to protect named objects. The
+naming architecture allows object managers to determine           For each UNIX system call, we implemented a library
+how much to trust a particular name server, and an object         stub. In general, there are three kinds of calls:
+manager is permitted to forego the convenience and                1. Calls that simply take as an argument an fd, parse any
+implement its own access control and authentication if it              passed flags, and invoke a Spring service (e.g., read,
+wishes. Similarly, name servers can choose to trust or not             write, and mmap). Most file system and virtual mem-
+to trust other name servers.                                           ory operations fall in this category.
+The Spring name service does not prescribe particular             2. Calls that eventually call a UNIX-specific service in
+naming policies; different policies can be built on the top.           the UNIX process server. Examples include pipe and
+Our current policy is to provide a combination of system-              kill.
+supplied shared name spaces, per-user name spaces, and
+                                                                  3. Calls that change the local state without calling any
+per-domain name spaces that can be customized by attach-               other domain. Dup, parts of fcntl, and many signal han-
+ing name spaces from different parts of the distributed                dling calls fall into this category.
+environment.
+By default, at start-up each domain is passed from its par-
+ent a private domain name space, which incorporates the           11.2 UNIX Process Server
+user and system name spaces. A domain can acquire other           The UNIX process server maintains the parent-child rela-
+name spaces and contexts if it desires.                           tionship among processes, keeps track of process and
+                                                                  group ids, provides sockets and pipes, and forwards sig-
+                                                                  nals.
+11     UNIX Emulation                                             The UNIX process server is involved in forking and exec-
+Spring can run Solaris binaries using the UNIX emulation          ing of new processes. It is also involved in forwarding (but
+subsystem [6]. It is implemented entirely by user-level           not delivering signals). Since it keeps track of process and
+code, employs no actual UNIX code, and provides binary            group ids, it enforces UNIX security semantics when ser-
+compatibility for a large set of Solaris programs. The sub-       vicing requests from client processes.
+system uses services already provided by the underlying
+Spring system and only implements UNIX-specific fea-
+tures that have no counterpart in Spring (e.g., signals). No      12      Conclusions
+modifications to the base Spring system were necessary to
+                                                                  The Spring project chose to build a different operating sys-
+implement Solaris emulation.
+                                                                  tem, one based on the notions of strong interfaces, open-
+The implementation consists of two components: a shared           ness and extensibility and designed to be distributed and
+library (libue.so) that is dynamically linked with each           suited to multiprocessors. Using object-oriented ideas and
+Solaris binary, and a set of UNIX-specific services               strong interfaces has been a natural fit, with a number of
+                                                                  benefits:
+• A standardized basis for open, distributed object sys-             Proc. Winter 1993 USENIX Conference, pp. 469-479, Janu-
+     tems via the Interface Definition Language and a sim-           ary 1993.
+     ple client model for objects                                 [7] Yousef A. Khalidi and Michael N. Nelson, “The Spring Vir-
+•    Easy distributed services and applications                       tual Memory System,” Sun Microsystems Laboratories
+                                                                      Technical Report SMLI-93-9, March 1993.
+•    Readily extensible system facilities, such as file sys-
+                                                                  [8] Yousef A. Khalidi and Michael N. Nelson, “A Flexible Exter-
+     tems and name services                                           nal Paging Interface,” Proc. 2nd Workshop on Microkernels
+•    Unity of architecture together with a wide range of              and Other Kernel Architectures, September 1993.
+     implementation opportunities as in virtual memory            [9] Michael N. Nelson and Graham Hamilton, “High Perfor-
+     management, naming, subcontract, and serverless                  mance Dynamic Linking Through Caching,” Proc. 1993
+     objects                                                          Summer USENIX Conference, pp. 253-266, June 1993.
+•    Highly efficient inter-address space object invocation       [10] Michael N. Nelson, Graham Hamilton, and Yousef A. Kha-
+     in support of a microkernel-based architecture.                  lidi, “Caching in an Object-Oriented System,” Proc. 3rd
+                                                                      International Workshop on Object Orientation in Operating
+Finally, designing in security mechanisms from the start              Systems (I-WOOOS III), pp. 95-106, December 1993.
+has provided a system that can support a wide range of            [11] Michael N. Nelson and Yousef A. Khalidi, “Generic Support
+secure mechanisms in a networked environment, from the                for Caching and Disconnected Operation,” Proc. 4th Work-
+most relaxed to the most secure.                                      shop on Workstation Operating Systems (WWOS-IV), pp.
+                                                                      61-65, October 1993.
+                                                                  [12] Michael N. Nelson, Yousef A. Khalidi, and Peter W.
+13      References                                                   Madany, “Experience Building a File System on a Highly
+                                                                     Modular Operating System,” Proc. 4th Symposium on Expe-
+[1] Graham Hamilton and Panos Kougiouris, “The Spring                riences with Distributed and Multiprocessor Systems
+    Nucleus: A Microkernel for Objects,” Proc. 1993 Summer           (SEDMS IV), September 1993.
+    USENIX Conference, pp. 147-160, June 1993.                    [13] Michael N. Nelson, Yousef A. Khalidi, and Peter W.
+[2] Graham Hamilton, Michael L. Powell, and James G. Mitch-          Madany, “The Spring File System,” Sun Microsystems Lab-
+    ell, “Subcontract: A Flexible Base for Distributed Program-      oratories Technical Report SMLI-93-10, March 1993.
+    ming,” Proc. 14th ACM Symposium on Operating Systems          [14] Michael N. Nelson and Sanjay R. Radia, “A Uniform Name
+    Principles, pp. 69-79, December 1993.                             Service for Spring’s Unix Environment,” Proc. Winter 1994
+[3] Graham Hamilton and Sanjay Radia, “Using Interface Inher-         USENIX Conference, Jan. 1994.
+    itance to Address Problems in System Software Evolution,”     [15] Object Management Group, “Common Object Request Bro-
+    Proc. ACM Workshop on Interface Definition Languages,             ker Architecture and Specification,” OMG Document
+    January 1994.                                                     91.12.1, December 1991.
+[4] Peter B. Kessler, “A Client-Side Stub Interpreter,” Proc.     [16] Sanjay Radia, Peter Madany, and Michael L. Powell, “Per-
+    ACM Workshop on Interface Definition Languages, January           sistence in the Spring System,” Proc. 3rd International Work-
+    1994.                                                             shop on Object Orientation in Operating Systems (I-
+[5] Yousef A. Khalidi and Michael N. Nelson, “Extensible File         WOOOS III), pp. 12-23, December 1993.
+    Systems in Spring,” Proc. 14th ACM Symposium on Operat-       [17] Sanjay R. Radia, Michael N. Nelson, and Michael L. Pow-
+    ing Systems Principles, pp. 1-14, December 1993.                  ell, “The Spring Name Service,” Sun Microsystems Labora-
+[6] Yousef A. Khalidi and Michael N. Nelson, “An Implementa-          tories Technical Report SMLI-93-16, October 1993.
+    tion of UNIX on an Object-oriented Operating System,”
+

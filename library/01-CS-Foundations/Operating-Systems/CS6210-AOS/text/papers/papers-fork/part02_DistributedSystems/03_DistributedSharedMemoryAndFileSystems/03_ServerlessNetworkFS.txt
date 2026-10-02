@@ -1,0 +1,1448 @@
+                                                  Serverless Network File Systems
+                                  Thomas E. Anderson, Michael D. Dahlin, Jeanna M. Neefe,
+                                  David A. Patterson, Drew S. Roselli, and Randolph Y. Wang
+                                                  Computer Science Division
+                                             University of California at Berkeley
+
+
+                                Abstract                                                The recent introduction of switched local area networks
+In this paper, we propose a new paradigm for network file                           such as ATM or Myrinet [Bode95] enables serverlessness by
+system design, serverless network file systems. While                               providing aggregate bandwidth that scales with the number of
+traditional network file systems rely on a central server                           machines on the network. In contrast, shared media networks
+machine, a serverless system utilizes workstations                                  such as Ethernet or FDDI allow only one client or server to
+cooperating as peers to provide all file system services. Any                       transmit at a time. In addition, the move towards low latency
+machine in the system can store, cache, or control any block                        network interfaces [vE92, Basu95] enables closer
+of data. Our approach uses this location independence, in                           cooperation between machines than has been possible in the
+combination with fast local area networks, to provide better                        past. The result is that a LAN can be used as an I/O
+performance and scalability than traditional file systems.                          backplane, harnessing physically distributed processors,
+Further, because any machine in the system can assume the                           memory, and disks into a single system.
+responsibilities of a failed component, our serverless design                           Next generation networks not only enable serverlessness,
+also provides high availability via redundant data storage. To                      they require it by allowing applications to place increasing
+demonstrate our approach, we have implemented a prototype                           demands on the file system. The I/O demands of traditional
+serverless network file system called xFS. Preliminary                              applications have been increasing over time [Bake91]; new
+performance measurements suggest that our architecture                              applications enabled by fast networks — such as multimedia,
+achieves its goal of scalability. For instance, in a 32-node                        process migration, and parallel processing — will further
+xFS system with 32 active clients, each client receives nearly                      pressure file systems to provide increased performance. For
+as much read or write throughput as it would see if it were                         instance, continuous media workloads will increase file
+the only active client.                                                             system demands; even a few workstations simultaneously
+                                                                                    running video applications would swamp a traditional central
+1. Introduction
+                                                                                    server [Rash94]. Coordinated Networks of Workstations
+    A serverless network file system distributes storage,                           (NOWs) allow users to migrate jobs among many machines
+cache, and control over cooperating workstations. This                              and also permit networked workstations to run parallel jobs
+approach contrasts with traditional file systems such as                            [Doug91, Litz92, Ande95]. By increasing the peak
+Netware [Majo94], NFS [Sand85], Andrew [Howa88], and                                processing power available to users, NOWs increase peak
+Sprite [Nels88] where a central server machine stores all data                      demands on the file system [Cyph93].
+and satisfies all client cache misses. Such a central server is
+                                                                                        Unfortunately, current centralized file system designs
+both a performance and reliability bottleneck. A serverless
+                                                                                    fundamentally limit performance and availability since all
+system, on the other hand, distributes control processing and
+                                                                                    read misses and all disk writes go through the central server.
+data storage to achieve scalable high performance, migrates
+                                                                                    To address such performance limitations, users resort to
+the responsibilities of failed components to the remaining
+                                                                                    costly schemes to try to scale these fundamentally unscalable
+machines to provide high availability, and scales gracefully
+                                                                                    file systems. Some installations rely on specialized server
+to simplify system management.
+                                                                                    machines configured with multiple processors, I/O channels,
+    Three factors motivate our work on serverless network                           and I/O processors. Alas, such machines cost significantly
+file systems: the opportunity provided by fast switched                             more than desktop workstations for a given amount of
+LANs, the expanding demands of users, and the fundamental                           computing or I/O capacity. Many installations also attempt to
+limitations of central server systems.                                              achieve scalability by distributing a file system among
+                                                                                    multiple servers by partitioning the directory tree across
+
+
+     Copyright © 1995 by the Association for Computing Machinery, Inc. Permission to make digital or hard copies of part or all of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed for profit or direct commercial advantage and that copies show this notice
+on the first page or initial screen of a display along with the full citation. Copyrights for components of this work owned by others than ACM must be honored.
+Abstracting with credit is permitted. To copy otherwise, to republish, to post on servers, to redistribute to lists, or to use any component of this work in other
+works, requires prior specific permission and/or a fee. Permissions may be requested from Publications Dept., ACM Inc., 1515 Broadway, New York, NY 10036
+USA, fax +1 (212) 869-0481, or <permissions@acm.org>.
+     Versions of this work appear in the 15th ACM Symposium on Operating Systems Principles (December 1995) and the ACM Transactions on Computer
+Systems (February 1996).
+
+
+                                                                                1
+multiple mount points. This approach only moderately                    instance, NOW systems already provide high-speed
+improves scalability because its coarse distribution often              networking and trust to run parallel and distributed jobs.
+results in hot spots when the partitioning allocates heavily            Similarly, xFS could be used within a group or department
+used files and directory trees to a single server [Wolf89]. It is       where fast LANs connect machines and where uniform
+also expensive, since it requires the (human) system manager            system administration and physical building security allow
+to effectively become part of the file system — moving users,           machines to trust one another. A file system based on
+volumes, and disks among servers to balance load. Finally,              serverless principles would also be appropriate for “scalable
+Andrew [Howa88] attempts to improve scalability by                      server” architectures currently being researched [Kubi93,
+caching data on client disks. Although this made sense on an            Kusk94]. Untrusted clients can also benefit from the scalable,
+Ethernet, on today’s fast LANs fetching data from local disk            reliable, and cost-effective file service provided by a core of
+can be an order of magnitude slower than from server                    xFS machines via a more restrictive protocol such as NFS.
+memory or remote striped disk.                                              We have built a prototype that demonstrates most of
+     Similarly, a central server represents a single point of           xFS’s key features, including distributed management,
+failure, requiring server replication [Walk83, Kaza89,                  cooperative caching, and network disk striping with parity
+Pope90, Lisk91, Kist92, Birr93] for high availability.                  and multiple groups. As Section 7 details, however, several
+Replication increases the cost and complexity of central                pieces of implementation remain to be done; most notably,
+servers, and can also increase latency on writes since the              we must still implement the cleaner and much of the recovery
+system must replicate data at multiple servers.                         and dynamic reconfiguration code. The results in this paper
+     In contrast to central server designs, our objective is to         should thus be viewed as evidence that the serverless
+build a truly distributed network file system — one with no             approach is promising, not as “proof” that it will succeed. We
+central bottleneck. We have designed and implemented xFS,               present both simulation results of the xFS design and a few
+a prototype serverless network file system, to investigate this         preliminary measurements of the prototype. Because the
+goal. xFS illustrates serverless design principles in three             prototype is largely untuned, a single xFS client’s
+ways. First, xFS dynamically distributes control processing             performance is slightly worse than that of a single NFS client;
+across the system on a per-file granularity by utilizing a new          we are currently working to improve single-client
+serverless management scheme. Second, xFS distributes its               performance to allow one xFS client to significantly
+data storage across storage server disks by implementing a              outperform one NFS client by reading from or writing to the
+software RAID [Patt88, Chen94] using log-based network                  network-striped disks at its full network bandwidth.
+striping similar to Zebra’s [Hart95]. Finally, xFS eliminates           Nonetheless, the prototype does demonstrate remarkable
+central server caching by taking advantage of cooperative               scalability. For instance, in a 32 node xFS system with 32
+caching [Leff91, Dahl94b] to harvest portions of client                 clients, each client receives nearly as much read or write
+memory as a large, global file cache.                                   bandwidth as it would see if it were the only active client.
+     This paper makes two sets of contributions. First, xFS                 The rest of this paper discusses these issues in more detail.
+synthesizes a number of recent innovations that, taken                  Section 2 provides an overview of recent research results
+together, provide a basis for serverless file system design.            exploited in the xFS design. Section 3 explains how xFS
+xFS relies on previous work in areas such as scalable cache             distributes its data, metadata, and control. Section 4 describes
+consistency (DASH [Leno90] and Alewife [Chai91]),                       xFS’s distributed log cleaner, Section 5 outlines xFS’s
+cooperative caching, disk striping (RAID and Zebra), and log            approach to high availability, and Section 6 addresses the
+structured file systems (Sprite LFS [Rose92] and BSD LFS                issue of security and describes how xFS could be used in a
+[Selt93]). Second, in addition to borrowing techniques                  mixed security environment. We describe our prototype in
+developed in other projects, we have refined them to work               Section 7, including initial performance measurements.
+well in our serverless system. For instance, we have                    Section 8 describes related work, and Section 9 summarizes
+transformed DASH’s scalable cache consistency approach                  our conclusions.
+into a more general, distributed control system that is also            2. Background
+fault tolerant. We have also improved upon Zebra to
+eliminate bottlenecks in its design by using distributed                    xFS builds upon several recent and ongoing research
+management, parallel cleaning, and subsets of storage servers           efforts to achieve our goal of distributing all aspects of file
+called stripe groups. Finally, we have actually implemented             service across the network. xFS’s network disk storage
+cooperative caching, building on prior simulation results.              exploits the high performance and availability of Redundant
+                                                                        Arrays of Inexpensive Disks (RAIDs). We organize this
+     The primary limitation of our serverless approach is that          storage in a log structure as in the Sprite and BSD Log-
+it is only appropriate in a restricted environment — among              structured File Systems (LFS), largely because Zebra
+machines that communicate over a fast network and that trust            demonstrated how to exploit the synergy between RAID and
+one another’s kernels to enforce security. However, we                  LFS to provide high performance, reliable writes to disks that
+expect such environments to be common in the future. For                are distributed across a network. To distribute control across
+
+
+
+                                                                    2
+the network, xFS draws inspiration from several                          (FFS) [McKu84], to store pointers to the system’s data
+multiprocessor cache consistency designs. Finally, since xFS             blocks. However, where FFS’s inodes reside in fixed
+has evolved from our initial proposal [Wang93], we describe              locations, LFS’s inodes move to the end of the log each time
+the relationship of the design presented here to previous                they are modified. When LFS writes a file’s data block,
+versions of the xFS design.                                              moving it to the end of the log, it updates the file’s inode to
+                                                                         point to the new location of the data block; it then writes the
+2.1. RAID                                                                modified inode to the end of the log as well. LFS locates the
+    xFS exploits RAID-style disk striping to provide high                mobile inodes by adding a level of indirection, called an
+performance and highly available disk storage [Patt88,                   imap. The imap contains the current log pointers to the
+Chen94]. A RAID partitions a stripe of data into N-1 data                system’s inodes; LFS stores the imap in memory and
+blocks and a parity block — the exclusive-OR of the                      periodically checkpoints it to disk.
+corresponding bits of the data blocks. It stores each data and               These checkpoints form a basis for LFS’s efficient
+parity block on a different disk. The parallelism of a RAID’s            recovery procedure. After a crash, LFS reads the last
+multiple disks provides high bandwidth, while its parity                 checkpoint in the log and then rolls forward, reading the later
+storage provides fault tolerance — it can reconstruct the                segments in the log to find the new location of inodes that
+contents of a failed disk by taking the exclusive-OR of the              were written since the last checkpoint. When recovery
+remaining data blocks and the parity block. xFS uses single              completes, the imap contains pointers to all of the system’s
+parity disk striping to achieve the same benefits; in the future         inodes, and the inodes contain pointers to all of the data
+we plan to cope with multiple workstation or disk failures               blocks.
+using multiple parity blocks [Blau94].
+                                                                             Another important aspect of LFS is its log cleaner that
+    RAIDs suffer from two limitations. First, the overhead of            creates free disk space for new log segments using a form of
+parity management can hurt performance for small writes; if              generational garbage collection. When the system overwrites
+the system does not simultaneously overwrite all N-1 blocks              a block, it adds the new version of the block to the newest log
+of a stripe, it must first read the old parity and some of the old       segment, creating a “hole” in the segment where the data used
+data from the disks to compute the new parity. Unfortunately,            to reside. The cleaner coalesces old, partially empty segments
+small writes are common in many environments [Bake91],                   into a smaller number of full segments to create contiguous
+and larger caches increase the percentage of writes in disk              space in which to store new segments.
+workload mixes over time. We expect cooperative
+                                                                             The overhead associated with log cleaning is the primary
+caching — using workstation memory as a global cache — to
+                                                                         drawback of LFS. Although Rosenblum’s original
+further this workload trend. A second drawback of
+                                                                         measurements found relatively low cleaner overheads, even a
+commercially available hardware RAID systems is that they
+                                                                         small overhead can make the cleaner a bottleneck in a
+are significantly more expensive than non-RAID commodity
+                                                                         distributed environment. Further, some workloads, such as
+disks because the commercial RAIDs add special-purpose
+                                                                         transaction processing, incur larger cleaning overheads
+hardware to compute parity.
+                                                                         [Selt93, Selt95].
+2.2. LFS
+                                                                         2.3. Zebra
+     xFS implements log-structured storage based on the
+                                                                             Zebra [Hart95] provides a way to combine LFS and RAID
+Sprite and BSD LFS prototypes [Rose92, Selt93] because
+                                                                         so that both work well in a distributed environment. Zebra
+this approach provides high-performance writes, simple
+                                                                         uses a software RAID on commodity hardware (workstation,
+recovery, and a flexible method to locate file data stored on
+                                                                         disks, and networks) to address RAID’s cost disadvantage,
+disk. LFS addresses the RAID small write problem by
+                                                                         and LFS’s batched writes provide efficient access to a
+buffering writes in memory and then committing them to disk
+                                                                         network RAID. Further, the reliability of both LFS and RAID
+in large, contiguous, fixed-sized groups called log segments;
+                                                                         makes it feasible to distribute data storage across a network.
+it threads these segments on disk to create a logical append-
+only log of file system modifications. When used with a                      LFS’s solution to the small write problem is particularly
+RAID, each segment of the log spans a RAID stripe and is                 important for Zebra’s network striping since reading old data
+committed as a unit to avoid the need to recompute parity.               to recalculate RAID parity would be a network operation for
+LFS also simplifies failure recovery because all recent                  Zebra. As Figure 1 illustrates, each Zebra client coalesces its
+modifications are located near the end of the log.                       writes into a private per-client log. It commits the log to the
+                                                                         disks using fixed-sized log segments, each made up of several
+     Although log-based storage simplifies writes, it
+                                                                         log fragments that it sends to different storage server disks
+potentially complicates reads because any block could be
+                                                                         over the LAN. Log-based striping allows clients to efficiently
+located anywhere in the log, depending on when it was
+                                                                         calculate parity fragments entirely as a local operation, and
+written. LFS’s solution to this problem provides a general
+                                                                         then store them on an additional storage server to provide
+mechanism to handle location-independent data storage. LFS
+                                                                         high data availability.
+uses per-file inodes, similar to those of the Fast File System
+
+
+
+                                                                     3
+    Zebra’s log-structured architecture significantly                          Unfortunately, the fixed mapping from physical memory
+simplifies its failure recovery. Like LFS, Zebra provides                  addresses to consistency managers makes this approach
+efficient recovery using checkpoint and roll forward. To roll              unsuitable for file systems. Our goal is graceful recovery and
+the log forward, Zebra relies on deltas stored in the log. Each            load rebalancing whenever the number of machines in xFS
+delta describes a modification to a file system block,                     changes; such reconfiguration occurs when a machine
+including the ID of the modified block and pointers to the old             crashes or when a new machine joins xFS. Further, as we
+and new versions of the block, to allow the system to replay               show in Section 3.2.4, by directly controlling which
+the modification during recovery. Deltas greatly simplify                  machines manage which data, we can improve locality and
+recovery by providing an atomic commit for actions that                    reduce network communication.
+modify state located on multiple machines: each delta
+encapsulates a set of changes to file system state that must               2.5. Previous xFS Work
+occur as a unit.                                                               The design of xFS has evolved considerably since our
+    Although Zebra points the way towards serverlessness,                  original proposal [Wang93, Dahl94a]. The original design
+several factors limit Zebra’s scalability. First, a single file            stored all system data in client disk caches and managed
+manager tracks where clients store data blocks in the log; the             cache consistency using a hierarchy of metadata servers
+manager also handles cache consistency operations. Second,                 rooted at a central server. Our new implementation eliminates
+Zebra, like LFS, relies on a single cleaner to create empty                client disk caching in favor of network striping to take
+segments. Finally, Zebra stripes each segment to all of the                advantage of high speed, switched LANs. We still believe
+system’s storage servers, limiting the maximum number of                   that the aggressive caching of the earlier design would work
+storage servers that Zebra can use efficiently.                            well under different technology assumptions; in particular, its
+                                                                           efficient use of the network makes it well-suited for both
+2.4. Multiprocessor Cache Consistency                                      wireless and wide area network use. Moreover, our new
+    Network file systems resemble multiprocessors in that                  design eliminates the central management server in favor of a
+both provide a uniform view of storage across the system,                  distributed metadata manager to provide better scalability,
+requiring both to track where blocks are cached. This                      locality, and availability.
+information allows them to maintain cache consistency by                       We have also previously examined cooperative
+invalidating stale cached copies. Multiprocessors such as                  caching — using client memory as a global file cache — via
+DASH [Leno90] and Alewife [Chai91] scalably distribute                     simulation [Dahl94b] and therefore focus only on the issues
+this task by dividing the system’s physical memory evenly                  raised by integrating cooperative caching with the rest of the
+among processors; each processor manages the cache                         serverless system.
+consistency state for its own physical memory locations.1
+                                                                           3. Serverless File Service
+                                                                               The RAID, LFS, Zebra, and multiprocessor cache
+                                                                           consistency work discussed in the previous section leaves
+                            Client Memories                                three basic problems unsolved. First, we need scalable,
+                                                                           distributed metadata and cache consistency management,
+        One Client’s Write Log             One Client’s Write Log          along with enough flexibility to dynamically reconfigure
+           Log Segment                        Log Segment
+                                                                           responsibilities after failures. Second, the system must
+           1    2       3    ...              A    B      C   ...          provide a scalable way to subset storage servers into groups
+  Log Fragments          Parity       Log Fragments         Parity         to provide efficient storage. Finally, a log-based system must
+                        Fragment                          Fragment
+                                                                           provide scalable log cleaning.
+    1      2        3                  A      B       C
+                              1⊗2⊗3
+                                                                               This section describes the xFS design as it relates to the
+                                                               A⊗B⊗C
+                                                                           first two problems. Section 3.1 provides an overview of how
+                              Network                                      xFS distributes its key data structures. Section 3.2 then
+                                                                           provides examples of how the system as a whole functions for
+                                                                           several important operations. This entire section disregards
+                    1          2       3                                   several important details necessary to make the design
+                                                                           practical; in particular, we defer discussion of log cleaning,
+                  A           B        C
+                                                                           recovery from failures, and security until Sections 4
+                                                                           through 6.
+                        Storage Server Disks
+ Figure 1. Log-based striping used by Zebra and xFS. Each                        1. In the context of scalable multiprocessor consistency, this state is
+ client writes its new file data into a single append-only log and         referred to as a directory. We avoid this terminology to prevent confusion
+ stripes this log across the storage servers. Clients compute parity       with file system directories that provide a hierarchical organization of file
+ for segments, not for individual files.                                   names.
+
+
+
+
+                                                                       4
+3.1. Metadata and Data Distribution                                               allows each manager to locate where its files are stored in the
+                                                                                  on-disk log. File directories serve the same purpose in xFS as
+    The xFS design philosophy can be summed up with the
+                                                                                  in a standard UNIX file system, providing a mapping from a
+phrase, “anything, anywhere.” All data, metadata, and control
+                                                                                  human readable name to a metadata locator called an index
+can be located anywhere in the system and can be
+                                                                                  number. Finally, the stripe group map provides mappings
+dynamically migrated during operation. We exploit this
+                                                                                  from segment identifiers embedded in disk log addresses to
+location independence to improve performance by taking
+                                                                                  the set of physical machines storing the segments. The rest of
+advantage of all of the system’s resources — CPUs, DRAM,
+                                                                                  this subsection discusses these four data structures before
+and disks — to distribute load and increase locality. Further,
+                                                                                  giving an example of their use in file reads and writes. For
+we use location independence to provide high availability by
+                                                                                  reference, Table 1 provides a summary of these and other key
+allowing any machine to take over the responsibilities of a
+                                                                                  xFS data structures. Figure 3 in Section 3.2.1 illustrates how
+failed component after recovering its state from the redundant
+                                                                                  these components work together.
+log-structured storage system.
+    In a typical centralized system, the central server has four                  3.1.1. The Manager Map
+main tasks:                                                                           xFS distributes management responsibilities according to
+ 1. The server stores all of the system’s data blocks on its                      a globally replicated manager map. A client uses this
+    local disks.                                                                  mapping to locate a file’s manager from the file’s index
+                                                                                  number by extracting some of the index number’s bits and
+ 2. The server manages disk location metadata that indicates
+    where on disk the system has stored each data block.                          using them as an index into the manager map. The map itself
+                                                                                  is simply a table that indicates which physical machines
+ 3. The server maintains a central cache of data blocks in its                    manage which groups of index numbers at any given time.
+    memory to satisfy some client misses without accessing
+                                                                                      This indirection allows xFS to adapt when managers enter
+    its disks.
+                                                                                  or leave the system; the map can also act as a coarse-grained
+ 4. The server manages cache consistency metadata that lists                      load balancing mechanism to split the work of overloaded
+    which clients in the system are caching each block. It                        managers. Where distributed multiprocessor cache
+    uses this metadata to invalidate stale data in client                         consistency relies on a fixed mapping from physical
+    caches.2                                                                      addresses to managers, xFS can change the mapping from
+    The xFS system performs the same tasks, but it builds on                      index number to manager by changing the manager map.
+the ideas discussed in Section 2 to distribute this work over                         To support reconfiguration, the manager map should have
+all of the machines in system. To provide scalable control of                     at least an order of magnitude more entries than there are
+disk metadata and cache consistency state, xFS splits                             managers. This rule of thumb allows the system to balance
+management among metadata managers similar to                                     load by assigning roughly equal portions of the map to each
+multiprocessor consistency managers. Unlike multiprocessor
+managers, xFS managers can alter the mapping from files to                            Storage Client      Storage Client        Storage Client
+managers. Similarly, to provide scalable disk storage, xFS                            Server              Server                Server
+uses log-based network striping inspired by Zebra, but it                            Cleaner Manager      Cleaner Manager       Cleaner Manager
+dynamically clusters disks into stripe groups to allow the
+system to scale to large numbers of storage servers. Finally,
+xFS replaces the server cache with cooperative caching that                                                    Network
+forwards data among client caches under the control of the
+managers. In xFS, four types of entities — the clients, storage                                                                           Client
+servers, and managers already mentioned and the cleaners                                                         Client       Client
+discussed in Section 4 — cooperate to provide file service as                                                                            Manager
+                                                                                        Client      Client
+Figure 2 illustrates.                                                                                           Manager      Cleaner     Cleaner
+    The key challenge for xFS is locating data and metadata
+in this dynamically changing, completely distributed system.
+The rest of this subsection examines four key maps used for                                                    Network
+this purpose: the manager map, the imap, file directories, and
+the stripe group map. The manager map allows clients to                                             Storage     Storage       Storage
+determine which manager to contact for a file, and the imap                                         Server       Server       Server
+                                                                                   Figure 2. Two simple xFS installations. In the first, each
+                                                                                   machine acts as a client, storage server, cleaner, and manager,
+      2. Note that the NFS server does not keep caches consistent. Instead         while in the second each node only performs some of those roles.
+NFS relies on clients to verify that a block is current before using it. We        The freedom to configure the system is not complete; managers
+rejected that approach because it sometimes allows clients to observe stale        and cleaners access storage using the client interface, so all
+data when a client tries to read what another client recently wrote.               machines acting as managers or cleaners must also be clients.
+
+
+
+                                                                              5
+      Data Structure                                       Purpose                                                Location                Section
+   Manager Map               Maps file’s index number → manager.                                    Globally replicated.                    3.1.1
+   Imap                      Maps file’s index number → disk log address of file’s index node.      Split among managers.                   3.1.2
+   Index Node                Maps file offset → disk log address of data block.                     In on-disk log at storage servers.      3.1.2
+   Index Number              Key used to locate metadata for a file.                                File directory.                         3.1.3
+   File Directory            Maps file’s name → file’s index number.                                In on-disk log at storage servers.      3.1.3
+   Disk Log Address          Key used to locate blocks on storage server disks. Includes a stripe   Index nodes and the imap.               3.1.4
+                             group identifier, segment ID, and offset within segment.
+   Stripe Group Map          Maps disk log address → list of storage servers.                       Globally replicated.                    3.1.4
+   Cache Consistency State Lists clients caching or holding the write token of each block.          Split among managers.                3.2.1, 3.2.3
+   Segment Utilization State Utilization, modification time of segments.                            Split among clients.                      4
+   S-Files                   On-disk cleaner state for cleaner communication and recovery.          In on-disk log at storage servers.        4
+   I-File                    On-disk copy of imap used for recovery.                                In on-disk log at storage servers.        5
+   Deltas                    Log modifications for recovery roll forward.                           In on-disk log at storage servers.        5
+   Manager Checkpoints       Record manager state for recovery.                                     In on-disk log at storage servers.        5
+
+ Table 1. Summary of key xFS data structures. This table summarizes the purpose of the key xFS data structures. The location column
+ indicates where these structures are located in xFS, and the Section column indicates where in this paper the structure is described.
+
+manager. When a new machine joins the system, xFS can                                The disk storage for each file can be thought of as a tree
+modify the manager map to assign some of the index number                        whose root is the imap entry for the file’s index number and
+space to the new manager by having the original managers                         whose leaves are the data blocks. A file’s imap entry contains
+send the corresponding part of their manager state to the new                    the log address of the file’s index node. xFS index nodes, like
+manager. Section 5 describes how the system reconfigures                         those of LFS and FFS, contain the disk addresses of the file’s
+manager maps. Note that the prototype has not yet                                data blocks; for large files the index node can also contain log
+implemented this dynamic reconfiguration of manager maps.                        addresses of indirect blocks that contain more data block
+    xFS globally replicates the manager map to all of the                        addresses, double indirect blocks that contain addresses of
+managers and all of the clients in the system. This replication                  indirect blocks, and so on.
+allows managers to know their responsibilities, and it allows                    3.1.3. File Directories and Index Numbers
+clients to contact the correct manager directly — with the
+                                                                                     xFS uses the data structures described above to locate a
+same number of network hops as a system with a centralized
+                                                                                 file’s manager given the file’s index number. To determine
+manager. We feel it is reasonable to distribute the manager
+                                                                                 the file’s index number, xFS, like FFS and LFS, uses file
+map globally because it is relatively small (even with
+                                                                                 directories that contain mappings from file names to index
+hundreds of machines, the map would be only tens of
+                                                                                 numbers. xFS stores directories in regular files, allowing a
+kilobytes in size) and because it changes only to correct a load
+                                                                                 client to learn an index number by reading a directory.
+imbalance or when a machine enters or leaves the system.
+                                                                                     In xFS, the index number listed in a directory determines
+    The manager of a file controls two sets of information
+                                                                                 a file’s manager. When a file is created, we choose its index
+about it, cache consistency state and disk location metadata.
+                                                                                 number so that the file’s manager is on the same machine as
+Together, these structures allow the manager to locate all
+                                                                                 the client that creates the file. Section 3.2.4 describes
+copies of the file’s blocks. The manager can thus forward
+                                                                                 simulation results of the effectiveness of this policy in
+client read requests to where the block is stored, and it can
+                                                                                 reducing network communication.
+invalidate stale data when clients write a block. For each
+block, the cache consistency state lists the clients caching the                 3.1.4. The Stripe Group Map
+block or the client that has write ownership of it. The next
+                                                                                     Like Zebra, xFS bases its storage subsystem on simple
+subsection describes the disk metadata.
+                                                                                 storage servers to which clients write log fragments. To
+3.1.2. The Imap                                                                  improve performance and availability when using large
+                                                                                 numbers of storage servers, rather than stripe each segment
+    Managers track not only where file blocks are cached, but
+                                                                                 over all storage servers in the system, xFS implements stripe
+also where in the on-disk log they are stored. xFS uses the
+                                                                                 groups as have been proposed for large RAIDs [Chen94].
+LFS imap to encapsulate disk location metadata; each file’s
+                                                                                 Each stripe group includes a separate subset of the system’s
+index number has an entry in the imap that points to that file’s
+                                                                                 storage servers, and clients write each segment across a stripe
+disk metadata in the log. To make LFS’s imap scale, xFS
+                                                                                 group rather than across all of the system’s storage servers.
+distributes the imap among managers according to the
+                                                                                 xFS uses a globally replicated stripe group map to direct
+manager map so that managers handle the imap entries and
+                                                                                 reads and writes to the appropriate storage servers as the
+cache consistency state of the same files.
+                                                                                 system configuration changes. Like the manager map, xFS
+
+
+                                                                             6
+globally replicates the stripe group map because it is small                   below. When a client writes a segment to a group, it includes
+and seldom changes. The current version of the prototype                       the stripe group’s ID in the segment’s identifier and uses the
+implements reads and writes from multiple stripe groups, but                   map’s list of storage servers to send the data to the correct
+it does not dynamically modify the group map.                                  machines. Later, when it or another client wants to read that
+     Stripe groups are essential to support large numbers of                   segment, it uses the identifier and the stripe group map to
+storage servers for at least four reasons. First, without stripe               locate the storage servers to contact for the data or parity.
+groups, clients would stripe each of their segments over all of                    xFS distinguishes current and obsolete groups to support
+the disks in the system. This organization would require                       reconfiguration. When a storage server enters or leaves the
+clients to send small, inefficient fragments to each of the                    system, xFS changes the map so that each active storage
+many storage servers or to buffer enormous amounts of data                     server belongs to exactly one current stripe group. If this
+per segment so that they could write large fragments to each                   reconfiguration changes the membership of a particular
+storage server. Second, stripe groups match the aggregate                      group, xFS does not delete the group’s old map entry. Instead,
+bandwidth of the groups’ disks to the network bandwidth of                     it marks that entry as “obsolete.” Clients write only to current
+a client, using both resources efficiently; while one client                   stripe groups, but they may read from either current or
+writes at its full network bandwidth to one stripe group,                      obsolete stripe groups. By leaving the obsolete entries in the
+another client can do the same with a different group. Third,                  map, xFS allows clients to read data previously written to the
+by limiting segment size, stripe groups make cleaning more                     groups without first transferring the data from obsolete
+efficient. This efficiency arises because when cleaners extract                groups to current groups. Over time, the cleaner will move
+segments’ live data, they can skip completely empty                            data from obsolete groups to current groups [Hart95]. When
+segments, but they must read partially full segments in their                  the cleaner removes the last block of live data from an
+entirety; large segments linger in the partially-full state                    obsolete group, xFS deletes its entry from the stripe group
+longer than small segments, significantly increasing cleaning                  map.
+costs. Finally, stripe groups greatly improve availability.
+Because each group stores its own parity, the system can                       3.2. System Operation
+survive multiple server failures if they happen to strike                          This section describes how xFS uses the various maps we
+different groups; in a large system with random failures this                  described in the previous section. We first describe how
+is the most likely case. The cost for this improved availability               reads, writes, and cache consistency work and then present
+is a marginal reduction in disk storage and effective                          simulation results examining the issue of locality in the
+bandwidth because the system dedicates one parity server per                   assignment of files to managers.
+group rather than one for the entire system.
+                                                                               3.2.1. Reads and Caching
+     The stripe group map provides several pieces of
+                                                                                  Figure 3 illustrates how xFS reads a block given a file
+information about each group: the group’s ID, the members
+                                                                               name and an offset within that file. Although the figure is
+of the group, and whether the group is current or obsolete; we
+                                                                               complex, the complexity in the architecture is designed to
+describe the distinction between current and obsolete groups
+                                                                               provide good performance with fast LANs. On today’s fast
+
+                                                                    Cache
+                                                                  Consistency          Mgr.                UNIX Client Data
+                                                                     State               to                Cache to      Block D
+                                   UNIX        Data                             Client Client Index #            Client
+                                                       D                                                                         o
+                                   Cache       Block                             ID             Offset                           n
+                                                       o              3a
+                                     2a                n                        UNIX                                             e
+                                                                                Cache
+                                                       e                                   Stripe
+                                   Mgr.           Client                          4a       Group        Mgr.             SS SS        Index
+           Directory               Map              to               Imap                   Map          to                   to
+                                                                                Index                        Index      Disk          Node
+Name,                  Index #                Mgr. Mgr. Index #                                      SS  SS                  Mgr.
+Offset         1        Offset                           Offset                  Node                        Node         5
+                                     2b        ID                                                    ID      Addr.           offset    6
+                                                                      3b        Addr.        4b
+
+
+
+               Access Local Data Structure                                                Stripe
+                                                                                          Group        Mgr.                    SS    Data
+                     Possible Network Hop                                                  Map                          SS
+                                                                                 Data                   to Data        Disk     to   Block D
+         Data or Metadata Block (or Cache)                                                          SS SS Block               Client
+                                                                                 Block                                   8
+                                                                                                                                           o
+                  Globally Replicated Data                                                          ID                                     n
+                                                                                 Addr.       7              Addr.
+               Local Portion of Global Data                                                                                                e
+
+ Figure 3. Procedure to read a block. The circled numbers refer to steps described in Section 3.2.1. The network hops are labelled as
+ “possible” because clients, managers, and storage servers can run on the same machines. For example, xFS tries to co-locate the manager
+ of a file on the same machine as the client most likely to use the file to avoid some of the network hops. “SS” is an abbreviation for
+ “Storage Server.”
+
+
+
+                                                                           7
+LANs, fetching a block out of local memory is much faster                 would still need to notify the manager of the fact that they
+than fetching it from remote memory, which, in turn, is much              now cache the block so that the manager knows to invalidate
+faster than fetching it from disk.                                        the block if it is modified. Finally, our approach simplifies the
+     To open a file, the client first reads the file’s parent             design by eliminating client caching and cache consistency
+directory (labeled 1 in the diagram) to determine its index               for index nodes — only the manager handling an index
+number. Note that the parent directory is, itself, a data file that       number directly accesses its index node.
+must be read using the procedure described here. As with                  3.2.2. Writes
+FFS, xFS breaks this recursion at the root; the kernel learns
+the index number of the root when it mounts the file system.                  Clients buffer writes in their local memory until
+                                                                          committed to a stripe group of storage servers. Because xFS
+     As the top left path in the figure indicates, the client first       uses a log-based file system, every write changes the disk
+checks its local UNIX block cache for the block (2a); if the              address of the modified block. Therefore, after a client
+block is present, the request is done. Otherwise it follows the           commits a segment to a storage server, the client notifies the
+lower path to fetch the data over the network. xFS first uses             modified blocks’ managers; the managers then update their
+the manager map to locate the correct manager for the index               index nodes and imaps and periodically log these changes to
+number (2b) and then sends the request to the manager. If the             stable storage. As with Zebra, xFS does not need to
+manager is not co-located with the client, this message                   “simultaneously” commit both index nodes and their data
+requires a network hop.                                                   blocks because the client’s log includes a delta that allows
+     The manager then tries to satisfy the request by fetching            reconstruction of the manager’s data structures in the event of
+the data from some other client’s cache. The manager checks               a client or manager crash. We discuss deltas in more detail in
+its cache consistency state (3a), and, if possible, forwards the          Section 5.1.
+request to a client caching the data. That client reads the block             As in BSD LFS [Selt93], each manager caches its portion
+from its UNIX block cache and forwards the data directly to               of the imap in memory and stores it on disk in a special file
+the client that originated the request. The manager also adds             called the ifile. The system treats the ifile like any other file
+the new client to its list of clients caching the block.                  with one exception: the ifile has no index nodes. Instead, the
+     If no other client can supply the data from memory, the              system locates the blocks of the ifile using manager
+manager routes the read request to disk by first examining the            checkpoints described in Section 5.1.
+imap to locate the block’s index node (3b). The manager may
+find the index node in its local cache (4a) or it may have to             3.2.3. Cache Consistency
+read the index node from disk. If the manager has to read the                 xFS utilizes a token-based cache consistency scheme
+index node from disk, it uses the index node’s disk log                   similar to Sprite [Nels88] and Andrew [Howa88] except that
+address and the stripe group map (4b) to determine which                  xFS manages consistency on a per-block rather than per-file
+storage server to contact. The manager then requests the                  basis. Before a client modifies a block, it must acquire write
+index block from the storage server, who then reads the block             ownership of that block. The client sends a message to the
+from its disk and sends it back to the manager (5). The                   block’s manager. The manager then invalidates any other
+manager then uses the index node (6) to identify the log                  cached copies of the block, updates its cache consistency
+address of the data block. (We have not shown a detail: if the            information to indicate the new owner, and replies to the
+file is large, the manager may have to read several levels of             client, giving permission to write. Once a client owns a block,
+indirect blocks to find the data block’s address; the manager             the client may write the block repeatedly without having to
+follows the same procedure in reading indirect blocks as in               ask the manager for ownership each time. The client
+reading the index node.)                                                  maintains write ownership until some other client reads or
+     The manager uses the data block’s log address and the                writes the data, at which point the manager revokes
+stripe group map (7) to send the request to the storage server            ownership, forcing the client to stop writing the block, flush
+keeping the block. The storage server reads the data from its             any changes to stable storage, and forward the data to the new
+disk (8) and sends the data directly to the client that originally        client.
+asked for it.                                                                 xFS managers use the same state for both cache
+     One important design decision was to cache index nodes               consistency and cooperative caching. The list of clients
+at managers but not at clients. Although caching index nodes              caching each block allows managers to invalidate stale
+at clients would allow them to read many blocks from storage              cached copies in the first case and to forward read requests to
+servers without sending a request through the manager for                 clients with valid cached copies in the second.
+each block, doing so has three significant drawbacks. First,
+                                                                          3.2.4. Management Distribution Policies
+by reading blocks from disk without first contacting the
+manager, clients would lose the opportunity to use                            xFS tries to assign files used by a client to a manager co-
+cooperative caching to avoid disk accesses. Second, although              located on that machine. This section presents a simulation
+clients could sometimes read a data block directly, they                  study that examines policies for assigning files to managers.
+
+
+
+                                                                      8
+We show that co-locating a file’s management with the client            or delete file request. The communication for a read block
+that creates that file can significantly improve locality,              request includes all of the network hops indicated in Figure 3.
+reducing the number of network hops needed to satisfy client            Despite the large number of network hops that can be
+requests by over 40% compared to a centralized manager.                 incurred by some requests, the average per request is quite
+    The xFS prototype uses a policy we call First Writer.               low. 75% of read requests in the trace were satisfied by the
+When a client creates a file, xFS chooses an index number               local cache; as noted earlier, the local hit rate would be even
+that assigns the file’s management to the manager co-located            higher if the trace included local hits in the traced system. An
+with that client. For comparison, we also simulated a                   average local read miss costs 2.9 hops under the First Writer
+Centralized policy that uses a single, centralized manager that         policy; a local miss normally requires three hops (the client
+is not co-located with any of the clients.                              asks the manager, the manager forwards the request, and the
+                                                                        storage server or client supplies the data), but 12% of the time
+    We examined management policies by simulating xFS’s
+                                                                        it can avoid one hop because the manager is co-located with
+behavior under a seven day trace of 236 clients’ NFS
+                                                                        the client making the request or the client supplying the data.
+accesses to an Auspex file server in the Berkeley Computer
+                                                                        Under both the Centralized and First Writer policies, a read
+Science Division [Dahl94a]. We warmed the simulated
+                                                                        miss will occasionally incur a few additional hops to read an
+caches through the first day of the trace and gathered statistics
+                                                                        index node or indirect block from a storage server.
+through the rest. Since we would expect other workloads to
+yield different results, evaluating a wider range of workloads              Writes benefit more dramatically from locality. Of the
+remains important work.                                                 55% of write requests that required the client to contact the
+    The simulator counts the network messages necessary to
+                                                                                                          6,000,000                          Delete Hops
+satisfy client requests, assuming that each client has 16 MB
+of local cache and that there is a manager co-located with                                                                                   Write Hops
+                                                                                                          5,000,000                           Read Hops
+
+
+
+
+                                                                           Network Messages
+each client, but that storage servers are always remote.
+                                                                                                          4,000,000
+    Two artifacts of the trace affect the simulation. First,
+because the trace was gathered by snooping the network, it                                                3,000,000
+does not include reads that resulted in local cache hits. By
+omitting requests that resulted in local hits, the trace inflates                                         2,000,000
+the average number of network hops needed to satisfy a read                                               1,000,000
+request. Because we simulate larger caches than those of the
+traced system, this factor does not alter the total number of                                                    0
+network requests for each policy [Smit77], which is the                                                Centralized  First Writer
+                                                                                                         Management Policy
+relative metric we use for comparing policies.
+                                                                                  Figure 4. Comparison of locality as measured by
+    The second limitation of the trace is that its finite length                  network traffic for the Centralized and First Writer
+does not allow us to determine a file’s “First Writer” with                       management policies.
+certainty for references to files created before the beginning
+of the trace. For files that are read or deleted in the trace                                               4         Centralized   First Writer
+before being written, we assign management to random
+
+
+
+
+                                                                               Network Hops Per Request
+                                                                                                           3.5
+managers at the start of the trace; when and if such a file is
+written for the first time in the trace, we move its                                                        3
+management to the first writer. Because write sharing is                                                   2.5
+rare — 96% of all block overwrites or deletes are by the                                                    2
+block’s previous writer — we believe this heuristic will yield
+                                                                                                           1.5
+results close to a true “First Writer” policy for writes,
+although it will give pessimistic locality results for “cold-                                               1
+start” read misses that it assigns to random managers.                                                     0.5
+    Figure 4 shows the impact of the policies on locality. The                                              0
+First Writer policy reduces the total number of network hops                                Hops Per      Hops Per      Hops Per
+                                                                                              Read*        Write         Delete
+needed to satisfy client requests by 43%. Most of the                            Figure 5. Average number of network messages needed
+difference comes from improving write locality; the                              to satisfy a read block, write block, or delete file request
+algorithm does little to improve locality for reads, and deletes                 under the Centralized and First Writer policies. The
+account for only a small fraction of the system’s network                        Hops Per Write column does not include a charge for
+                                                                                 writing the segment containing block writes to disk because
+traffic.                                                                         the segment write is asynchronous to the block write
+    Figure 5 illustrates the average number of network                           request and because the large segment amortizes the per
+                                                                                 block write cost. *Note that the number of hops per read
+messages to satisfy a read block request, write block request,                   would be even lower if the trace included all local hits in
+                                                                                 the traced system.
+
+
+
+                                                                    9
+manager to establish write ownership, the manager was co-           4.1. Distributing Utilization Status
+located with the client 90% of the time. When a manager had             xFS assigns the burden of maintaining each segment’s
+to invalidate stale cached data, the cache being invalidated        utilization status to the client that wrote the segment. This
+was local one-third of the time. Finally, when clients flushed      approach provides parallelism by distributing the
+data to disk, they informed the manager of the data’s new           bookkeeping, and it provides good locality; because clients
+storage location, a local operation 90% of the time.                seldom write-share data [Bake91, Kist92, Blaz93] a client’s
+    Deletes, though rare, also benefit from locality: 68% of        writes usually affect only local segments’ utilization status.
+file delete requests went to a local manager, and 89% of the            We simulated this policy to examine how well it reduced
+clients notified to stop caching deleted files were local to the    the overhead of maintaining utilization information. As input
+manager.                                                            to the simulator, we used the Auspex trace described in
+    In the future, we plan to examine other policies for            Section 3.2.4, but since caching is not an issue, we gather
+assigning managers. For instance, we plan to investigate            statistics for the full seven day trace (rather than using some
+modifying directories to permit xFS to dynamically change a         of that time to warm caches.)
+file’s index number and thus its manager after it has been              Figure 6 shows the results of the simulation. The bars
+created. This capability would allow fine-grained load              summarize the network communication necessary to monitor
+balancing on a per-file rather than a per-manager map entry         segment state under three policies: Centralized Pessimistic,
+basis, and it would permit xFS to improve locality by               Centralized Optimistic, and Distributed. Under the
+switching managers when a different machine repeatedly              Centralized Pessimistic policy, clients notify a centralized,
+accesses a file.                                                    remote cleaner every time they modify an existing block. The
+    Another optimization that we plan to investigate is             Centralized Optimistic policy also uses a cleaner that is
+assigning multiple managers to different portions of the same       remote from the clients, but clients do not have to send
+file to balance load and provide locality for parallel              messages when they modify blocks that are still in their local
+workloads.                                                          write buffers. The results for this policy are optimistic
+                                                                    because the simulator assumes that blocks survive in clients’
+4. Cleaning
+                                                                    write buffers for 30 seconds or until overwritten, whichever
+    When a log-structured file system such as xFS writes data       is sooner; this assumption allows the simulated system to
+by appending complete segments to its log, it often                 avoid communication more often than a real system since it
+invalidates blocks in old segments, leaving “holes” that            does not account for segments that are written to disk early
+contain no data. LFS uses a log cleaner to coalesce live data       due to syncs [Bake92]. (Unfortunately, syncs are not visible
+from old segments into a smaller number of new segments,
+creating completely empty segments that can be used for                                    100%
+
+
+
+
+                                                                        % of Changed Log Blocks
+future full segment writes. Since the cleaner must create
+                                                                                                                                                  Modified By
+empty segments at least as quickly as the system writes new                                       80%                                             Same Client
+segments, a single, sequential cleaner would be a bottleneck                                                                                        (< 30s)
+in a distributed system such as xFS. Our design therefore                                         60%
+provides a distributed cleaner.                                                                                                                   Modified By
+                                                                                                                                                  Same Client
+    An LFS cleaner, whether centralized or distributed, has                                       40%                                               (> 30s)
+three main tasks. First, the system must keep utilization status
+about old segments — how many “holes” they contain and                                            20%                                             Modified By
+how recently these holes appeared — to make wise decisions                                                                                         Different
+                                                                                                                                                    Client
+about which segments to clean [Rose92]. Second, the system                                        0%
+                                                                                                        Centralized   Centralized
+                                                                                                                                    Distributed
+must examine this bookkeeping information to select
+                                                                                                        Pessimistic   Optimistic
+segments to clean. Third, the cleaner reads the live blocks
+from old log segments and writes those blocks to new
+segments.                                                                       Figure 6. Simulated network communication between
+                                                                                clients and cleaner. Each bar shows the fraction of all
+    The rest of this section describes how xFS distributes                      blocks modified or deleted in the trace, based on the time
+cleaning. We first describe how xFS tracks segment                              and client that modified the block. Blocks can be
+                                                                                modified by a different client than originally wrote the
+utilizations, then how we identify subsets of segments to                       data, by the same client within 30 seconds of the
+examine and clean, and finally how we coordinate the parallel                   previous write, or by the same client after more than 30
+cleaners to keep the file system consistent. Because the                        seconds have passed. The Centralized Pessimistic policy
+                                                                                assumes every modification requires network traffic. The
+prototype does not yet implement the distributed cleaner, this                  Centralized Optimistic scheme avoids network
+section includes the key simulation results motivating our                      communication when the same client modifies a block it
+design.                                                                         wrote within the previous 30 seconds, while the
+                                                                                Distributed scheme avoids communication whenever a
+                                                                                block is modified by its previous writer.
+
+
+
+                                                                   10
+in our Auspex traces.) Finally, under the Distributed policy,        5. Recovery and Reconfiguration
+each client tracks the status of blocks that it writes so that it        Availability is a key challenge for a distributed system
+needs no network messages when modifying a block for                 such as xFS. Because xFS distributes the file system across
+which it was the last writer.                                        many machines, it must be able to continue operation when
+    During the seven days of the trace, of the one million           some of the machines fail. To meet this challenge, xFS builds
+blocks written by clients and then later overwritten or deleted,     on Zebra’s recovery mechanisms, the keystone of which is
+33% were modified within 30 seconds by the same client and           redundant, log-structured storage. The redundancy provided
+therefore required no network communication under the                by a software RAID makes the system’s logs highly
+Centralized Optimistic policy. However, the Distributed              available, and the log-structured storage allows the system to
+scheme does much better, reducing communication by a                 quickly recover a consistent view of its data and metadata
+factor of eighteen for this workload compared to even the            through LFS checkpoint recovery and roll-forward.
+Centralized Optimistic policy.                                           LFS provides fast recovery by scanning the end of its log
+4.2. Distributing Cleaning                                           to first read a checkpoint and then roll forward, and Zebra
+                                                                     demonstrates how to extend LFS recovery to a distributed
+    Clients store their segment utilization information in s-
+                                                                     system in which multiple clients are logging data
+files. We implement s-files as normal xFS files to facilitate
+                                                                     concurrently. xFS addresses two additional problems. First,
+recovery and sharing of s-files by different machines in the
+                                                                     xFS regenerates the manager map and stripe group map using
+system.
+                                                                     a distributed consensus algorithm. Second, xFS recovers
+    Each s-file contains segment utilization information for         manager metadata from multiple managers’ logs, a process
+segments written by one client to one stripe group: clients          that xFS makes scalable by distributing checkpoint writes and
+write their s-files into per-client directories, and they write      recovery to the managers and by distributing roll-forward to
+separate s-files in their directories for segments stored to         the clients.
+different stripe groups.
+                                                                         The prototype implements only a limited subset of xFS’s
+    A leader in each stripe group initiates cleaning when the        recovery functionality — storage servers recover their local
+number of free segments in that group falls below a low water        state after a crash, they automatically reconstruct data from
+mark or when the group is idle. The group leader decides             parity when one storage server in a group fails, and clients
+which cleaners should clean the stripe group’s segments. It          write deltas into their logs to support manager recovery.
+sends each of those cleaners part of the list of s-files that        However, we have not implemented manager checkpoint
+contain utilization information for the group. By giving each        writes, checkpoint recovery reads, or delta reads for roll
+cleaner a different subset of the s-files, xFS specifies subsets     forward. The current prototype also fails to recover cleaner
+of segments that can be cleaned in parallel.                         state and cache consistency state, and it does not yet
+    A simple policy would be to assign each client to clean its      implement the consensus algorithm needed to dynamically
+own segments. An attractive alternative is to assign cleaning        reconfigure manager maps and stripe group maps. This
+responsibilities to idle machines. xFS would do this by              section outlines our recovery design and explains why we
+assigning s-files from active machines to the cleaners running       expect it to provide scalable recovery for the system.
+on idle ones.                                                        However, given the complexity of the recovery problem and
+                                                                     the early state of our implementation, continued research will
+4.3. Coordinating Cleaners                                           be needed to fully understand scalable recovery.
+    Like BSD LFS and Zebra, xFS uses optimistic
+concurrency control to resolve conflicts between cleaner             5.1. Data Structure Recovery
+updates and normal file system writes. Cleaners do not lock              Table 2 lists the data structures that storage servers,
+files that are being cleaned, nor do they invoke cache               managers, and cleaners recover after a crash. For a system-
+consistency actions. Instead, cleaners just copy the blocks          wide reboot or widespread crash, recovery proceeds from
+from the blocks’ old segments to their new segments,                 storage servers, to managers, and then to cleaners because
+optimistically assuming that the blocks are not in the process       later levels depend on earlier ones. Because recovery depends
+of being updated somewhere else. If there is a conflict              on the logs stored on the storage servers, xFS will be unable
+because a client is writing a block as it is cleaned, the            to continue if multiple storage servers from a single stripe
+manager will ensure that the client update takes precedence          group are unreachable due to machine or network failures.
+over the cleaner’s update. Although our algorithm for                We plan to investigate using multiple parity fragments to
+distributing cleaning responsibilities never simultaneously          allow recovery when there are multiple failures within a
+asks multiple cleaners to clean the same segment, the same           stripe group [Blau94]. Less widespread changes to xFS
+mechanism could be used to allow less strict (e.g.                   membership — such as when an authorized machine asks to
+probabilistic) divisions of labor by resolving conflicts             join the system, when a machine notifies the system that it is
+between cleaners.                                                    withdrawing, or when a machine cannot be contacted because
+
+
+
+                                                                    11
+of a crash or network failure — trigger similar                      caching or for which it has write ownership from that
+reconfiguration steps. For instance, if a single manager             manager’s portion of the index number space.
+crashes, the system skips the steps to recover the storage               The remainder of this subsection describes how managers
+servers, going directly to generate a new manager map that           and clients work together to recover the managers’ disk
+assigns the failed manager’s duties to a new manager; the            location metadata — the distributed imap and index nodes
+new manager then recovers the failed manager’s disk                  that provide pointers to the data blocks on disk. Like LFS and
+metadata from the storage server logs using checkpoint and           Zebra, xFS recovers this data using a checkpoint and roll
+roll forward, and it recovers its cache consistency state by         forward mechanism. xFS distributes this disk metadata
+polling clients.                                                     recovery to managers and clients so that each manager and
+5.1.1. Storage Server Recovery                                       client log written before the crash is assigned to one manager
+                                                                     or client to read during recovery. Each manager reads the log
+    The segments stored on storage server disks contain the          containing the checkpoint for its portion of the index number
+logs needed to recover the rest of xFS’s data structures, so the     space, and, where possible, clients read the same logs that
+storage servers initiate recovery by restoring their internal        they wrote before the crash. This delegation occurs as part of
+data structures. When a storage server recovers, it regenerates      the consensus process that generates the manager map.
+its mapping of xFS fragment IDs to the fragments’ physical
+                                                                         The goal of manager checkpoints is to help managers
+disk addresses, rebuilds its map of its local free disk space,
+                                                                     recover their imaps from the logs. As Section 3.2.2 described,
+and verifies checksums for fragments that it stored near the
+                                                                     managers store copies of their imaps in files called ifiles. To
+time of the crash. Each storage server recovers this
+                                                                     help recover the imaps from the ifiles, managers periodically
+information independently from a private checkpoint, so this
+                                                                     write checkpoints that contain lists of pointers to the disk
+stage can proceed in parallel across all storage servers.
+                                                                     storage locations of the ifiles’ blocks. Because each
+    Storage servers next regenerate their stripe group map.          checkpoint corresponds to the state of the ifile when the
+First, the storage servers use a distributed consensus               checkpoint is written, it also includes the positions of the
+algorithm [Cris91, Ricc91, Schr91] to determine group                clients’ logs reflected by the checkpoint. Thus, once a
+membership and to elect a group leader. Each storage server          manager reads a checkpoint during recovery, it knows the
+then sends the leader a list of stripe groups for which it stores    storage locations of the blocks of the ifile as they existed at
+segments, and the leader combines these lists to form a list of      the time of the checkpoint and it knows where in the client
+groups where fragments are already stored (the obsolete              logs to start reading to learn about more recent modifications.
+stripe groups). The leader then assigns each active storage          The main difference between xFS and Zebra or BSD LFS is
+server to a current stripe group, and distributes the resulting      that xFS has multiple managers, so each xFS manager writes
+stripe group map to the storage servers.                             its own checkpoint for its part of the index number space.
+5.1.2. Manager Recovery                                                  During recovery, managers read their checkpoints
+    Once the storage servers have recovered, the managers            independently and in parallel. Each manager locates its
+can recover their manager map, disk location metadata, and           checkpoint by first querying storage servers to locate the
+cache consistency metadata. Manager map recovery uses a              newest segment written to its log before the crash and then
+consensus algorithm as described above for stripe group              reading backwards in the log until it finds the segment with
+recovery. Cache consistency recovery relies on server-driven         the most recent checkpoint. Next, managers use this
+polling [Bake94, Nels88]: a recovering manager contacts the          checkpoint to recover their portions of the imap. Although the
+clients, and each client returns a list of the blocks that it is     managers’ checkpoints were written at different times and
+                                                                     therefore do not reflect a globally consistent view of the file
+                                                                     system, the next phase of recovery, roll-forward, brings all of
+                                                 Recovered           the managers’ disk-location metadata to a consistent state
+                      Data Structure
+                                                   From              corresponding to the end of the clients’ logs.
+   Storage     Log Segments                    Local Data                To account for changes that had not reached the
+   Server                                      Structures            managers’ checkpoints, the system uses roll-forward, where
+               Stripe Group Map                Consensus             clients use the deltas stored in their logs to replay actions that
+   Manager     Manager Map                     Consensus             occurred later than the checkpoints. To initiate roll-forward,
+               Disk Location Metadata          Checkpoint and        the managers use the log position information from their
+                                               Roll Forward          checkpoints to advise the clients of the earliest segments to
+               Cache Consistency Metadata      Poll Clients          scan. Each client locates the tail of its log by querying storage
+   Cleaner     Segment Utilization             S-Files               servers, and then it reads the log backwards to locate the
+                                                                     earliest segment needed by any manager. Each client then
+ Table 2. Data structures restored during recovery. Recovery         reads forward in its log, using the manager map to send the
+ occurs in the order listed from top to bottom because lower data
+ structures depend on higher ones.                                   deltas to the appropriate managers. Managers use the deltas to
+
+
+
+                                                                    12
+update their imaps and index nodes as they do during normal              Like other file systems, xFS trusts the kernel to enforce a
+operation; version numbers in the deltas allow managers to           firewall between untrusted user processes and kernel
+chronologically order different clients’ modifications to the        subsystems such as xFS. The xFS storage servers, managers,
+same files [Hart95].                                                 and clients can then enforce standard file system security
+                                                                     semantics. For instance, xFS storage servers only store
+5.1.3. Cleaner Recovery                                              fragments supplied by authorized clients; xFS managers only
+    Clients checkpoint the segment utilization information           grant read and write tokens to authorized clients; xFS clients
+needed by cleaners in standard xFS files, called s-files.            only allow user processes with appropriate credentials and
+Because these checkpoints are stored in standard files, they         permissions to access file system data.
+are automatically recovered by the storage server and                    We expect this level of trust to exist within many settings.
+manager phases of recovery. However, the s-files may not             For instance, xFS could be used within a group or
+reflect the most recent changes to segment utilizations at the       department’s administrative domain, where all machines are
+time of the crash, so s-file recovery also includes a roll           administered the same way and therefore trust one another.
+forward phase. Each client rolls forward the utilization state       Similarly, xFS would be appropriate within a NOW where
+of the segments tracked in its s-file by asking the other clients    users already trust remote nodes to run migrated processes on
+for summaries of their modifications to those segments that          their behalf. Even in environments that do not trust all
+are more recent than the s-file checkpoint. To avoid scanning        desktop machines, xFS could still be used within a trusted
+their logs twice, clients gather this segment utilization            core of desktop machines and servers, among physically
+summary information during the roll-forward phase for                secure compute servers and file servers in a machine room, or
+manager-metadata.                                                    within one of the parallel server architectures now being
+5.2. Scalability of Recovery                                         researched [Kubi93, Kusk94]. In these cases, the xFS core
+                                                                     could still provide scalable, reliable, and cost-effective file
+    Even with the parallelism provided by xFS’s approach to          service to less trusted fringe clients running more restrictive
+manager recovery, future work will be needed to evaluate its         protocols. The downside is that the core system can not
+scalability. Our design is based on the observation that, while      exploit the untrusted CPUs, memories, and disks located in
+the procedures described above can require O(N2)                     the fringe.
+communications steps (where N refers to the number of
+clients, managers, or storage servers), each phase can proceed           Client trust is a concern for xFS because xFS ties its
+in parallel across N machines.                                       clients more intimately to the rest of the system than do
+                                                                     traditional protocols. This close association improves
+    For instance, to locate the tails of the systems logs, each      performance, but it may increase the opportunity for
+manager and client queries each storage server group to              mischievous clients to interfere with the system. In either xFS
+locate the end of its log. While this can require a total of         or a traditional system, a compromised client can endanger
+O(N2) messages, each manager or client only needs to contact         data accessed by a user on that machine. However, a damaged
+N storage server groups, and all of the managers and clients         xFS client can do wider harm by writing bad logs or by
+can proceed in parallel, provided that they take steps to avoid      supplying incorrect data via cooperative caching. In the
+having many machines simultaneously contact the same                 future we plan to examine techniques to guard against
+storage server [Bake94]; we plan use randomization to                unauthorized log entries and to use encryption-based
+accomplish this goal. Similar considerations apply to the            techniques to safeguard cooperative caching.
+phases where managers read their checkpoints, clients roll
+forward, and managers query clients for their cache                      Our current prototype allows unmodified UNIX fringe
+consistency state.                                                   clients to access xFS core machines using the NFS protocol
+                                                                     as Figure 7 illustrates. To do this, any xFS client in the core
+6. Security                                                          exports the xFS file system via NFS, and an NFS client
+    xFS, as described, is appropriate for a restricted
+environment — among machines that communicate over a                                           NFS Clients
+fast network and that trust one another’s kernels to enforce
+security. xFS managers, storage servers, clients, and cleaners
+must run on secure machines using the protocols we have
+described so far. However, xFS can support less trusted                                          xFS Core
+clients using different protocols that require no more trust
+than traditional client protocols, albeit at some cost to
+performance. Our current implementation allows unmodified
+UNIX clients to mount a remote xFS partition using the
+standard NFS protocol.
+                                                                         Figure 7. An xFS core acting as a scalable file server for
+                                                                         unmodified NFS clients.
+
+
+
+                                                                    13
+employs the same procedures it would use to mount a                of data from parity, we have not completed implementation
+standard NFS partition from the xFS client. The xFS core           of manager state checkpoint and roll forward; also, we have
+client then acts as an NFS server for the NFS client, providing    not implemented the consensus algorithms necessary to
+high performance by employing the remaining xFS core               calculate and distribute new manager maps and stripe group
+machines to satisfy any requests not satisfied by its local        maps; the system currently reads these mappings from a non-
+cache. Multiple NFS clients can utilize the xFS core as a          xFS file and cannot change them. Additionally, we have yet
+scalable file server by having different NFS clients mount the     to implement the distributed cleaner. As a result, xFS is still
+xFS file system using different xFS clients to avoid               best characterized as a research prototype, and the results in
+bottlenecks. Because xFS provides single machine sharing           this paper should thus be viewed as evidence that the
+semantics, it appears to the NFS clients that they are             serverless approach is promising, not as “proof” that it will
+mounting the same file system from the same server. The            succeed.
+NFS clients also benefit from xFS’s high availability since
+they can mount the file system using any available xFS client.     7.2. Test Environment
+Of course, a key to good NFS server performance is to                  For our testbed, we use a total of 32 machines: eight dual-
+efficiently implement synchronous writes; our prototype does       processor SPARCStation 20’s, and 24 single-processor
+not yet exploit the non-volatile RAM optimization found in         SPARCStation 10’s. Each of our machines has 64 MB of
+most commercial NFS servers [Bake92], so for best                  physical memory. Uniprocessor 50 MHz SS-20’s and SS-
+performance, NFS clients should mount these partitions using       10’s have SPECInt92 ratings of 74 and 65, and can copy large
+the “unsafe” option to allow xFS to buffer writes in memory.       blocks of data from memory to memory at 27 MB/s and
+                                                                   20 MB/s, respectively.
+7. xFS Prototype
+                                                                       We use the same hardware to compare xFS with two
+    This section describes the state of the xFS prototype as of    central-server architectures, NFS [Sand85] and AFS (a
+August 1995 and presents preliminary performance results           commercial version of the Andrew file system [Howa88]).
+measured on a 32 node cluster of SPARCStation 10’s and             We use NFS as our baseline system for practical reasons —
+20’s. Although these results are preliminary and although we       NFS is mature, widely available, and well-tuned, allowing
+expect future tuning to significantly improve absolute             easy comparison and a good frame of reference — but its
+performance, they suggest that xFS has achieved its goal of        limitations with respect to scalability are well known
+scalability. For instance, in one of our microbenchmarks           [Howa88]. Since many NFS installations have attacked
+32 clients achieved an aggregate large file write bandwidth of     NFS’s limitations by buying shared-memory multiprocessor
+13.9 MB/s, close to a linear speedup compared to a single          servers, we would like to compare xFS running on
+client’s 0.6 MB/s bandwidth. Our other tests indicated similar     workstations to NFS running on a large multiprocessor
+speedups for reads and small file writes.                          server, but such a machine was not available to us, so our
+    The prototype implementation consists of four main             NFS server runs on essentially the same platform as the
+pieces. First, we implemented a small amount of code as a          clients. We also compare xFS to AFS, a more scalable
+loadable module for the Solaris kernel. This code provides         central-server architecture. However, AFS achieves most of
+xFS’s interface to the Solaris v-node layer and also accesses      its scalability compared to NFS by improving cache
+the kernel buffer cache. We implemented the remaining three        performance; its scalability is only modestly better compared
+pieces of xFS as daemons outside of the kernel address space       to NFS for reads from server disk and for writes.
+to facilitate debugging [Howa88]. If the xFS kernel module             For our NFS and AFS tests, we use one of the SS-20’s as
+cannot satisfy a request using the buffer cache, then it sends     the server and the remaining 31 machines as clients. For the
+the request to the client daemon. The client daemons provide       xFS tests, all machines act as storage servers, managers, and
+the rest of xFS’s functionality by accessing the manager           clients unless otherwise noted. For experiments using fewer
+daemons and the storage server daemons over the network.           than 32 machines, we always include all of the SS-20’s before
+    The rest of this section summarizes the state of the           starting to use the less powerful SS-10’s.
+prototype, describes our test environment, and presents our            The xFS storage servers store data on a 256 MB partition
+results.                                                           of a 1.1 GB Seagate-ST11200N disk. These disks have an
+7.1. Prototype Status                                              advertised average seek time of 5.4 ms and rotate at
+                                                                   5,411 RPM. We measured a 2.7 MB/s peak bandwidth to
+    The prototype implements most of xFS’s key features,           read from the raw disk device into memory. For all xFS tests,
+including distributed management, cooperative caching, and         we use a log fragment size of 64 KB, and unless otherwise
+network disk striping with single parity and multiple groups.      noted we use storage server groups of eight machines —
+We have not yet completed implementation of a number of            seven for data and one for parity; all xFS tests include the
+other features. The most glaring deficiencies are in crash         overhead of parity computation. The AFS clients use a
+recovery and cleaning. Although we have implemented                100 MB partition of the same disks for local disk caches.
+storage server recovery, including automatic reconstruction
+
+
+
+                                                                  14
+    The NFS and AFS central servers use a larger and                    2. RPC and TCP/IP overheads severely limit xFS’s network
+somewhat faster disk than the xFS storage servers, a 2.1 GB                performance. We are porting xFS’s communications
+DEC RZ 28-VA with a peak bandwidth of 5 MB/s from the                      layer to Active Messages [vE92] to address this issue.
+raw partition into memory. These servers also use a                     3. We have done little profiling and tuning. As we do so, we
+Prestoserve NVRAM card that acts as a buffer for disk writes               expect to find and fix inefficiencies.
+[Bake92]. We did not use an NVRAM buffer for the xFS
+machines, but xFS’s log buffer provides similar performance             As a result, the absolute performance is much less than we
+benefits.                                                           expect for the well-tuned xFS. As the implementation
+                                                                    matures, we expect a single xFS client to significantly
+    A high-speed, switched Myrinet network [Bode95]                 outperform an NFS or AFS client by benefitting from the
+connects the machines. Although each link of the physical           bandwidth of multiple disks and from cooperative caching.
+network has a peak bandwidth of 80 MB/s, RPC and TCP/IP             Our eventual performance goal is for a single xFS client to
+protocol overheads place a much lower limit on the                  achieve read and write bandwidths near that of its maximum
+throughput actually achieved [Keet95]. The throughput for           network throughput, and for multiple clients to realize an
+fast networks such as the Myrinet depends heavily on the            aggregate bandwidth approaching the system’s aggregate
+version and patch level of the Solaris operating system used.       local disk bandwidth.
+For our xFS measurements, we used a kernel that we
+compiled from the Solaris 2.4 source release. We measured               The microbenchmark results presented here stress the
+the TCP throughput to be 3.2 MB/s for 8 KB packets when             scalability of xFS’s storage servers and managers. We
+using this source release. For the NFS and AFS                      examine read and write throughput for large files and write
+measurements, we used the binary release of Solaris 2.4,            performance for small files, but we do not examine small file
+augmented with the binary patches recommended by Sun as             read performance explicitly because the network is too slow
+of June 1, 1995. This release provides better network               to provide an interesting evaluation of cooperative caching;
+performance; our TCP test achieved a throughput of                  we leave this evaluation as future work. We also use
+8.4 MB/s for this setup. Alas, we could not get sources for the     Satyanarayanan’s Andrew benchmark [Howa88] as a simple
+patches, so our xFS measurements are penalized with a               evaluation of application-level performance. In the future, we
+slower effective network than NFS and AFS. RPC overheads            plan to compare the systems’ performance under more
+further reduce network performance for all three systems.           demanding applications.
+
+7.3. Performance Results                                            7.3.1. Scalability
+    This section presents a set of preliminary performance              Figures 8 through 10 illustrate the scalability of xFS’s
+results for xFS under a set of microbenchmarks designed to          performance for large writes, large reads, and small writes.
+stress file system scalability and under an application-level       For each of these tests, as the number of clients increases, so
+benchmark.                                                          does xFS’s aggregate performance. In contrast, just a few
+                                                                    clients saturate NFS’s or AFS’s single server, limiting peak
+    These performance results are preliminary. As noted             throughput.
+above, several significant pieces of the xFS system —
+manager checkpoints and cleaning — remain to be                         Figure 8 illustrates the performance of our disk write
+implemented. We do not expect these additions to                    throughput test, in which each client writes a large (10 MB),
+significantly impact the results for the benchmarks presented       private file and then invokes sync() to force the data to disk
+here. We do not expect checkpoints to ever limit                    (some of the data stay in NVRAM in the case of NFS and
+performance. However, thorough future investigation will be         AFS.) A single xFS client is limited to 0.6 MB/s, about one-
+needed to evaluate the impact of distributed cleaning under a       third of the 1.7 MB/s throughput of a single NFS client; this
+wide range workloads; other researchers have measured               difference is largely due to the extra kernel crossings and
+sequential cleaning overheads from a few percent [Rose92,           associated data copies in the user-level xFS implementation
+Blac95] to as much as 40% [Selt95], depending on the                as well as high network protocol overheads. A single AFS
+workload.                                                           client achieves a bandwidth of 0.7 MB/s, limited by AFS’s
+                                                                    kernel crossings and overhead of writing data to both the
+    Also, the current prototype implementation suffers from         local disk cache and the server disk. As we increase the
+three inefficiencies, all of which we will attack in the future.    number of clients, NFS’s and AFS’s throughputs increase
+ 1. xFS is currently implemented as a set of user-level pro-        only modestly until the single, central server disk bottlenecks
+    cesses by redirecting vnode layer calls. This hurts perfor-     both systems. The xFS configuration, in contrast, scales up to
+    mance because each user/kernel space crossing requires          a peak bandwidth of 13.9 MB/s for 32 clients, and it appears
+    the kernel to schedule the user level process and copy          that if we had more clients available for our experiments, they
+    data to or from the user process’s address space. To fix        could achieve even more bandwidth from the 32 xFS storage
+    this limitation, we are working to move xFS into the ker-       servers and managers.
+    nel. (Note that AFS shares this handicap.)
+
+
+
+                                                                   15
+    Figure 9 illustrates the performance of xFS and NFS for                                          clients to cache data in local memory, providing scalable
+large reads from disk. For this test, each machine flushes its                                       bandwidths of 20 MB/s to 30 MB/s per client when clients
+cache and then sequentially reads a per-client 10 MB file.                                           access working sets of a few tens of megabytes. Furthermore,
+Again, a single NFS or AFS client outperforms a single xFS                                           AFS provides a larger, though slower, local disk cache at
+client. One NFS client can read at 2.8 MB/s, and an AFS                                              each client that provides scalable disk-read bandwidth for
+client can read at 1.0 MB/s, while the current xFS                                                   workloads whose working sets do not fit in memory; our 32-
+implementation limits one xFS client to 0.9 MB/s. As is the                                          node AFS cluster can achieve an aggregate disk bandwidth of
+case for writes, xFS exhibits good scalability; 32 clients                                           nearly 40 MB/s for such workloads. This aggregate disk
+achieve a read throughput of 13.8 MB/s. In contrast, two                                             bandwidth is significantly larger than xFS’s maximum disk
+clients saturate NFS at a peak throughput of 3.1 MB/s and 12                                         bandwidth for two reasons. First, as noted above, xFS is
+clients saturate AFS’s central server disk at 1.9 MB/s.                                              largely untuned, and we expect the gap to shrink in the future.
+    While Figure 9 shows disk read performance when data                                             Second, xFS transfers most of the data over the network,
+are not cached, all three file systems achieve much better                                           while AFS’s cache accesses are local. Thus, there will be
+scalability when clients can read data from their caches to                                          some workloads for which AFS’s disk caches achieves a
+avoid interacting with the server. All three systems allow                                           higher aggregate disk-read bandwidth than xFS’s network
+                                                                                                     storage. xFS’s network striping, however, provides better
+                                                                                                     write performance and will, in the future, provide better read
+                                  14 MB/s
+                                                                                        xFS          performance for individual clients via striping. Additionally,
+
+
+
+
+Aggregate Large-Write Bandwidth
+                                  12 MB/s                                                            once we have ported cooperative caching to a faster network
+                                                                                                     protocol, accessing remote memory will be much faster than
+                                  10 MB/s                                                            going to local disk, and thus the clients’ large, aggregate
+                                   8 MB/s                                                            memory cache will further reduce the potential benefit from
+                                                                                                     local disk caching.
+                                   6 MB/s                                                                Figure 10 illustrates the performance when each client
+                                   4 MB/s                                                            creates 2,048 files containing 1 KB of data per file. For this
+                                                                                                     benchmark, xFS’s log-based architecture overcomes the
+                                   2 MB/s                                                            current implementation limitations to achieve approximate
+                                                                                        AFS
+                                   0 MB/s
+                                                                                        NFS          parity with NFS and AFS for a single client: one NFS, AFS,
+                                         0    5         10   15     20     25      30     35         or xFS client can create 51, 32, or 41 files per second,
+                                                              Clients                                respectively. xFS also demonstrates good scalability for this
+                             Figure 8. Aggregate disk write bandwidth. The x axis                    benchmark. 32 xFS clients generate a total of 1,122 files per
+                             indicates the number of clients simultaneously writing private          second, while NFS’s peak rate is 91 files per second with four
+                             10 MB files, and the y axis indicates the total throughput
+                             across all of the active clients. xFS uses four groups of eight         clients and AFS’s peak is 87 files per second with four
+                             storage servers and 32 managers. NFS’s peak throughput is               clients.
+                             1.9 MB/s with 2 clients, AFS’s is 1.3 MB/s with 32 clients,
+                             and xFS’s is 13.9 MB/s with 32 clients.
+                                                                                                                                1200 files/s
+                                  14 MB/s                                                                                                                                           xFS
+                                                                                        xFS
+
+
+
+
+                                                                                                Small File Creates per Second
+                                                                                                                                1000 files/s
+
+
+
+
+Aggregate Large-Read Bandwidth
+                                  12 MB/s
+                                                                                                                                 800 files/s
+                                  10 MB/s
+
+                                   8 MB/s                                                                                        600 files/s
+
+                                   6 MB/s                                                                                        400 files/s
+                                   4 MB/s
+                                                                                                                                 200 files/s
+                                                  NFS
+                                   2 MB/s                                                                                                                                           AFS
+                                                                                                                                                                                    NFS
+                                                  AFS                                                                              0 files/s
+                                                                                                                                            0   5   10    15     20      25     30      35
+                                   0 MB/s                                                                                                                  Clients
+                                         0    5      15 10   20     25      30      35
+                                                       Clients                                                        Figure 10. Aggregate small write performance. The x axis
+                   Figure 9. Aggregate disk read bandwidth. The x axis                                                indicates the number of clients, each simultaneously creating
+                   indicates the number of clients simultaneously reading private                                     2,048 1 KB files. The y axis is the average aggregate number of
+                   10 MB files and the y axis indicates the total throughput                                          file creates per second during the benchmark run. xFS uses four
+                   across all active clients. xFS uses four groups of eight storage                                   groups of eight storage servers and 32 managers. NFS achieves
+                   servers and 32 managers. NFS’s peak throughput is 3.1 MB/s                                         its peak throughput of 91 files per second with four clients, AFS
+                   with two clients, AFS’s is 1.9 MB/s with 12 clients, and xFS’s                                     peaks at 87 files per second with four clients, and xFS scales up
+                   is 13.8 MB/s with 32 clients.                                                                      to 1,122 files per second with 32 clients.
+
+
+
+
+                                                                                               16
+                               NFS                          250 s       AFS                                                                250 s                xFS
+           250 s
+           200 s                                            200 s                                                                          200 s
+
+
+
+Elapsed Time                                     Elapsed Time                                                               Elapsed Time
+           150 s                                            150 s                                                                          150 s
+
+           100 s                                            100 s                                                                          100 s
+                                                                                                                                                                                 make
+                                                                                                                                                                                 readAll
+               50 s                                             50 s                                                                        50 s                                 scanDir
+                                                                                                                                                                                 copy
+                                                                                                                                                                                 makeDir
+                0s                                      0s                                        0s
+                  0   5   10  15 20 25 30                  0     5 10 15 20 25 30                    0     5 10 15 20 25 30
+                             Clients                                    Clients                                    Clients
+        Figure 11. Average time to complete the Andrew benchmark for NFS, AFS, and xFS as the number of clients simultaneously
+        executing the benchmark varies. The total height of the shaded areas represents the total time to complete the benchmark; each shaded
+        area represents the time for one of the five phases of the benchmark: makeDir, copy, scanDir, readAll, and make. For all of the systems,
+        the caches were flushed before running the benchmark.
+
+    Figure 11shows the average time for a client to complete                  stripe group size from eight to four reduces the fraction of
+the Andrew benchmark as the number of clients varies for                      fragments that store data as opposed to parity. The additional
+each file system. This benchmark was designed as a simple                     overhead reduces the available disk bandwidth by 16% for
+yardstick for comparing application-level performance for                     the system using groups of four servers.
+common tasks such as copying, reading, and compiling files.
+When one client is running the benchmark, NFS takes                           7.3.3. Manager Scalability
+64 seconds to run and AFS takes 61 seconds, while xFS                             Figure 13 shows the importance of distributing
+requires somewhat more time — 78 seconds. xFS’s                               management among multiple managers to achieve both
+scalability, however, allows xFS to outperform the other                      parallelism and locality. It varies the number of managers
+systems for larger numbers of clients. For instance, with                     handling metadata for 31 clients running the small write
+32 clients xFS takes 117 seconds to complete the benchmark,                   benchmark.3 This graph indicates that a single manager is a
+while increased I/O time, particularly in the copy phase of the               significant bottleneck for this benchmark. Increasing the
+benchmark, increases NFS’s time to 172 seconds and AFS’s                      system from one manager to two increases throughput by
+time to 210 seconds. A surprising result is that NFS                          over 80%, and a system with four managers more than
+outperforms AFS when there are a large number of clients;                     doubles throughput compared to a single manager system.
+this is because in-memory file caches have grown                                  Continuing to increase the number of managers in the
+dramatically since this comparison was first made [Howa88],                   system continues to improve performance under xFS’s First
+and the working set of the benchmark now fits in the NFS                      Writer policy. This policy assigns files to managers running
+clients’ in-memory caches, reducing the benefit of AFS’s on-
+disk caches.                                                                                                  14 MB/s
+                                                                                                                                                        xFS (8 SS’s per Group)
+
+
+
+
+                                                                                Aggregate Large-Write Bandwidth
+7.3.2. Storage Server Scalability                                                                             12 MB/s
+
+    In the above measurements, we used a 32-node xFS                                                          10 MB/s
+system where all machines acted as clients, managers, and
+                                                                                                                  8 MB/s
+storage servers and found that both bandwidth and small
+                                                                                                                                                        xFS (4 SS’s per Group)
+write performance scaled well. This section examines the                                                          6 MB/s
+impact of different storage server organizations on that
+scalability. Figure 12 shows the large write performance as                                                       4 MB/s
+we vary the number of storage servers and also as we change                                                       2 MB/s
+the stripe group size.
+                                                                                                                  0 MB/s
+    Increasing the number of storage servers improves                                                                   0 15      20     25 5   30 10   35
+                                                                                                                      Storage Servers
+performance by spreading the system’s requests across more
+                                                                                         Figure 12. Large write throughput as a function of the
+CPUs and disks. The increase in bandwidth falls short of                                 number of storage servers in the system. The x axis indicates
+linear with the number of storage servers, however, because                              the total number of storage servers in the system and the y axis
+client overheads are also a significant limitation on system                             indicates the aggregate bandwidth when 32 clients each write a
+                                                                                         10 MB file to disk. The 8 SS’s line indicates performance for
+bandwidth.                                                                               stripe groups of eight storage servers (the default), and the 4
+    Reducing the stripe group size from eight storage servers                            SS’s shows performance for groups of four storage servers.
+to four reduces the system’s aggregate bandwidth by 8% to
+22% for the different measurements. We attribute most of this                       3. Due to a hardware failure, we ran this experiment with three groups
+difference to the increased overhead of parity. Reducing the                  of eight storage servers and 31 clients.
+
+
+
+
+                                                                           17
+on the same machine as the clients that create the files;                    [LoVe93] provide redundant distributed data storage for
+Section 3.2.4 described this policy in more detail. The system               parallel environments, and Tiger [Rash94] services
+with 31 managers can create 45% more files per second than                   multimedia workloads.
+the system with four managers under this policy. This                            TickerTAIP [Cao93], SNS [Lee95], and AutoRAID
+improvement comes not from load distribution but from                        [Wilk95] implement RAID-derived storage systems. These
+locality; when a larger fraction of the clients also host                    systems could provide services similar to xFS’s storage
+managers, the algorithm is able to successfully co-locate                    servers, but they would require serverless management to
+managers with the clients accessing a file more often.                       provide a scalable and highly available file system interface
+    The Nonlocal Manager line illustrates what would happen                  to augment their simpler disk block interfaces. In contrast
+without locality. For this line, we altered the system’s                     with the log-based striping approach taken by Zebra and xFS,
+management assignment policy to avoid assigning files                        TickerTAIP’s RAID level 5 [Patt88] architecture makes
+created by a client to the local manager. When the system has                calculating parity for small writes expensive when disks are
+four managers, throughput peaks for this algorithm because                   distributed over the network. SNS combats this problem by
+the managers are no longer a significant bottleneck for this                 using a RAID level 1 (mirrored) architecture, but this
+benchmark; larger numbers of managers do not further                         approach approximately doubles the space overhead for
+improve performance.                                                         storing redundant data. AutoRAID addresses this dilemma by
+                                                                             storing data that is actively being written to a RAID level 1
+8. Related Work                                                              and migrating inactive data to a RAID level 5.
+    Section 2 discussed a number of projects that provide an                     Several MPP designs have used dynamic hierarchies to
+important basis for xFS. This section describes several other                avoid the fixed-home approach used in traditional directory-
+efforts to build decentralized file systems and then discusses               based MPPs. The KSR1 [Rost93] machine, based on the
+the dynamic management hierarchies used in some MPPs.                        DDM proposal [Hage92], avoids associating data with fixed
+    Several file systems, such as CFS [Pier89], Bridge                       home nodes. Instead, data may be stored in any cache, and a
+[Dibb89], and Vesta [Corb93], distribute data over multiple                  hierarchy of directories allows any node to locate any data by
+storage servers to support parallel workloads; however, they                 searching successively higher and more globally-complete
+lack mechanisms to provide availability across component                     directories. While an early xFS study simulated the effect of
+failures.                                                                    a hierarchical approach to metadata for file systems
+    Other parallel systems have implemented redundant data                   [Dahl94a], we now instead support location-independence
+storage intended for restricted workloads consisting entirely                using a manager-map-based approach for three reasons. First,
+of large files, where per-file striping is appropriate and where             our approach eliminates the “root” manager that must track
+large file accesses reduce stress on their centralized manager               all data; such a root would bottleneck performance and
+architectures. For instance, Swift [Cabr91] and SFS                          reduce availability. Second, the manager map allows a client
+                                                                             to locate a file’s manager with at most one network hop.
+                      1200 files/s                                           Finally, the manager map approach can be integrated more
+                                               First Writer Policy           readily with the imap data structure that tracks disk location
+
+
+
+
+Small File Creates per Second
+                      1000 files/s                                           metadata.
+
+                                800 files/s        Nonlocal Manager
+                                                                             9. Conclusions
+                                                                                 Serverless file systems distribute file system server
+                                600 files/s                                  responsibilities across large numbers of cooperating
+                                                                             machines. This approach eliminates the central server
+                                400 files/s                                  bottleneck inherent in today’s file system designs to provide
+                                                                             improved performance, scalability, and availability. Further,
+                                200 files/s
+                                                    24 Storage Servers       serverless systems are cost effective because their scalable
+                                  0 files/s
+                                                    31 Clients               architecture eliminates the specialized server hardware and
+                             5     10      0
+                                          15     20     25     30     35     convoluted system administration necessary to achieve
+                                          Managers
+                                                                             scalability under current file systems. The xFS prototype
+        Figure 13. Small write performance as a function of the
+        number of managers in the system and manager locality                demonstrates the viability of building such scalable systems,
+        policy. The x axis indicates the number of managers. The y axis      and its initial performance results illustrate the potential of
+        is the average aggregate number of file creates per second by 31     this approach.
+        clients, each simultaneously creating 2,048 small (1 KB) files.
+        The two lines show the performance using the First Writer policy     Acknowledgments
+        that co-locates a file’s manager with the client that creates the
+        file, and a Nonlocal policy that assigns management to some             We owe several members of the Berkeley
+        other machine. Because of a hardware failure, we ran this
+        experiment with three groups of eight storage servers and 31         Communications Abstraction Layer group — David Culler,
+        clients. The maximum point on the x-axis is 31 managers.             Lok Liu, and Rich Martin — a large debt for helping us to get
+
+
+
+                                                                            18
+the 32-node Myrinet network up. We also made use of a               Symp. on Computer Architecture, pages 245–254, April
+modified version of Mendel Rosenblum’s LFS cleaner                  1994.
+simulator. Eric Anderson, John Hartman, Frans Kaashoek,
+John Ousterhout, the SOSP program committee, and the            [Blaz93] M. Blaze. Caching in Large-Scale Distributed File
+anonymous SOSP and TOCS referees provided helpful                Systems. PhD thesis, Princeton University, January 1993.
+comments on earlier drafts of this paper; these comments
+                                                                [Bode95] N. Boden, D. Cohen, R. Felderman, A. Kulawik,
+greatly improved both the technical content and presentation     C. Seitz, J. Seizovic, and W. Su. Myrinet – A Gigabit-per-
+of this work.                                                    Second Local-Area Network. IEEE Micro, pages 29–36,
+    This work is supported in part by the Advanced Research      February 1995.
+Projects Agency (N00600-93-C-2481, F30602-95-C-0014),
+the National Science Foundation (CDA 0401156), California       [Cabr91] L. Cabrera and D. Long. Swift: A Storage Architec-
+MICRO, the AT&T Foundation, Digital Equipment                    ture for Large Objects. In Proc. Eleventh Symp. on Mass
+Corporation, Exabyte, Hewlett Packard, IBM, Siemens              Storage Systems, pages 123–128, Oct 1991.
+Corporation, Sun Microsystems, and Xerox Corporation.
+                                                                [Cao93] P. Cao, S. Lim, S. Venkataraman, and J. Wilkes.
+Anderson was also supported by a National Science                The TickerTAIP Parallel RAID Architecture. In Proc. of the
+Foundation Presidential Faculty Fellowship, Neefe by a           20th Symp. on Computer Architecture, pages 52–63, May
+National Science Foundation Graduate Research Fellowship,        1993.
+and Roselli by a Department of Education GAANN
+fellowship. The authors can be contacted at {tea, dahlin,       [Chai91] D. Chaiken, J. Kubiatowicz, and A. Agarwal. Lim-
+neefe, patterson, drew, rywang}@CS.Berkeley.EDU;                 itLESS Directories: A Scalable Cache Coherence Scheme.
+additional information about xFS can be found at                 In ASPLOS-IV Proceedings, pages 224–234, April 1991.
+http://now.CS.Berkeley.edu/Xfs/xfs.html.
+                                                                [Chen94] P. Chen, E. Lee, G. Gibson, R. Katz, and
+References                                                       D. Patterson. RAID: High-Performance, Reliable Second-
+[Ande95] T. Anderson, D. Culler, D. Patterson, and the           ary Storage. ACM Computing Surveys, 26(2):145–188, June
+ NOW team. A Case for NOW (Networks of Workstations).            1994.
+ IEEE Micro, pages 54–64, February 1995.
+                                                                [Corb93] P. Corbett, S. Baylor, and D. Feitelson. Overview
+[Bake91] M. Baker, J. Hartman, M. Kupfer, K. Shirriff, and       of the Vesta Parallel File System. Computer Architecture
+ J. Ousterhout. Measurements of a Distributed File System.       News, 21(5):7–14, December 1993.
+ In Proc. of the 13th Symp. on Operating Systems Principles,
+ pages 198–212, October 1991.                                   [Cris91] F. Cristian. Reaching Agreement on Processor
+                                                                 Group Membership in Synchronous Distributed Systems.
+[Bake92] M. Baker, S. Asami, E. Deprit, J. Ousterhout, and       Distributed Computing, 4:175–187, 1991.
+ M. Seltzer. Non-Volatile Memory for Fast, Reliable File
+ Systems. In ASPLOS-V, pages 10–22, September 1992.             [Cyph93] R. Cypher, A. Ho, S. Konstantinidou, and
+                                                                 P. Messina. Architectural Requirements of Parallel Scien-
+[Bake94] M. Baker. Fast Crash Recovery in Distributed File       tific Applications with Explicit Communication. In Proc. of
+ Systems. PhD thesis, University of California at Berkeley,      the 20th International Symposium on Computer Architec-
+ 1994.                                                           ture, pages 2–13, May 1993.
+
+[Basu95] A. Basu, V. Buch, W. Vogels, and T. von Eicken.        [Dahl94a] M. Dahlin, C. Mather, R. Wang, T. Anderson, and
+ U-Net: A User-Level Network Interface for Parallel and          D. Patterson. A Quantitative Analysis of Cache Policies for
+ Distributed Computing. In Proc. of the 15th Symp. on Oper-      Scalable Network File Systems. In Proc. of 1994 SIGMET-
+ ating Systems Principles, December 1995.                        RICS, pages 150–160, May 1994.
+
+[Birr93] A. Birrell, A. Hisgen, C. Jerian, T. Mann, and         [Dahl94b] M. Dahlin, R. Wang, T. Anderson, and
+ G. Swart. The Echo Distributed File System. Technical Re-       D. Patterson. Cooperative Caching: Using Remote Client
+ port 111, Digital Equipment Corp. Systems Research Cen-         Memory to Improve File System Performance. In Proc. of
+ ter, September 1993.                                            the First Symp. on Operating Systems Design and Imple-
+                                                                 mentation, pages 267–280, November 1994.
+[Blac95] T. Blackwell, J. Harris, and M. Seltzer. Heuristic
+ Cleaning Algorithms in Log-Structured File Systems. In         [Dibb89] P. Dibble and M. Scott. Beyond Striping: The
+ Proc. of the 1995 Winter USENIX, January 1995.                  Bridge Multiprocessor File System. Computer Architech-
+                                                                 ture News, 17(5):32–39, September 1989.
+[Blau94] M. Blaum, J. Brady, J. Bruck, and J. Menon.
+ EVENODD: An Optimal Scheme for Tolerating Double               [Doug91] F. Douglis and J. Ousterhout. Transparent Process
+ Disk Failures in RAID Architectures. In Proc. of the 21st       Migration: Design Alternatives and the Sprite Implementa-
+
+
+
+                                                               19
+ tion. Software: Practice and Experience, 21(7), July 1991.           ary 1992.
+
+[Hage92] E. Hagersten, A. Landin, and S. Haridi. DDM–A            [LoVe93]     S. LoVerso,    M. Isman,     A. Nanopoulos,
+ Cache-Only Memory Architecture. IEEE Computer,                    W. Nesheim, E. Milne, and R. Wheeler. sfs: A Parallel File
+ 25(9):45–54, September 1992.                                      System for the CM-5. In Proc. of the Summer 1993 Usenix,
+                                                                   pages 291–305, 1993.
+[Hart95] J. Hartman and J. Ousterhout. The Zebra Striped
+ Network File System. ACM Trans. on Computer Systems,             [Majo94] D. Major, G. Minshall, and K. Powell. An Over-
+ August 1995.                                                      view of the NetWare Operating System. In Proc. of the 1994
+                                                                   Winter USENIX, pages 355–72, January 1994.
+[Howa88] J. Howard, M. Kazar, S. Menees, D. Nichols,
+ M. Satyanarayanan, R. Sidebotham, and M. West. Scale             [McKu84] M. McKusick, W. Joy, S. Leffler, and R. Fabry. A
+ and Performance in a Distributed File System. ACM Trans.          Fast File System for UNIX. ACM Trans. on Computer Sys-
+ on Computer Systems, 6(1):51–81, February 1988.                   tems, 2(3):181–197, August 1984.
+
+[Kaza89] M. Kazar. Ubik: Replicated Servers Made Easy. In         [Nels88] M. Nelson, B. Welch, and J. Ousterhout. Caching in
+ Proc. of the Second Workshop on Workstation Operating             the Sprite Network File System. ACM Trans. on Computer
+ Systems, pages 60–67, September 1989.                             Systems, 6(1), February 1988.
+
+[Keet95] K. Keeton, T. Anderson, and D. Patterson. LogP           [Patt88] D. Patterson, G. Gibson, and R. Katz. A Case for
+ Quantified: The Case for Low-Overhead Local Area Net-             Redundant Arrays of Inexpensive Disks (RAID). In Inter-
+ works. In Proc. 1995 Hot Interconnects, August 1995.              nat. Conf. on Management of Data, pages 109–116, June
+                                                                   1988.
+[Kist92] J. Kistler and M. Satyanarayanan. Disconnected Op-
+ eration in the Coda File System. ACM Trans. on Computer          [Pier89] P. Pierce. A Concurrent File System for a Highly
+ Systems, 10(1):3–25, February 1992.                               Parallel Mass Storage Subsystem. In Proc. of the Fourth
+                                                                   Conf. on Hypercubes, Concurrent Computers, and Applica-
+[Kubi93] J. Kubiatowicz and A. Agarwal. Anatomy of a               tions, pages 155–160, 1989.
+ Message in the Alewife Multiprocessor. In Proc. of the 7th
+ Internat. Conf. on Supercomputing, July 1993.                    [Pope90] G. Popek, R. Guy, T. Page, and J. Heidemann.
+                                                                   Replication in the Ficus Distributed File System. In Proc. of
+[Kusk94] J. Kuskin, D. Ofelt, M. Heinrich, J. Heinlein,            the Workshop on the Management of Replicated Data, pag-
+ R. Simoni, K. Gharachorloo, J. Chapin, D. Nakahira,               es 5–10, November 1990.
+ J. Baxter, M. Horowitz, A. Gupta, M. Rosenblum, and
+ J. Hennessy. The Stanford FLASH Multiprocessor. In Proc.         [Rash94] R. Rashid. Microsoft’s Tiger Media Server. In The
+ of the 21st Internat. Symp. on Computer Architecture, pages       First Networks of Workstations Workshop Record, October
+ 302–313, April 1994.                                              1994.
+
+[Lee95] E. Lee. Highly-Available, Scalable Network Stor-          [Ricc91] A. Ricciardi and K. Birman. Using Process Groups
+ age. In Proc. of COMPCON 95, 1995.                                to Implement Failure Detection in Asynchronous Environ-
+                                                                   ments. In Proc. Tenth Symp. on Principles of Distributed
+[Leff91] A. Leff, P. Yu, and J. Wolf. Policies for Efficient       Computing, pages 341–353, August 1991.
+ Memory Utilization in a Remote Caching Architecture. In
+ Proc. of the First Internat. Conf. on Parallel and Distribut-    [Rose92] M. Rosenblum and J. Ousterhout. The Design and
+ ed Information Systems, pages 198–207, December 1991.             Implementation of a Log-Structured File System. ACM
+                                                                   Trans. on Computer Systems, 10(1):26–52, February 1992.
+[Leno90] D. Lenoski, J. Laudon, K. Gharachorloo, A. Gupta,
+ and J. Hennessy. The Directory-Based Cache Coherence             [Rost93] E. Rosti, E. Smirni, T. Wagner, A. Apon, and
+ Protocol for the DASH Multiprocessor. In Proc. of the 17th        L. Dowdy. The KSR1: Experimentation and Modeling of
+ Internat. Symp. on Computer Architecture, pages 148–159,          Poststore. In Proc. of 1993 SIGMETRICS, pages 74–85,
+ May 1990.                                                         June 1993.
+
+[Lisk91] B. Liskov, S. Ghemawat, R. Gruber, P. Johnson,           [Sand85] R. Sandberg, D. Goldberg, S. Kleiman, D. Walsh,
+ L. Shrira, and M. Williams. Replication in the Harp File          and B. Lyon. Design and Implementation of the Sun Net-
+ System. In Proc. of the 13th Symp. on Operating Systems           work Filesystem. In Proc. of the Summer 1985 USENIX,
+ Principles, pages 226–238, October 1991.                          pages 119–130, June 1985.
+
+[Litz92] M. Litzkow and M. Solomon. Supporting Check-             [Schr91] M. Schroeder, A. Birrell, M. Burrows, H. Murray,
+ pointing and Process Migration Outside the UNIX Kernel.           R. Needham,     T. Rodeheffer,    E. Satterthwaite, and
+ In Proc. of the Winter 1992 USENIX, pages 283–290, Janu-          C. Thacker. Autonet: A High-Speed, Self-Configuring Lo-
+
+
+
+                                                                 20
+ cal Area Network Using Point-to-Point Links. IEEE Jour-
+ nal on Selected Areas in Communication, 9(8):1318–1335,
+ October 1991.
+
+[Selt93] M. Seltzer, K. Bostic, M. McKusick, and C. Staelin.
+ An Implementation of a Log-Structured File System for
+ UNIX. In Proc. of the 1993 Winter USENIX, pages 307–
+ 326, January 1993.
+
+[Selt95] M. Seltzer, K. Smith, H. Balakrishnan, J. Chang,
+ S. McMains, and V. Padmanabhan. File System Logging
+ Versus Clustering: A Performance Comparison. In Proc. of
+ the 1995 Winter USENIX, January 1995.
+
+[Smit77] A. Smith. Two Methods for the Efficient Analysis
+ of Memory Address Trace Data. IEEE Trans. on Software
+ Engineering, SE-3(1):94–101, January 1977.
+
+[vE92] T. von Eicken, D. Culler, S. Goldstein, and K. E.
+ Schauser. Active Messages: A Mechanism for Integrated
+ Communication and Computation. In Proc. of 1992 ASP-
+ LOS, pages 256–266, May 1992.
+
+[Walk83] B. Walker, G. Popek, R. English, C. Kline, and
+ G. Thiel. The LOCUS distributed operating system. In
+ Proc. of the 5th Symp. on Operating Systems Principles,
+ pages 49–69, October 1983.
+
+[Wang93] R. Wang and T. Anderson. xFS: A Wide Area
+ Mass Storage File System. In Fourth Workshop on Work-
+ station Operating Systems, pages 71–78, October 1993.
+
+[Wilk95] J. Wilkes, R. Golding, C. Staelin, and T. Sullivan.
+ The HP AutoRAID Hierarchical Storage System. In Proc.
+ of the 15th Symp. on Operating Systems Principles, Decem-
+ ber 1995.
+
+[Wolf89] J. Wolf. The Placement Optimization Problem: A
+ Practical Solution to the Disk File Assignment Problem. In
+ Proc. of 1989 SIGMETRICS, pages 1–10, May 1989.
+
+
+
+
+                                                               21
+

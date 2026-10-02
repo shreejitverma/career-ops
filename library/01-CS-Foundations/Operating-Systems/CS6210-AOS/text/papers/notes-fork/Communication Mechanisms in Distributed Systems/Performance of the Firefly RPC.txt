@@ -1,0 +1,541 @@
+                                      PERFORMANCE                                  OF FIREFLY RPC
+                                                           Michael D. Schroeder and Michwl Burrows
+                                                                  Digital Equipment Corporation
+
+
+
+
+ABSTRACT                                                                               communication paradigm, to be used by all future programs
+                                                                                       needing to communicate with another address space, whether on
+In this paper, we report on the performance of the remote                              the samemachine or a different one. Remote file transfers as well
+procedure call implementation for the Firefly multiprocessor and                       as calls to local operating systems entry points are handled via
+analyze the implementation to account precisely for all measured                       RPC. For RPC to succeed in this primary role, it must be fast
+latency. From the analysis and measurements, we estimate how                           enough that programmers are not tempted to design their own
+much faster RFC could be if certain improvements were made.                            special purpose communication protocols. Because of the primary
+      The elapsed time for an inter-machine call to a remote                           role of RPC however, we were able to structure the system
+procedure that accepts no arguments and produces no results is                         software to expedite the handling of RPCs and to pay special
+2.66 milliseconds. The elapsed time for an RPC that has a single                       attention to each instruction on the RPC “fast path”.
+ 1440-byte result (the maximum result that will fit in a single                             This paper reports measurements of Firefly RPC
+packet) is 6.35 milliseconds. Maximum inter-machine throughput                         performance for inter-machine calls. It also details the stepsof the
+of application program data using RPC is 4.65 megabits/second,                         fast path and assigns an elapsed time to each step.
+achieved with 4 threads making parallel RPCs that return the                           Correspondence of the sum of these step times with the measured
+maximum sized result that fits in a single RPC result packet. CPU                      overall perfotmsnce indicates that we have an accurate model of
+utilization at maximum throughput is about 1.2 CPU seconds per                         where the time is spent for RPC. In addition, this detailed
+second on the calling machine and a little less on the server.                         understanding allows estimates to be made for the Performance
+      These measurements are for RPCs from user space on one                           improvements that would result from certain changes to hardware
+machine to user spaceon another, using the installed system and a                      and software.
+ 10 megabit/second Ethernet. The RPC packet exchange protocol                               Good inter-machine RPC performance is important for good
+is built on IP/UDP, and the times include calculating and verifying                    performance of distributed applications. When RPC is also used
+UDP checksums. The Fiieflies used in the tests had 5 MicroVAX                          for obtaining services from other programs running on the same
+II processors and a DEQNA Ethernet controller.                                         machine (including the local operating system), good same-
+                                                                                       machine performance is also important. For the system measured
+                                                                                       here, the performance of same-machine RPC is adequate; the
+1.    INTRODUCTION                                                                     miniial same-machine RPC takes 937 microseconds of elapsed
+                                                                                       time, about 60 times the latency of a local procedure call. We
+Remote procedure call (RPC) is now a widely accepted method                            have paid some attention to same-machine performance. For
+for encapsulating communication in a distributed system. With                          example, a special path through the scheduler is used to minimize
+RPC, Programmers of distributed applications need not concern                          the cost of the two context switches. But same-machine RPC in
+themselves with the details of managing communications with                            our system has not been as thoroughly worked over as inter-
+another address space or another machine, nor with the detailed                        machine RPC. Much better performance for same-machine RPC
+representation of operations and data items on the communication                       is possible, as demonstrated by Bershad ef al. [ 11,who achieve 20
+channel in use. RPC makes the communication with a remote                              times the latency of a local procedure call. Fortunately, their
+environment look like a local procedure call (but with slightly                        scheme for fast same-machine RPC and our scheme for fast inter-
+different semantics).                                                                  machine RPC fit together well in the same system.
+      In building a new software system for the Firefly
+multiprocessor [9], we decided to make RPC the primary                                 I .I Hardware and SystemCharacteristics
+
+Authors address: Digital Equipment Corporation, Systems                                The Firefly multiprocessor allows multiple VAX processors
+ResearchCenter, 130 Lytton Avenue, Palo Alto, California 94301                         access to a shared memory system via coherent caches. The
+                                                                                       Firefly version measuredhere had 16 megabytes of memory and 5
+                                                                                       MicroVAX II CPUs [9]. each of which provides about 1 MIPS of
+Permission to copy without fee all or part of this material is granted provided        processor power l. One of these processors is also attached to a
+that the copies are not made or distributed for direct commercial advantage,           QBus I/O bus [5]. Network access is via a DEQNA device
+the ACM copyright notice and the title of the publication and its date appear,         controller [4] connecting the QBus to a 10 megabit/second
+and notice is given that copying is by permission of the Association for
+Computing Machinery. To copy otherwise, or to republish, requires a fee
+and/or specific permission.                                                            1 Since the measurementsreported here were made, Fireflies have
+0 1989 ACM 089791-338-3/89/0012/0083 $1.50                                             been upgraded with faster CVAX processors and more memory.
+
+
+
+                                                                                  a3
+Ethernet. In the Firefly, the DEQNA has access to about 16                  1514 bytes, the maximum packet size albwed on an Ethemet.l
+megabits/secondof QBus bandwidth.                                           The VAR OUT designation tells the RPC implementation that the
+     The Firefly system kernel. called the Nub. implements a                argument value need only be transferred in the result packet.
+scheduler, a virtual memory manager, and device drivers. The                MaxArg(b) moves data from caller to server in the same way.
+Nub executes in VAX kernel mode. The virtual memory manager                 The VAR IN designation means that the argument value need only
+provides multiple user address spaces for application ‘programs.            be transferred in the call packet.
+one of which contains the rest of the operating system. The
+scheduler Provides multiple threads Per address space, so that the          2.1 Latency and Throughput
+Nub, operating system, and application programs can be written as
+true concurrent programs that execute simultaneously on multiple            As an overaU assessmentof RPC performance on the Firefly. we
+processors. The system is structured to operate best with multiple          measured the elapsed time required to make a total of 10.000
+processors.                                                                 RPCs using various numbers of caller threads. The caller threads
+                                                                            ran in a user address space on one Firefly, and the multithreaded
+1.2 overview ofRPcstruclurt?                                                server ran in a user addressspace on another. Timings were done
+                                                                            with the two Fireflies attached to a Private Ethernet to eliminate
+The Firefly RPC implementation follows the standard practice of             variance due to other network traffic.
+using stub procedures [2]. The caller stub, automatically
+generatedfrom a Modula-2+ [8] interface definition. is included in                             Table I: Tie   for 10.000 RPCs
+the calling program to Provide local surrogates for the actual
+remote procedures. When a procedure in this stub is called, it              I #ofcaller   I     Cab to Null0    1 Calls to MaxResult
+allocates and prepares a call packet into which are marshaled the              threads    1 seconds     RP&/sec 1 seconds     Mbits/&
+interface and procedure identifications, and the arguments. The                   1       I   26.61        375  1 63.47          1.82
+stub calls the appropriate transport mechanism to send the call                   2           16.80        595     35.28         3.28
+packet to the remote server machine and then blocks, w siting for a               3           16.26        615     27.28         4.25
+corresponding result packet. (Other threads in the call.er address                4           15.45        647     24.93         4.65
+spaceare still able to execute.) When the result packet arrives, the              5           15.11        662     24.69         4.69
+stub unmarshals any results, frees the packet, and returns control                6           14.69        680     24.65         4.70
+to the calling program, as though the call had taken place within                 7           13.49        741     24.72         4.69
+the same addressspace.                                                            8           13.67        732     24.68         4.69
+      Similar machinery operates on the server. A server stub is
+included in the server program. This stub receives callusfrom the                 From Table I we see that the base latency of the Firefly RPC
+transport mechanism on the server machine when a suitable call              mechanism is about 2.66 milliseconds and that 7 threads can do
+packet arrives. The stub unmarshals the arguments and calls the             about 740 calls of Null0 Per second. Latency for a cal to
+identified procedure. After completing its task, the server                 MaxResult       is about 6.35 milliseconds and 4 threads can
+procedure retums to the stub, which marshals the results and then           achieve a server-to-caller throughput of 4.65 megabits/second
+calls the appropriate transport mechanism to send the result packet         using this procedure. Thii characterizes the rate at which a multi-
+back to the caller machine.                                                 threaded calling program can transfer data from a multi-threaded
+      A more detailed description of the structure of Firefly RPC           server program using RPC. In our system, RPC is used for most
+appearsin section 3.                                                        bulk data transfer, including file transfer. We observed about ‘I .2
+                                                                            CPU seconds per second being used on the caller machine.
+                                                                            slightly less on the server machine, to achieve this maximum
+2.   MEASUREMENTS                                                           throughput. The CPU utilization included the standard system
+                                                                            background threads using about 0.15 CPU seconds per second on
+In this section, we report the overall Performance of Firefly RPC.          each Firefly.
+All measurementsin this paper were made on the installed service
+system, software that was used by more than 50 researchers.                 22 Marshaling Time
+Except where noted, all tests used automatically generated stubs
+for a remote ‘Test” interface that exports three procedures:                RPC stubs are automatically generated from a Modula-2+
+                                                                            definition module. The stubs are generated as Modula-2-+ source,
+PROCEDURE: Null();                                                          which is compiled by the normal compiler. The stubs can marshal
+PROCEDURE: MaxResult(VAR OUT bti ARRAY OF CHAR);                            most Modula-2+ data structures, including multilevel records and
+PROCEDURE: MaxArg(VAR IN buE ARRAY OF CHAR);                                pointer-linked structures. For most argument and result types, the
+                                                                            stub contains direct assignment statements to copy the argument
+MaxArg and MaxResult were called with the following variable                or result tofiom the call or result packet. Some complex types are
+as the “‘buf argument:                                                      marshaled by calling library marshaling procedures.
+                                                                                  We measured the following times for passing various
+VAR b: ARRAY [0..1439] OF CHAR;                                             argument types with the automatically generated stubs. The
+                                                                            measurements reported are the incremental elapsed time for
+     Calls to Null0 measure the base latency of the RPC                     calling a procedure with the indicated arguments over calling
+mechanism. The Ethernet packets generated for the call and
+return of this Procedure, which accepts no argument and produces             1 The Firefly RPC! implementation allows arguments and results
+no result, consist entirely of Ethernet, IP, UDP, and RPC headers           larger than 1440 bytes, but such calls are transmitted in multiple
+and are the 74-byte minimum size generated for Ethernet RPC.                packets using a synchronous acknowledgement per packet. Thus
+     Calls to MaxResult           measure the server-to-caller              the throughput of such calls is similar to the rate achieved by one
+throughput of RPC, The single 1440-byte VAR OUT argument                    thread calling MaxArg(b) or MaxResult         synchronously and is
+produces the minimal 74-byte call packet and a result packet with           lower than several threads calling them in parallel.
+
+
+
+                                                                       84
+NuB(). The differences were measured for calls to another                     called. A Text.T is a text string that is allocated in garbage
+address space on the same machine in order to factor out the                  collected storage and is immutable. The caller stub must copy the
+Ethernet transmission time for different sizes of call and result             string into the call packet, The server stub must allocate a new
+packets. Such same-machine RPC uses the same stubs as inter-                  Text.T from garbage collected storage at the server, copy the
+machine RPC. Only the transport mechanism is different: shared                string into it, and then pass a reference to this new object to the
+memory rather than IP/UDP and the Ethernet. Because the pool                  server procedure. Stubs manipulate Text.Ts by calling library
+of packet buffers (the same pool used for Ethernet transport) is              procedures of the Text package.
+mapped into each user address space, the time for local transport
+is independent of packet size.
+                                                                              3.       ANALYSIS
+         Table II: 4-byte integer arguments, passedby value
+                                                                              ln this section we account for the elapsed time measured in
+              # of arguments              Marshaling time                     section 2.1. We start by describing in some detail the steps in
+                                           in p-seconds                       doing an inter-machine RPC. Then we report the time each step
+                                                    8                         takes and compare the total for the steps to the measured
+                       :                           16                         performance.
+
+                                                                              3.1 Steps in a RemoteProcedure Call
+     Integer and other fixed-size arguments passed by value are
+copied from the caller’s stack into the call packet by the caller             The description here corresponds to the fast path of RPC. The fast
+stub, and then copied from the packet to the server’s stack by the            path usually will be followed when other calls from a caller
+server stub. Such arguments are not included in the result packet.            address space to the same remote server address space have
+                                                                              occurred recently, within a few seconds, so that server threads are
+         Table IIl: Fixed length array, passedby VAR OUT                      waiting for calls from this caller. Part of making RPC fast is
+                                                                              arranging that the machinery for retransmission, for having
+              Array size in bytes          Marshaling time                    enough server threads waiting, for multi-packet calls or results, for
+                                            in t.t-seconds                    acknowledgements. and other features of the complete RPC
+                       4                            20                        mechanism intrude very little on the fast path. Consequently, the
+                     400                           140                        description of the fast path can ignore these mechanisms. The fast
+                                                                              path is followed for more than 95% of RPCs that occur in the
+        Table IV: Variable length array, passedby VAR OUT                     operational system.
+                                                                                    Firefly RPC allows choosing from several different transport
+              Array size in bytes         Marshaling time                     mechanisms at RPC bind time. Our system currently supports
+                                           in p-seconds                       transport to another machine by a custom RPC packet exchange
+                       1                         115                          protocol layered on IP/UDP, transport to another machine by
+    I               1440                I       550             I             DECNet byte streams, and transport to another address space on
+                                                                              the same machine by shared memory. The choice of transport
+      In Modula-2+, VAR arguments are passed by address. The                  mechanism is embodied in the particular versions of the transport
+additional OUT or IN designation tells the stub compiler that the             procedures named Starter. Transporter, and Ender that are invoked
+argument is being passed in one direction only. The stub can use              by the caller stub. At the seryer, the choice is represented by the
+this information to avoid transporting and copying the argument               Receiver procedure being used. In this paper, we measure and
+twice. A VAR OUT argument is actually a result and is                         describe the first of these transport options, using Ethernet. Thii
+transported only in the result packet; it is not copied into the call         custom RPC packet exchange protocol follows closely the design
+packet by the caller stub. If this result fits in a singte packet then        described by Birrell and Nelson for Cedar RPC [2]. The protocol
+the server stub passes the address of storage for the result in the           uses implicit acknowledgements in the fast path cases.
+result packet buffer to the server procedure, from where the server
+procedure can directly write it. so no copy is performed at the               3.1 .I    Caller stub
+server. The single copy occurs upon return when the caller stub
+moves the value in the result packet back into the caller’s                   When a program calls a procedure in a remote interface. control
+argument variable. VAR IN arguments work the same way,                        transfers to a caller stub module for that interface in the caller’s
+mutatis mutandis, to transfer data from caller to server. VAR                 address space. Assuming that binding to a suitable remote
+OUT and VAR IN arguments of the same type have the same                       instance of the interface has already occurred. the stub module
+incremental marshaling costs. For single-packet calls and results,            completes the RFC in five steps:
+the marshaling times for array arguments scale lmearly with the                    1. Call the Starter procedure to obtain a packet buffer
+values reported in Tables lII and IV.                                                  for the call with a partially filled-in header.
+                                                                                   2 Marshal the caller’s arguments by copying them into
+                     Table V: Text.T argument                                          the call packet.
+                                                                                   3. Call the Transporter procedure to transmit the call
+              Array size in bytes         Marshaling time                              packet and wait for the corresponding result packet.
+                                            in l&econds                            4. Unmarshal the result packet by copying packet data
+                     NIL                           89                                  to the caller’s result variables.
+                        1                        378                               5. Call the Ender procedure to return the result packet to
+    I                12g                I        659            I                      the free pool.
+                                                                              When the stub returns control to the calling program, the results
+     Table V illustrates how much slower marshaling can be                    are available as if the call had been to a local procedure.
+when storage allocation is required and library procedures must be
+
+
+
+                                                                         85
+3 .I2   Server stub                                                          transmission, the server thread returns to the Receiver and again
+                                                                             registers itself in the call table and waits for another call packet to
+The server stub has a similar job to do. When it receives a call             arrive.
+packet on an up call from the Receiver procedure on the server                     Back at the caller machine, the Ethernet interrupt routine
+machine, it performs thee steps:                                             validates the arriving result packet, does the UDP checksum, and
+     1. Unmarshal the call’s arguments from the call packet.                 tries to fiid the caller thread waiting in the call table. If
+         Depending on its type, an argument may be c:opied                   successful, the interrupt routine directly awakens the caller thread,
+         into a local stack variable, copied into newly                      which returns to step 4 in the caller stub described above.
+         allocated garbage collected storage. or left :in the                     The steps involved in transporting a call packet and a result
+         packet and its addresspassed. The call packet is not                packet are nearly identical, from calling the Sender through
+         freed.                                                              transmitting and receiving the packet to awakening a suitable
+     2. Call the server procedure.                                           thread in the call table. We refer to these steps as the
+     3. When the server procedure returns, marshal the                       “send+receive” operation. A complete remote procedure call
+         results in the saved call packet, which becomes the                 requires two send+receives -- one for the call packet and one for
+         result packet.                                                      the result packet.
+When the server stub returns to the Receiver procedure,.the result
+packet is transmitted back to the caller. The server thread then             3.2 Structwiflg for Low Latency
+waits for another call packet to arrive.
+                                                                             The scenario just outlined for the fast path of RPC incorporates
+3.13    Trawport mechanism                                                   several &sign features that lower latency. We already mentioned
+                                                                             that the stubs use custom generated assignment statements in most
+      The Transporter procedure must fill in the RPC header in the           cases to marshal arguments and results for each procedure, rather
+call packet. It then calls the Sender procedure to fill in the UDP.          than library procedures or an interpreter. Another performance
+IP, and Ethernet headers, including the UDP checksum on the                  enhancement in the caller stub is invoking the chosen Starter,
+packet contents. To queue the call packet for transmission to the            Transporter, and Ender procedures through procedure variables
+server machine, the Sender invokes the Ethernet driver by                    filled in at binding time, rather than finding the procedures by a
+trapping to the Nub in kernel mode,.                                         table lookup.
+      Because the Firefly is a multiprocessor with only CPU 0                      Directly awakening a suitable thread from the Ethernet
+connected to the Vo bus, the Ethernet driver must run on CPU 0               interrupt routine is another important performance optimization
+when notifying the Ethernet controller hardware. Control gets to             for RPC. This approach means that demultiplexing of RPC
+CPU 0 through an interprocessor interrupt; the CPU 0 interrupt               packets is done in the interrupt routine. The more traditional
+routine prods the controller into action.                                    approach is to have the interrupt handler awaken an operating
+      Immediately after issuing the interprocessor interrupt, the            system thread to demultiplex the incoming packet. The traditional
+caller thread returns to the caller’s address space where the                approach lowers the amount of processing in the interrupt handler,
+Transporter registers the outstanding call in an RPC call table, and         but doubles the number of wakeups required for au RPC. By
+then waits on a condition variable for the result packet to arrive.          carefully coding the demultiplexing code for RPC packets, the
+The time for these steps is not part of the fast path latency as the         time per packet in the interrupt handler can be kept within
+steps are overlapped with the transmission of the call packet, the           reasonable bounds (see Table VI). Even with only two wakeups
+processing at the server, and the transmission of the result packet.         for each RPC. the time to do these wakeups can be a major
+For the RPC fast path, the calling thread gets the call registered           contributor to RPC latency. Considerable work has been done on
+before the result packet arrives.                                            the Firefly scheduler to minimize this cost. The slower path
+      Once prodded, the Ethernet controller reads the packet from            through the operating system address space is used when the
+memory over the QBus and then transmits it to the controller on              interrupt routine cannot find the appropriate RPC thread in the call
+the server machine. After receiving the entire packet, the server            table, when it encounters a lock conflict in the call table, or when
+controller writes the packet to memory over the server QBus and              it handles a non-RPC packet. The latency of an RPC to Null0 is
+then issues a packet arrival interrupt.                                      about 4.5 milliseconds when the slower path through the operating
+      The Ethernet interrupt routine validates the various headers           system is followed for both the call and the result packet.
+in the received packet, verifies the UDP checksum, and then                        The packet buffer management scheme we have adopted also
+attempts to hand the packet directly to a waiting server thread.             increases RPC performance. We mentioned above that the server
+Such server threads are registered in the call table of the server           stub retains the call packet to use it for the results. We also
+machine. If the interrupt routine can find a server thread                   arrange for the receive interrupt handler to immediately replace
+associatedwith this caller addressspace and called addressspace,             the buffer used by an arriving call or result packet. Each call table
+it attaches the buffer containing the call packet to the. call table         entry occupied by a waiting thread also contains a packet buffer.
+entry and awakens the server thread directly.                                In the case of a calling thread it is the call packet; in the case of a
+      The server thread awakens in the server’s Receiver                     server thread it is the last result packet. These packets must be
+procedure. 1 The Receiver inspects the RPC header and then calls             retained for possible retransmission. The RPC packet exchange
+the stub for the interface ID specified in the call packet. The              protocol is arranged so that arrival of a result or call packet means
+interface stub then calls the specific procedure stub for the                that the packet buffer in the matching call table entry is no longer
+procedure ID specified in the call packet.                                   needed. Thus, when putting the newly arrived packet into the call
+      The transport of the result packet over the Ethernet is handled        table, the interrupt handler removes the buffer found in that call
+much the same way. When the server stub returns to the Receiver.             table entry and adds it to the Ethernet controller’s receive queue.
+it calls the server’s Sender procedure to transmit the result packet         Since the interrupt handler always checks for additional packets to
+back to the caller machine. Once the result packet is queued for             process before terminating, on-the-fly receive buffer replacement
+                                                                             can allow many packets to be processed per interrupt. Recycling
+1 We lump three procedures of the actual implementation under                is sufficiently fast that we have seen several hundred packets
+the name Receiver here.                                                      processedin a single receive interrupt.
+
+
+
+                                                                        86
+      The alert reader will have suspected another feature of our               Table VI: Latency of steps in the send+receive operation
+buffer management strategy: RPC packet buffers reside in
+memory shared among all user addressspacesand the Nub. These                                                     s-seconds       p-seconds
+buffers also are permanently mapped into VAX I/G space. Thus,                                                    for 74          for 1514
+RPC stubs in user spaces, and the Ethernet driver code and                                                       byte.packet     byte packet
+interrupt handler in the Nub, all can read and write packet buffers                                                              {if different)
+in memory using the same addresses. This strategy eliminates the                                                      59 a
+need for extra addressmapping operations or copying when doing             Calculate UDP checksum                     45 b           440      b
+RPC. While its insecurity makes shared buffers unsuitable for use          Handle trap to Nub                         37 a
+in a time sharing system, security is acceptable for a single user         Queue packet for transmission              39 a
+workstation or for a server where only trusted code executes (say          Interprocessor interrupt to CPU 0          10 c
+a file server). This technique would also work for, say, kernel to         Handle interprocessor interrupt            76 a
+kernel RPCs. For user space to user spaceRPCs in a time sharing            Prod Ethernet controller                   22 a
+environment, the more secure buffer managementrequired would               QBus/Controller transmit latency           70 d           815      e
+introduce extra mapping or copying operations into RPCs.                   Transmission time on Ethernet              6Od           1230      e
+      Like the pool of RPC buffers, the RPC call table also is             QBus/Controller receive latency            80 d           835      e
+shared among all user address spaces and the Nub. The shared               General I/C interrupt handler              14 a
+call table allows the interrupt handler to find and awaken the             Handle interrupt for received pkt         177 a
+waiting (calling or server) thread in any user addressspace.               Calculate UDP checksum                     45 b           440      b
+      Several of the structural features used to improve RPC               Wakeup RPC thread                         220 a
+performance collapse layers of abstraction. Programming a fast
+RPC is not for the squeamish.                                              Total for send+receive                     954         4414
+                                                                                Key for table VI:
+3 3 Allocation of Latency                                                       a Calculated by adding the measured execution times
+                                                                                    of the machine instructions in this code sequence.
+We now try to account for the time an RPC takes.                                b Measured by disabling UDP checksums and noting
+      Table VI shows a breakdown of time for the send+receive                       speedup.
+operation that is executed twice per RPC: once for the argument                 c Estimated.
+packet, once for the result packet. The first seven actions are                 d Measured with logic analyzer.
+activities of the sending machine. The next three are Ethernet and              e Measurements d adjusted assuming 10 megabit/set
+hardware controller delays. The last four are actions performed                     Ethernet, 16 megabit&c QBus transfer, and no cut
+by the receiving machine. All of the software in this table is                      through.
+written in assembly language. Table VI shows that Ethernet
+transmission time and QBus/oontroller latency are dominant for
+large packets, but software costs are dominant for small packets.                      Table W: Latency of stubs and RPC runtime
+The biggest single software cost is the scheduler operation to
+awaken the waiting RPC thread.                                             Machine          Procedure                                u-seconds
+      Table VII shows where time is spent in the user space RPC            CdltX            Calling program (loop to repeat call)        16
+runtime and stubs for a call to Null(). The procedures detailed in                          Calling stub (call & return)                 90
+Table VII are written in Modula-2+. The times were calculated by                            starter                                     128
+adding up the instruction timings for the compiler-generated code.                          Transporter (send call pkt)                  27
+The Modula-2+ code listed in Table VII includes 9 procedure                server           Receiver (receive call pkt)                 158
+calIs. Since each call/return takes about 15 microseconds,                                  Server stub (call & return)                  68
+depending on the number of arguments, about 20% of the time                                 Null (the server procedure)                  10
+here is spent in the calling sequence.                                                      Receiver (send result pkt)                   27
+      In Table VIII we combine the numbers presented so far to             CdlfX            Transporter (receive result pkt)             49
+account for the time required for a complete call of Null0 and of                           Ender                                        33
+MaxResult(
+      The best measured total latency for a call to Null0 is 2645                           TOTAL                                          606
+microseconds, so we’ve failed to account for 131 microseconds.
+The best measured total latency for a call to MaxResult     is 6347
+microseconds, so we’ve accounted for 177 microseconds too
+much. By adding the time of each instruction executed and of                    Table VlIL Calculation of latency for RPC to Null0 and
+each hardware latency encountered, we have accounted for the                                         MaxResult
+total measured time of RPCs to Null0 and MaxResult        to within
+about 5% .                                                                 Procedure        Action                                   u-seconds
+                                                                           NW               Caller, server, stubs, RPC runtime          606
+                                                                                            Send+receive 74-byte call packet            954
+4.   IMPROVEMENTS                                                                           Send+receive 74-byte result packet          954
+                                                                                            TOTAL                                      2514
+One of the important steps in improving the performance of
+
+
+
+
+                                                                                                                                    I
+Firefly RPC over its initial implementation was to rewrite the             MaxResult        Caller, server, stubs, RPC runtime           606
+Modula-2+ versions of the fast path code in the Ethernet                                    Marshal 1440-byte result packet              550
+send+receive operation in VAX assembly language. In this                                    Send+receive 74-byte call packet             954
+section, we illustrate the speed-ups achieved by using machine                              Send+receive 1514-bvte result ukt           4414
+code.                                                                                                                                   6524
+
+
+
+                                                                      87
+      We then use the analysis and measurement reported so far to            42.1   Dgerent network controller
+estimate the impact that other changes could have on overall RPC
+performance. It is hard to judge how noticeable these possible               A controller which provided maximum conceivable overlap
+improvements would be to the normal user of the system. The                  between Ethernet and QBUS transfers would save about 300
+Firefly RPC implementation has speededup by a factor of three or             microseconds on Null0 (ll%), and about 1800 microseconds
+so from its initial implementation. This improvement has                     (28%) on MaxResult(          It is more difficult to estimate the
+produced no perceived change in the behavior of most                         improvement in throughput with multiple threads, since the
+applications. However, lower latency RPC may encourage                       Ethernet controller is already providing some overlap in that case.
+programmers to use RPC interfaces where they might previously                We think improvement is still possible on the transmission side,
+have been tempted to use ad hoc protocols before, and encourage              since the saturated reception rate is 40% higher than the
+the designers of new systems to make extensive use of RPC.                   corresponding transmission rate.
+
+4.1 AssernbfyLanguage vs. ~Uodukz-2+                                         422    Faster network
+
+In order to give some idea of the improvement obtained when                  If the network ran at 108 megabits/second and all other factors
+Modula-2+ code fragments are recoded in assembly language. the               remained constant, the time to call Null{) would be reduced by
+following table shows the time taken by one particular code                  110 microseconds (4%) and the time to call MaxResult     would
+fragment at various stages of optimization. This fragment was                be reduced by 1160 microseconds (18%).
+chosen because it was the largest one that was recoded and is
+typical of the improvements obtained for all the code that was               423    Faster CPUs
+rewritten.
+                                                                             If all processors were to increase their speed by a factor of 3, the
+Table M: Execution time for main path of the Ethernet interrupt              time to call Null0 would reduce by about 1380 microseconds
+                          routine                                            (52%). The time to call MaxResult          would reduce by 2280
+                                                                             microseconds (36%).
+
+                                                                             42.4   Omit UDP checksums
+
+                                                                             Omitting UDP checksums saves 180 microseconds (7%) on a call
+                                                                             to Null0 and 1000 microseconds (16%) on a call to MaxResult(
+                                                                             At present, we use these end-to-end software checksums because
+      The “Original Modula-2+” was the state of the interrupt                the Ethernet controller occasionally makes errors after checking
+routine before any assembly language code was written. The                   the Ethernet CRC. End-to-end checksums still would be essential
+“‘Best Modula-2+” code was structured so that the compiler output            for crossing gateways in an internet.
+would follow the assembly language version as closely as
+possible. The “Assembly language” version, however, runs in one              425    Redesign RPC protocol
+third the time. Writing in assembly language is hard work and
+also makes the programs harder to maintain. Because RPC is the               We estimate that by redesigning the RPC packet header to make it
+preferred communication paradigm for the Firefly, however, it                easy to interpret, and changing an internal hash function, it would
+seemedreasonable to concentrate considerable attention on its key            be possible to save about 200 microseconds per RPC. This
+code sequence. (There cannot be too much assembly language in                represents approximately 8% of a call to Null0 and 3% of a call to
+the fast path, or it would not be fast!) The Modula-2+ compiler              MaxResult(
+used here apparently generates fairly inefficient code. The
+speedup achieved by using assembly language will be less                     42.6   Omit layering on IP and UDP
+dramatic starting from a better compiler, but would still be
+substantial.                                                                 We estimate that direct use of Ethernet datagrams. omitting the IP
+                                                                             and UDP headers, would save about 100 microseconds per RPC,
+42 Specukatiom on Future Improvements                                        assuming that checksums were still calculated. This is about 4%
+                                                                             of a call to Null0 and l-2% of a call to MaxResult(           This
+While improving the speedof the RPC system, we noticed several               change would make it considerably more difficult to implement
+further possibilities for improving its performance and also                 RPC on machines where we do not have access to the kernel. It
+considered the impact that faster hardware and networks would                would also make it impossible to use RPC via an IP gateway.
+have. In this section, we speculate on the performance changes               (Some of the fields in IP and UDP headers would have to be
+such improvements might generate. Some of these changes have                 incorporated into the RPC header.)
+associated disadvantages or require unusual hardware. For each
+change. we give the estimated speedup for a call to Null0 and a              42.7   Busywait
+call to MaxResult(     The effect on maximum throughput has not
+been estimated for all the changes, since this figure is likely to be        If caller and server threads were to loop in user space while
+limited by a single hardware component.                                      waiting for incoming packets, the time for a wakeup via the Nub
+      Some estimates are based on best conceivable figures, and              would be saved at each end This is about 440 microseconds per
+these may ignore some practical issues. Also, the effects                    RPC, which is 17% of a call to Null0 and 7% of a call to
+discussed are not always independent, so the performance                     MaxResult(      Allowing threads to busy wait (in such a way that
+improvement figures cannot always be added.                                  they would relinquish control whenever the scheduler demanded)
+                                                                             would require changes to the scheduler and would make it
+                                                                             difficult to measure accurately CPU usage for a thread
+
+
+
+
+                                                                        88
+42.8    Recode RPC runtime routines (except stubs)                                Table XI: Throughput in megabits/second of MaxResult
+                                                                                        with varying numbers of processors and threads
+If the RFC runtime routines in Table VII were rewritten in hand-
+generated machine code, we would expect to save approximately                        caller processols        5           :               1
+280 microseconds per RPC. This corresponds to 10% of a call to                       sewer processors         5                           1
+Null0 and 4% of a call to MaxResult(      This figure is based on                    1 caller thread         2.0          1.5            1.3
+an expected speedup of a factor of 3 in 422 microseconds of                          2 caller threads        3.4         2.3             2.0
+routines to be recoded, which is typical of other code fragments                     3 caller threads        4.6         2.7             2.4
+that have been rewritten                                                             4 ealler threads        4.7         ::::            25
+                                                                                     5callertbreads          4.7                         2:5
+
+5.     FEWER PROCESSORS                                                            Table XI shows the effect on the data trsnsfer rate of varying
+                                                                             the number of processors on RPCs to MaxResult(            In this test
+The Fireflies used in the tests reported here had 5 MicroVAX II              each thread made 1.000 calls. RPC throughput in this system is
+processors. The measurements in other sections were done with                quite sensitive to the difference between a uniprocessor and a
+all 5 available to the scheduler. In this section, we report the             multiprocessor.   Uniprocessor throughput is slightly more than
+performance with fewer available processors.                                 half of 5 processor performance for the same number of caller
+       At fist we were unable to get reasonable performance when             threads.
+running with a single available processor on the caller and server                 We have not tried very hard to make Firefly RPC perform
+machines. Calls to Null0 were taking around 20 milliseconds.                 well on a uniprocessor machine.         The fast path for RPC is
+We finally discovered the cause to be a few lines of code that               followed exactly only on a multiprocessor.      On a uniprocessor,
+slightly improved multiprocessor performance but had a dramatic              extra code gets included in the basic latency for RPC, such as a
+negative effect on uniprocessor          performance.      The good          longer path through the scheduler.         Also, the fast path is
+multiprocessor code tends to lose about 1 packet/second when a               abandoned more often by lock conflicts on a uniprocessor. Even
+single thread calls Null0 using uniprocessors, producing a penalty           with just one caller thread, the interrupt code csn require a lock
+of about 600 milliseconds waiting for a retransmission to occur.             held by the caller or server thread. It is plausible that better
+Fixing the problem requires swapping the order of a few                      uniprocessor throughput could be achieved by an RPC design, like
+statements at a penalty of about 100 microseconds                 for        Amoeba’s [7], V’s f3]. or Sprite’s [6]. that streamed a large
+multiprocessor latency. The results reported in this section were            argument or result from a single call in multiple packets, rather
+measured with the swapped lines installed. (This change was not              than depended on multiple threads transferring just a packet’s
+present for results reported in other sections.)                             worth of data per call. The streaming strategy requires fewer
+       These measurements were taken with the RPC Exerciser,                 thread-to-thread context switches.
+which uses hand-produced stubs that run faster than the standard
+ones (because they don’t do marshaling. for one thing). With the
+RPC Exerciser, the latency for Null0 is 140 microseconds faster              6.    OTHER SYSTEMS
+and the latency for MaxResult        is 600 microseconds faster than
+reported in Table I. Such hand-produced stubs might be used in               A sure sign of the coming of age of RPC is that others are
+performance-sensitive    situations, such as kernel-to-kernel RPCs.          beginning to report RPC performance in papers on distributed
+where one could trust the caller and server code to reference all            systems. Indeed, an informal competition has developed to
+arguments and results directly in RPC packet buffers.                        achieve low latency and high throughput. Table XII collects the
+                                                                             published performance of several systems of interest. All of the
+Table X: Calls to Null0 from one thread with varying numbers of              latency measurements were for inter-machine         RPCs to the
+                           processors                                        equivalent of Null(). The throughput measurements were made
+                                                                             using either single-threaded multipacket calls or multithreaded
+               caller         server       seconds for                       single-packet   calls, depending on which worked best on a
+               ocessors     processors     1,000 calls                       particular system. All measurements were for a 10 megabit
+                 5                            2.69                           Ethernet, with the exception that the Cedar measurements used a 3
+                 4               2            2.73                           megabit Ethernet.      No other paper has attempted to account
+                 3               5            2.85                           exactly for the measured performance, as we have tried to do.
+                 2               5            2.98
+
+
+
+
+         L
+                 1               5            3.96                                 Table XII:   Performance of remote RPC in other systems
+                 1               4            3.98
+                 1               3            4.13                                                 Machine - Processor          - MIPS         dli-    nega.
+                 1               2            4.21                                                                                             sets    bits
+                 1                            4.81                                                                                             /Call   Is=
+                                                                                                   Dorado - custom              1x4            Ti-     2.0
+      Table X shows 1 thread making RPCs to Null(). with varying                                   Tadpole - M68020             1x1.5           1.4     5.3
+numbers of processors available on each machine. When the calls                                    Sun 3/75 - M68020            1x2             2.5     4.4
+are being done one at a time from a single thread, reducing the                                    Sun 3/75 - M68020            1x2             2.8     5.6
+number of caller processors from 5 down to 2 increases latency                                     Sun 3150 - M68020            1x1.5           7.0     1.8
+only about 10%. There is a sharp jump in latency for the                                           FF - MicroVAX II             1x1            4.8     2.5
+uniprocessor caller. Reductions in server processors seem to                                       FF - MicroVAX II             5x1             2.7     4.6
+follow a similar pattern. Latency with uniprocessor caller and
+server machines is 75% longer than for 5 processor machines.                      Amoeba advertises itself as the world’s fastest distributed
+                                                                             system. But the Cedar system achieved 20% lower latency 4
+                                                                             years earlier (using a slower network and a faster processor).
+
+
+
+
+                                                                        89
+ Determining a winner in the RPC sweepstakesis tricky business.             8.   ACKNOWLEDGEMENTS
+These systems vary in processor speed, I/O bus bandwidth, and
+controller performance. Some of these RPC implementations                   Andrew Birrell designed the Firefly RPC facility and Sheng Yang
+work only kernel to kernel, others work user space to user space.           Chiu designed the driver for the Ethemet controller. Andrew and
+ Some protocols provide internet headers, others work <onlywithin           Sheng Yang, along with Michael Burrows, Eric Cooper, Ed
+ a single Ethernet. Some use automatically generated stubs, others          Lazowska, Sape Mullender, Michael Schroeder, and Ted Wobber
+use hand-produced stubs. Some generate end-to-end checksums                 have participated in the implementation and improvement of the
+with software, others do not. The implementations are written in            facility. The recent round of performance improvements and
+different languages with varying quality compilers. IResearchers            measurements were done by Michael Burrows and Michael
+can disagree about which corrections to apply to normalize the              Schroeder, at Butler Lampson’s insistence. The RPC latency
+reported performance of different systems.                                  includes two wakeup calls to the scheduler, whose design and
+      It is clear from the literature that developers of distributed        implementation was done by Roy Levin. hdrew Birrell, Mark
+systems are learning how to get good request/response                       Brown, David Cheriton, Ed Lazowska. Hal Murray, John
+performance from their systems. Many system developers and                  Ousterhout. Susan Owicki, and Doug Terry made several
+users now understand that it is not necessary to put up with high           suggestions for improving the presentation of the paper.
+latency or low throughput from RPC-style communication. Some
+RPC implementations ,yar to drive current Ethernet controllers
+at their throughput limtt and to provide basic remote call latency          9.   REFERENCES
+only about 100 times slower than that for statically-linked calls
+within a single addressspace.                                               1.   Brian Bershad et al., “Lightweight Remote Procedure Call,”
+                                                                                 In this volume.
+                                                                            2    Andrew D. Birrell and Bruce Nelson, “Implementing Remote
+7.   CONCLUSIONS                                                                 Procedure Calls.” ACM Transactions on Computer Systems,
+                                                                                 Feb. 1984, pp. 39-59.
+Our objective in making Firefly RPC the primary unnnmnication                    David R. Cheriton, “The V Distributed            System,”
+mechanism between addressspaces,both inter-machine and same-                     Communications of the ACM, Mar 1988. pp. 314-333.
+machine, was to explore the bounds of effectiveness of this                      Digital Equipment Corp., “DEQNA ETHERNET -- User’s
+paradigm. In making the RPC implementation fast, we sought to                    Guide.” Sep 1986.
+remove one excuse for not using it. To make it fast we had to                    Digital Equipment Corp., “Microsystems Handbook.” 1985.
+understand exactly where time was being spent, remove                            Appendii A.
+unnecessary steps from the critical path, give up some structural                John K. Ousterhout et al.. “The Sprite Network Operating
+elegance, and write key steps in hand-generated assembly code.                   System,” Computer, Feb 1988. pp. 23-35.
+We did not fmd it necessary to sacrifice function; RPC still allows              Robbert van Renesse, Hans van Staveren, and Andrew S.
+multiple transports, works over wide area networks, copes with                   Tanenbaum. “Performance of the World’s FastestDistributed
+lost packets, handles a large variety of argument types including                Operating System,” Operating Systems Review, Ott 1988,
+references to garbage collected storage, and contains the structural             pp. 25-34.
+hooks for authenticated and secure calls. The performance of                8    Paul R. Rovner. “Extending Modula-2 to Build Large,
+Fiiefly RPC is now good enough that programmers accept it as the                 Integrated Systems,” IEEE Software, Nov 1986, pp. 46-57.
+standard way to communicate.                                                9.   C.P. Thacker, L.C. Stewart, and E.H. Satterthwaite Jr.,
+                                                                                 “Firefly: A Multiprocessor Workstation,” IEEE Transactions
+1 In the caseof Firefly RPC. throughput has remained the same as                 on Computers, Aug 1988. pp. 909-920.
+the last few performance improvements were put in place. The
+CPU utilization continued to drop as the code got faster.
+
+
+
+
+                                                                       90
+

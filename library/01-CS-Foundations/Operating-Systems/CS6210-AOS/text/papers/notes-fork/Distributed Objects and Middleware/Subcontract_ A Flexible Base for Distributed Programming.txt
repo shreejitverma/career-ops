@@ -1,0 +1,712 @@
+Subcontract: A Flexible Base for Distributed
+Programming
+Graham Hamilton
+Michael L. Powell
+James G. Mitchell
+
+
+
+SMLI TR-93-13                          April 1993
+
+
+
+
+Abstract:
+
+A key problem in operating systems is permitting the orderly introduction of new properties and new implemen-
+tation techniques. We describe a mechanism, subcontract, that within the context of an object-oriented distrib-
+uted system permits application programmers control over fundamental object mechanisms. This allows
+programmers to deﬁne new object communication without modifying the base system. We describe how new
+subcontracts can be introduced as alternative communication mechanisms in the place of existing subcon-
+tracts. We also brieﬂy descibe some of the uses we have made of the subcontract mechanism to support cach-
+ing, crash recovery, and replication.
+
+
+
+
+   A Sun Microsystems, Inc. Business
+                                                                                    email addresses:
+   M/S 29-01                                                                        graham.hamilton@eng.sun.com
+   2550 Garcia Avenue                                                               michael.powell@eng.sun.com
+   Mountain View, CA 94043                                                          jim.mitchell@eng.sun.com
+                              Subcontract: A Flexible Base for
+                                 Distributed Programming
+
+                                 Graham Hamilton, Michael L. Powell, James G. Mitchell
+
+
+                                             Sun Microsystems Laboratories, Inc.
+                                                  2550 Garcia Avenue
+                                                 Mountain View, CA 94043
+
+
+
+
+1      Introduction                                              tion underneath the covers, as part of the object invocation
+                                                                 mechanism. But there are many different ways of imple-
+It has become common to provide remote procedure call            menting replication and it seems undesirable to build in
+facilities that extend the semantics of local procedure calls    support for some particular set of mechanisms while
+to distributed systems [Birrell & Nelson 1984]. This often       implicitly rejecting others. If an application developer dis-
+takes the form of remote object invocation [Almes et al          covers a more efﬁcient way of managing replicated objects
+1985], [Black et al 1987].                                       within their application then we would like them to be able
+                                                                 to start using this new mechanism without having to
+However, rather than there being a single set of obvious         change the base RPC system.
+semantics for all remote objects, there appears to be a wide
+range of possible object semantics, often reflecting differ-     In the Spring system we have taken an approach of wel-
+ent application requirements. For example, there are RPC         coming diversity, rather than trying to implement a single
+systems that include integrated support for replication          catch-all RPC mechanism. We provide a framework which
+[Birman & Joseph 1987], atomic transactions [Liskov              makes it easy for different RPC mechanisms to work
+1988], object migration [Schuller et al 1992], and persis-       together and for implementors to add new mechanisms in
+tence [OMG 1991]. But there are also RPC systems that            a consistent, compatible, way. Replaceable modules
+provide only minimal features and instead concentrate on         known as subcontracts are given control of the basic
+high performance [Schroeder & Burrows 1990], [Bershad            mechanisms of object invocation and argument passing.
+et al 1990].
+                                                                 Subcontracts are separated from object interfaces and
+One possible reaction to this diversity would be to attempt      object implementations. It is easy for object implementors
+to invent a single mechanism for remote objects that             to either select and use an existing subcontract or to imple-
+includes all possible features. Unfortunately the list of        ment a new subcontract. Correspondingly, application
+possible properties is continually expanding and not all         level programmers need not be aware of the specific sub-
+features are necessarily compatible. For example, a high         contracts that are being used for particular objects.
+performance system may not want its objects to include
+support for persistence or atomicity. Moreover, there are        The rest of the paper is structured as follows: Section 2
+often a variety of different ways of implementing a given        describes related work in the distributed systems and lan-
+set of semantics. Having a single RPC system prevents            guage communities. Section 3 gives an overview of the
+applications exploiting new and improved mechanisms              Spring system, which is the context for this work. Sections
+that may better reﬂect their real needs.                         4, 5 and 6 describe subcontract and how it is convention-
+                                                                 ally used. Section 7 gives an example of the operation of a
+For example, say that we wish to support object replica-         subcontract-based object. Section 8 describes some uses of
+tion so as to increase reliability. We do not want client        subcontract. Finally Section 9 reflects on our experience
+application code to need to do extra work simply to talk to      with subcontract.
+replicated objects, so we would prefer to support replica-
+
+
+                                                                                                                            2
+                                                         Related work
+
+
+2      Related work                                                and transmit their invocations to that site. This mechanism
+                                                                   is appropriate for heavyweight objects, such as files or
+                                                                   databases, but it is often inappropriate for lightweight
+2.1    Language-level support for remote                           abstractions, such as an object representing a cartesian
+       operations                                                  coordinate pair, where it would have been better to mar-
+Techniques for providing a language-level veneer for               shal the real state of the object.
+remote operations have been in use for some time [Nelson
+1981], [Birrell & Nelson 1984]. Typically, a remote inter-         Finally, some object-oriented programming systems pro-
+face is defined in some language. Then a pair of stubs are         vide the means for an object implementation to control
+generated from this interface. The client stub runs in one         how its arguments are marshalled and unmarshalled. For
+machine and presents a language level interface that is            example, in the Argus system [Herlihy & Liskov 1982]
+derived from the remote interface. The server stub runs in         object implementors can provide functions to map
+some other machine and invokes a language-level inter-             between their internal representation and a specific, con-
+face that is derived from the remote interface. To perform         crete, external representation. The Argus stubs will invoke
+a remote operation, a client application programmer                the appropriate mapping functions when marshalling and
+invokes the client stub, which marshals the arguments into         unmarshalling objects so that it is the external representa-
+network buffers and transmits them to the server stub,             tion rather than any particular internal representation that
+which unmarshals the arguments from the network buffers            is transmitted.
+and calls into the server application. Similarly, when the
+server application returns, the results are marshalled by the      These different solutions all either impose a single stan-
+server stub and returned to the client stub, which unmar-          dard marshalling policy for all objects, or require that indi-
+shals the results and returns them to the client application.      vidual object implementors take responsibility for the
+                                                                   details of transforming an object into a marshalled form.
+When the arguments or results are simple values such as
+integers or strings, the business of marshalling and unmar-        2.2    Reﬂection in object-oriented languages
+shalling is reasonably straightforward. The stubs will nor-
+mally simply put the literal value of the argument into the        Some object-oriented languages provide the ability for
+network buffer. However, in languages that support either          object implementors to gain control of some of the funda-
+abstract data types or objects, marshalling becomes rather         mental object mechanisms. This technique is known as
+more interesting.                                                  reflection. For example in the 3-KRS language [Maes
+                                                                   1987] objects can have meta-objects associated with them.
+One solution is for the stubs to marshal the internal data         A meta-object provides methods specifying how an object
+structures of the object and then to unmarshal this data           inherits information, how an object is printed, how objects
+back into a new object. This has several fairly serious deﬁ-       are created, how message passing (that is, object invoca-
+ciencies. First, it is a violation of abstraction, since the       tion) is implemented, etc. 3-KRS does not however pro-
+stubs have no business knowing about the internals of              vide any control over argument passing.
+objects. Second, it requires that the server and client
+implementations of the object use the same internal layout         By providing reflective object invocation in Smalltalk-80
+for their data structures. Third, it may involve marshalling       it was possible to implement objects which are automati-
+large amounts of unnecessary data since not all of the             cally locked during invocation and objects which only
+internal state of the object may really need to be transmit-       compute a value when they are ﬁrst read [Foote & Johnson
+ted to the other machine.                                          1989].
+
+An alternative solution is that when an object is mar-             We were interested in applying these notions of reflective
+shalled, none of its internal state is transmitted. Instead an     control of fundamental object mechanisms to the particu-
+identifying token is generated for the object and this token       lar problems of distributed computing.
+is transmitted. For example in the Eden system [Lazowska
+et al 1981], [Almes et al 1985], objects are assigned names        2.3    Object adaptors in CORBA
+and when an object is marshalled, then its name rather
+than its actual representation is marshalled. Subsequently         The Common Object Request Broker Architecture
+when remote machines wish to operate on this object, they          (CORBA) [OMG 1991] defines a notion of object adap-
+must use the name to locate the original site of the object        tors, which is based, in part, on some of our early experi-
+
+
+                                          Subcontract: A Flexible Base for Distributed Programming                             3
+                                                      Overview of Spring
+
+ence with subcontract. Object adaptors provide a limited          Figure 1.) So clients pass around object references rather
+set of choices about the server-side object mechanisms.           than passing around actual objects.
+However, all object adaptors are supplied as part of the
+basic object machinery and it is not possible for applica-
+tion writers to implement new object adaptors, or for the                   client          object
+                                                                          application     reference
+object machinery to discover and install new object adap-
+tors at run-time.                                                                                                 server
+                                                                                                                application
+                                                                        client          object
+                                                                      application     reference                object
+3      Overview of Spring
+Spring is an experimental distributed environment. Its cur-          FIGURE 1. Systems distinguishing object
+rent incarnation includes a distributed operating system                       references and objects
+and a support framework for distributed applications.
+
+Spring is focused on providing interfaces rather than sim-        Spring presents a model that clients are operating directly
+ply on providing implementations. We aim to encourage             on objects, rather than on object references. However
+the coexistence of radically different implementations of a       some of these objects happen to keep all their interesting
+given interface within a single system. We have reinforced        state at some remote site, so that their local state merely
+this view of a strong separation of implementations and           consists of a handle to this remote state. (See Figure 2.)
+interfaces by using the object-oriented notions of data
+encapsulation and interface inheritance.
+                                                                          client
+                                                                        application       object
+                                                                                                                 server
+3.1    The interface deﬁnition language                                                                        application
+The unifying principle of Spring is that all the key inter-                                                underlying
+                                                                       client
+faces are deﬁned in an interface deﬁnition language called           application        object                state
+IDL [OMG 1991]. This language is object-oriented and
+includes support for multiple inheritance. It is purely con-
+cerned with interface properties and does not provide any                   FIGURE 2. Objects in Spring
+implementation information.
+
+From the IDL interfaces it is possible to generate lan-           An object can only exist in one place at a time, so if we
+guage-specific stubs. These stubs provide a language-spe-         transmit an object to someone else then we cease to have
+ciﬁc mapping to the Spring interfaces. For example, in our        the object ourselves. However, we can also copy the object
+main implementation language, C++, Spring objects are             before transmitting it, which might be implemented such
+represented by C++ objects. When a method on a stub               that there are now two distinct objects pointing to the same
+object is invoked it will either perform a local call within      underlying state.
+the current address space or forward the call to another
+address space, which may be on a different machine.               For most server-based objects this distinction is mainly
+                                                                  one of terminology. However, Spring also supports objects
+3.2    The Spring object model                                    which are not server-based, and objects where the state of
+                                                                  the object is split between the client and the server. In
+Spring has a slightly different way of viewing objects from       these cases it is much more convenient to regard the client
+other distributed object-oriented systems and it is neces-        as possessing the true object, rather than merely possess-
+sary to clarify this before discussing the details of subcon-     ing a reference.
+tract.
+
+Most distributed systems present a model that objects             3.3     Doors
+reside at server machines and client machines possess             Spring applications run as separate domains. Each domain
+object references that point to the object at the server. (See    is an address space plus a collection of threads.
+
+
+
+4                                              Subcontract: A Flexible Base for Distributed Programming
+                                                  Where subcontract ﬁts in
+
+The Spring kernel provides an object-oriented inter-pro-          If the object is implemented by a remote server, then a typ-
+cess communication mechanism called doors [Hamilton &             ical arrangement will be that the subcontract implements
+Kougiouris 1993], which are analogous to ports in Mach            the machinery for communicating with the remote server,
+[Acetta et al 1986], [Draves 1990]. A door is a communi-          while the method table consists of pointers to stub meth-
+cation endpoint, to which threads may execute cross               ods whose sole duty is to marshal the arguments into a
+address space calls. A domain that creates a door receives        buffer, call the subcontract to execute the remote call and
+a door identiﬁer, which it can pass to other domains so that      then unmarshal any results from the reply buffer. Figure 3
+they can issue calls to the associated door. The kernel           shows the logical progression of a call to a server-based
+manages all operations on doors and door identifiers,             Spring object.
+including their construction, destruction, copying and
+transmission. Door identifiers function as software capa-
+bilities since only the legitimate owner of a door identiﬁer          Client application                 Server application
+may issue a call on its associated door.
+                                                                         Client stubs                       Server stubs
+A set of network servers extend the door mechanism trans-
+parently over the network. This includes both forwarding
+                                                                         subcontract                        subcontract
+door invocations over the network and also mapping door
+identiﬁers to and from an extended network form.
+
+
+3.4   Status                                                       FIGURE 3. Invoking a method on a server-based object
+Spring currently exists as a fairly complete prototype. The
+operating system is based around a minimal kernel, which
+provides basic object-oriented inter-process communica-           In the remote server there will typically be some subcon-
+tion [Hamilton & Kougiouris 1993] and memory manage-              tract code to perform any subcontract work associated
+ment [Khalidi & Nelson 1993A]. Functionality such as              with incoming calls and some server side stub code that
+naming, paging, file systems, etc. are all provided as user-      unmarshals the arguments for each operation and calls into
+mode services outside of the basic kernel. The system also        the server application.
+provides enough Unix  emulation to support standard
+utilities such as make, vi, csh, the X window system, etc.
+[Khalidi & Nelson 1993B]. All system interfaces are               5      Basic subcontract mechanisms
+defined in IDL and all the inter-process communication
+uses our subcontract machinery.                                   To illustrate the subcontract mechanisms, we shall use as
+                                                                  an example a subcontract called replicon, which is our
+                                                                  simplest subcontract for supporting replication.
+4     Where subcontract ﬁts in
+                                                                  In replicon, a set of server domains conspire to maintain
+A Spring object is perceived by a client as consisting of         the underlying state associated with an object. Each server
+three things: 1) a method table, which contains an entry for      creates a kernel door (see 3.3 above) to accept incoming
+each operation implied by the object’s type deﬁnition; 2) a       calls on that state. The client domains possess a set of door
+subcontract operations vector which specifies the basic           identifiers that they use to call through to server domains.
+subcontract operations described below in Section 5; and          In the case of replicon the clients are required to talk only
+3) some client-local private state, which is referred to as       to a single server and the servers are required to perform
+the object’s representation.                                      their own state synchronization. (Other subcontracts for
+                                                                  replication use more elaborate rules.)
+A client employs a Spring object by invoking methods on
+what appears to be a C++ object. The code for this C++            Thus a Spring object built on the replicon subcontract con-
+object is automatically generated from an IDL interface           sists of a method table that consists entirely of stub meth-
+description. This code transforms the method invocations          ods, a replicon subcontract descriptor and a representation
+into calls on either the object’s regular method table or on      that consists of a set of kernel door identiﬁers, one per rep-
+its subcontract operations vector. How these methods              lica.
+achieve their effect is hidden from the client.
+
+
+                                         Subcontract: A Flexible Base for Distributed Programming                             5
+                                                Basic subcontract mechanisms
+
+5.1    Client side subcontract interfaces                          5.1.3 Invoke
+The principal client side subcontract operations are:              The invoke operation is used by the stubs to actually exe-
+                                                                   cute an object call, after the stubs have marshalled all the
+• marshal                                                          arguments. Invoke is given an argument buffer and is
+• invoke                                                           expected to return a result buffer.
+• unmarshal
+                                                                   Replicon implements the invoke operation using the ker-
+• marshal_copy                                                     nel’s door invocation mechanism. Replicon attempts to
+• invoke_preamble                                                  invoke each of its door identiﬁers in turn. If the door invo-
+                                                                   cation fails due to a communications error, then replicon
+5.1.1 Marshal                                                      deletes that door identifier from its set of targets and pro-
+The subcontract marshal operation is used by the stubs to          ceeds to try the next door identifier. Otherwise, replicon
+transmit an object to another address space.                       returns the result of the door invocation back to the stubs.
+
+Marshal takes the current object and places enough infor-          The replicon invoke protocol also piggybacks some sub-
+mation in a communications buffer so that an essentially           contract control information in the call and reply buffers.
+identical object can be unmarshalled from this buffer in           This is used to support changes to the replica set.
+another domain. It then deletes all the local state associ-
+ated with the object.                                              5.1.4 Invoke_preamble
+                                                                   The subcontract invoke operation is only executed after all
+Replicon implements the marshal operation by marshal-              the argument marshalling has already occurred. In practice
+ling the count of door identifiers and then marshalling            it was noted that there are cases where an object’s subcon-
+each of its door identiﬁers in turn.                               tract would like to become involved earlier in the process,
+                                                                   so that it can either write some subcontract-level control
+5.1.2 Unmarshal                                                    information into the communications buffer or adjust the
+The unmarshal operation is used when receiving an object           communications buffer to inﬂuence future marshalling.
+from another domain. Its job is to fabricate a fully ﬂedged
+Spring object, consisting of a method table, subcontract           For example we have some subcontracts that use shared
+operations vector, and representation.                             memory regions to communicate with their servers. In this
+                                                                   case when invoke_preamble is called, the subcontract can
+When a stub decides to read an object from a communica-            adjust the communications buffer to point into the shared
+tions buffer, it must choose both an initial subcontract and       memory region so that arguments are directly marshalled
+an initial method table based on the expected type of the          into the region, rather than having to be copied there after
+object. It then invokes the initial subcontract, passing it the    all marshalling is complete.
+initial method table and the buffer.
+                                                                   To enable the subcontract to set up any needed state, we
+The subcontract must then fabricate an object based on the         introduced the subcontract operation invoke_preamble,
+information in the communications buffer. This typically           which is called before any argument marshalling has
+involves reading enough information from the communi-              begun.
+cations buffer to be able to create a representation.
+                                                                   5.1.5 Marshal_copy
+In the case of replicon, this normally involves reading a set      Our interface definition language supports a parameter
+of kernel door identifiers from the buffer and creating a          passing mode called copy. This mode implies that a copy
+representation to hold them. (Section 6 below discusses            of the argument object is transmitted, while the calling
+what happens in some abnormal cases.)                              domain retains the original object.
+
+Finally the subcontract’s unmarshal operation plugs                This mode was originally implemented by first calling the
+together its own subcontract operations vector, the method         subcontract copy operation (see 5.1.6 below) and then by
+table pointer and the representation to create a new Spring        calling the subcontract marshal operation on the copy.
+object.                                                            However, it was observed that this frequently led to redun-
+                                                                   dant work in generating a copy that was immediately mar-
+                                                                   shalled and then deleted.
+
+
+6                                               Subcontract: A Flexible Base for Distributed Programming
+                                                  Subcontract conventions
+
+The marshal_copy operation allows us to optimize this             object is created using such a subcontract, it will typically
+common case. It is deﬁned to produce the effect of a copy         fabricate an object using a special server-side subcontract
+followed by a marshal, but it is permitted to optimize out        operations vector and it will try to avoid paying the
+some of the intermediate steps.                                   expense of creating resources required for cross-domain
+                                                                  communication. When and if the object is actually mar-
+5.1.6 Other client subcontract operations                         shalled for transmission to another domain, the subcon-
+The client subcontract provides operations for copying            tract will ﬁnally create these resources.
+and deleting objects. This control over copy and delete is
+important for subcontracts that are maintaining dialogues         5.2.2 Processing incoming calls
+between a server and each of its extant client objects and        Occasionally a subcontract will create a communications
+that may wish to notify the server of births and deaths.          endpoint that delivers an incoming call directly to the
+                                                                  server side stubs. More commonly, the subcontract will
+The client subcontract also provides operations for per-          arrange that the incoming call arrives first in the subcon-
+forming run-time type queries and a few other minor oper-         tract, which then forwards the call to the stub level. This
+ations.                                                           permits the server-side subcontract to maintain a dialogue
+                                                                  with the corresponding client-side subcontract by piggy-
+                                                                  backing additional information on calls and replies.
+5.2    Server side subcontract operations
+Many subcontracts support client-server computing. We             5.2.3 Revoking an object
+have described the client side view of subcontract, but for       Occasionally a server will decide that it wishes to discard
+server-based objects there is also a certain amount of            a piece of state, even though there are clients who cur-
+machinery on the server side.                                     rently have objects pointing at that state. This is particu-
+                                                                  larly important for operating system services which may
+On the client side, we attempt to hide the subcontract            wish to reclaim resources without waiting for all their cli-
+implementation from application programmers. However              ents to consent. Thus typical server-side subcontracts pro-
+on the server side, we are prepared to allow server imple-        vide a way for the server application to revoke an
+mentations to be more tightly coupled to particular sub-          outstanding object. For example, this can be implemented
+contracts. For example a replicated subcontract may               by revoking any underlying kernel doors, which will
+require special interfaces to the server application in order     effectively prevent further incoming kernel calls.
+to support replication.
+
+Thus the server side interfaces can vary considerably             6      Subcontract conventions
+between subcontracts. However, there are three elements
+that are typically present: support for creating a Spring
+object from a language-level object, support for process-         6.1    Compatible subcontracts
+ing incoming calls, and support for revoking an object.           Clearly it is desirable for different objects to have different
+                                                                  subcontracts. In particular, two objects which are per-
+5.2.1 Creating a Spring object
+                                                                  ceived by the client application as having the same type
+Subcontracts must provide a way of creating Spring                may in fact have different subcontracts.
+objects from language-level objects. This can take one of
+two forms.                                                        For example, the standard type file is specified to use a
+                                                                  simple subcontract called singleton. The type
+The simplest form is that a subcontract creates a normal          cacheable_file is a subtype of file, but instead uses the
+client side Spring object. This means that it must create         caching subcontract. So what happens when we send an
+some kind of communication endpoint (for example a ker-           object of type cacheable ﬁle where an object of type ﬁle is
+nel door) and fabricate a client side Spring object whose         expected? Clearly if the receiver insists on unmarshalling
+representation uses that endpoint.                                the caching object as though it were a singleton, then it is
+                                                                  going to be disappointed. For each type we can specify a
+However, some subcontracts provide special support for            default subcontract for use when talking to that type, but
+Spring objects that reside in the same address space as           how do we cope when we actually need to use a different
+their server, by providing an optimized invocation mecha-         subcontract?
+nism for use within a single address space. When a Spring
+
+
+                                         Subcontract: A Flexible Base for Distributed Programming                              7
+                                                The life-cycle of a Spring object
+
+We solve this problem by introducing the notion of com-            ies, provided only that we can make a suitable subcontract
+patible subcontracts. Subcontract A is said to be compati-         library available at run-time to the old programs.
+ble with subcontract B if the unmarshalling code for
+subcontract B can correctly cope with receiving an object          Many domains, particularly systems servers, are reluctant
+of subcontract A.                                                  to simply run some random dynamic library code nomi-
+                                                                   nated by a potentially malicious client. So, for security
+The normal mechanism we use to implement compatible                reasons the dynamic linker will only load libraries that are
+subcontracts is to include a subcontract identiﬁer as part of      on a designated directory search-path of trustworthy loca-
+the marshalled form of each object.                                tions. So it typically requires intervention by a privileged
+                                                                   system administrator to install a new subcontract library in
+So a typical subcontract unmarshal operation starts by tak-        a standard directory which most domains will have on
+ing a peek at the expected subcontract identifier in the           their search paths.
+communications buffer. If it contains the expected identi-
+fier for the current subcontract, then the subcontract goes
+ahead and unmarshals the object. However if the unmar-             6.3     Subcontracts and object types
+shal operation sees some other value then it calls into a          Subcontracts affect objects’ semantics. Different imple-
+registry to locate the correct code for that subcontract and       mentations of a type such as ﬁle may use different subcon-
+then calls that subcontract to perform the unmarshalling.          tracts which provide substantially different semantics. It is
+                                                                   necessary to provide a way for application programmers to
+                                                                   determine the real semantics of particular objects.
+6.2    Discovering new subcontracts
+A program will typically be linked with a set of libraries         Fortunately, this is easy to express in an object-oriented
+that provide a set of standard subcontracts. However at            type system. We define standard base types with core
+run-time the program may encounter objects which use               semantics for various abstractions. Other types inherit
+subcontracts that are not in its standard libraries.               from these standard types and add additional semantics,
+                                                                   such as replication. It is the responsibility of each object
+We provide a mechanism to map from subcontract identiﬁ-            implementor to select both a type for their object and a
+ers to library names and we support dynamic linking of             subcontract that meets the semantic commitments of that
+libraries to obtain new subcontracts.                              type. Clients may attempt to narrow an object’s type at
+                                                                   run-time to determine if a given object of a statically
+Say that a domain is expecting to receive an object of type        determined type, such as file, actually supports a subtype
+ﬁle, using the singleton subcontract, but we instead send it       with richer semantics, such as replicated ﬁle.
+an object of type replicated_ﬁle using the replicon subcon-
+tract. The singleton unmarshal operation will discover that
+it is dealing with a different subcontract and it will call        7       The life-cycle of a Spring object
+into the domain’s subcontract registry to find the correct
+subcontract code. The registry will discover that there is         It may be useful to review the various points where sub-
+currently no suitable subcontract loaded, but it will then         contract is used during the lifetime of a particular object.
+use a network naming context to map the subcontract
+identifier into a library name (e.g. replicon.so) and it will      Say that a fileserver FS is exporting objects of type file,
+then dynamically link in that library to obtain the subcon-        using the simplex subcontract. The simplex subcontract is
+tract. Unmarshalling can then continue, using the newly            a very simple client-server subcontract, using a single ker-
+linked subcontract code.                                           nel door identiﬁer to communicate with the server.
+
+So even though the program had no concept of replicated            The fileserver starts with some internal state describing a
+objects and was not initially linked with any libraries that       file. It then uses the server-side code of the simplex sub-
+understood replicated objects, we were able to dynami-             contract to create a Spring object. At this point the server
+cally obtain the right code to talk to a replicated ﬁle object.    application must specify a method table, a set of server
+                                                                   side stubs and a pointer to the internal file state. The sim-
+This mechanism means that it is possible to add new sub-           plex server code creates a kernel door to act as the entry
+contracts and use them to talk to old applications without         point for this particular piece of ﬁle state and returns a new
+changing either the old applications or the standard librar-       Spring object. This object consists of a pointer to the sim-
+
+
+8                                               Subcontract: A Flexible Base for Distributed Programming
+                                                       Example subcontracts
+
+plex subcontract, a pointer to the given method table, and            Another event that may befall our ﬁle object is that a client
+a pointer to a representation consisting of a door identiﬁer.         may want to copy the ﬁle object so they can send the copy
+See Figure 4.                                                         on to some other application. (Note that this is a shallow
+                                                                      copy, in which both the original and the copy refer to the
+  client                          server                              same underlying state.) This can be done by invoking the
+               file stubs                                             object’s subcontract copy method. In this case the simplex
+application                     file stubs             server
+                                                     application      copy method will fabricate a new Spring object by simply
+                 simplex
+                                simplex                               copying its method table pointer and subcontract pointer
+                     door                                             and by asking the kernel to copy its door identiﬁer.
+                               server-side                 file
+                      id
+                                                          state
+                                                                      Finally, alas, the client application may be finished with
+                                                                      the ﬁle object. At this point it can invoke the object’s sub-
+                                                                      contract consume method. In this case, simplex consume
+                                                                      will simply tell the kernel to delete the door identifier and
+                                                                      return. Later, when all active door identiﬁers for the server
+ FIGURE 4. A ﬁle object using the simplex subcontract                 door have been deleted, the kernel will notify the door’s
+                                                                      target, in this case the server-side simplex code, so that it
+                                                                      can clean up.
+Initially, the new ﬁle object is in the same address space as
+its creator. But let’s say it gets passed to another address          Notice how the simplex subcontract has been involved in
+space as a result of an operation on a file_system object.            all the key events of the object’s life: its birth, its reproduc-
+When the file object is transmitted, the server-side                  tion, its death, its transfer between address spaces, and
+file_system stubs will invoke the object’s subcontract to             finally and most importantly, simplex has been involved
+marshal the object into a buffer. Simplex will deposit both           whenever any invocations occurred on the object. Simplex
+its own subcontract ID and the object’s door identifier in            chooses to make only fairly limited use of these control
+the buffer. At the receiving end, the client-side ﬁle_system          points. Other subcontracts are rather more venturesome.
+stubs will attempt to unmarshal a file object. Since file’s
+default subcontract is singleton, they will initially call the
+singleton unmarshal method. However singleton will                    8      Example subcontracts
+quickly realize that the buffer holds a subcontract ID for
+another subcontract and will use the subcontract registry             We have already described the replicon subcontract (in
+to locate the code for simplex and ask simplex to perform             Section 5) and the simplex subcontract (in Section 7). We
+the unmarshalling. Simplex will read the subcontract ID               now provide a short overview of some other interesting
+and door identiﬁer and create an appropriate Spring object.           subcontracts we have developed. For brevity, we merely
+                                                                      provide simplified outlines of their key features and omit
+When a client attempts to invoke a method on the file                 descriptions of error conditions and special optimizations.
+object, they will invoke a method from the object’s
+method table, which will be implemented by the client-
+side stubs. These stubs will start by calling the ﬁle object’s        8.1    The cluster subcontract
+subcontract invoke_preamble operation. In this case the               The simplex subcontract uses a distinct kernel door for
+simplex invoke_preamble does nothing and simply                       each piece of server state that may be exposed as a sepa-
+returns. After marshalling the arguments, the stubs will              rate Spring object. Since the kernel imposes a capability-
+invoke the object’s subcontract invoke operation. In this             like security model on door identifiers, this is a suitable
+case the simplex invoke operation uses the kernel’s door              implementation for any objects that are used to grant
+IPC mechanism to call through to the server. This propa-              access to distinctly protected system resources. However
+gates the call to the server-side simplex code, which for-            some servers export large number of objects where if a cli-
+wards the call to the server-side file stubs and thence up            ent is granted access to any of the objects, it might as well
+into the server application. The reply similarly flows back           be granted access to all of them. In this case a subcontract
+through the server-side stubs, the server-side simplex                can reduce system overhead by using a single door to pro-
+code, the kernel, the client-side simplex code and back               vide access to a set of objects.
+into the client-side stubs. Those stubs unmarshal any
+results and return them to the client application.
+
+
+                                             Subcontract: A Flexible Base for Distributed Programming                                9
+                                                Reﬂections on subcontract
+
+The cluster subcontract supports this notion. Each cluster       on a cacheable object go to an appropriate cache manager
+object is represented by the combination of a door identi-       on the local machine. (See Figure 5.)
+fier and an integer tag. The cluster invoke_preamble and
+invoke operations conspire to ship the tag along to the
+server when performing a cross-domain call on the door.          8.3     The reconnectable subcontract
+The server-side cluster subcontract code uses this tag to        Some servers keep their state in stable storage. If a client
+dispatch to a particular object.                                 has an object whose state is kept in such a server, it would
+                                                                 like the object to be able to quietly recover from server
+                                                                 crashes. Normal Spring door identifiers become invalid
+8.2    The caching subcontract                                   when a server crashes, so we need to add some new mech-
+When a server is on a different machine from its clients, it     anism to allow a client to reconnect to a server.
+is often useful to perform caching on the client machines.
+So when we transmit a cacheable object between                   The reconnectable subcontract uses a representation con-
+machines, we’d like the receiving machine to register the        sisting of a normal door identiﬁer, plus an object name.
+received object with a local cache manager and access the
+object via the cache.                                            Normally the recoverable subcontract’s invoke code sim-
+                                                                 ply does a kernel door invocation on the door identifier.
+The caching subcontract, which was originally developed          However, if this fails, the subcontract instead attempts to
+for the Spring file system [Nelson et al 1993], provides         resolve the object name to obtain a new object and retries
+this functionality. The representation of a caching object       the operation on that. It retries periodically until it suc-
+includes a door identifier D1 that points to the server, a       ceeds in getting a new valid object.
+door identifier D2 that points to a local cache, and the
+name of a cache manager.
+                                                                 8.4     Future directions
+                                                                 In conjunction with some related projects, we are investi-
+                                   server                        gating a number of new subcontracts. One is to develop a
+                                                                 subcontract that lets video objects encapsulate a specific
+                                                                 network packet protocol for live video. Another is to
+                                                                 develop a subcontract that transfers scheduling priority
+                                                                 information between clients and servers for time-critical
+                                                                 operations. Another is to transfer control information for
+                                                                 atomic transactions at the subcontract level.
+
+      cacher                                     cacher          As base system implementors, we are only too happy that
+                                                                 these techniques appear suitable for implementation by
+                                                                 third party experts as new subcontracts and will not
+                                                                 require modiﬁcations to the base RPC system.
+
+
+          client                client                           8.5     Motivation for examples
+                                            client
+                                                                 This paper is not about replication or caching or crash
+                                                                 recovery. What we hope to have established in this section
+ FIGURE 5. Three clients using the caching subcontract           is that the basic subcontract interfaces are sufﬁciently gen-
+                                                                 eral that they can accommodate a wide range of possible
+                                                                 solutions, while still providing a uniform application
+When we transmit a caching object between machines, we           model.
+only transmit the D1 door identiﬁer and the cache manager
+name. The caching unmarshal code resolves the cache
+manager name in a machine-local context to discover a
+                                                                 9       Reﬂections on subcontract
+suitable local cache manager and then presents the D1
+door identifier to the local cache manager and receives a        One of the reasons that subcontract is effective is because
+new D2. Whenever the subcontract performs an invoke              it separates out the business of implementing objects from
+operation it uses the D2 door identifier. So all invocations
+
+10                                            Subcontract: A Flexible Base for Distributed Programming
+                                                  Reﬂections on subcontract
+
+implementing object mechanisms. Subcontract implemen-              ate administrative hurdles for making a new subcontract
+tors provide a set of interesting subcontracts that enable         available via dynamic linking, we are reluctant to pay this
+object implementors to chose from a range of different             cost for all new combinations of types and subcontracts.
+object policies without requiring that every object imple-
+mentor must become familiar with the details of the object         As a future direction, we are interested in providing spe-
+implementation machinery.                                          cialized stubs for some particularly popular and perfor-
+                                                                   mance-critical combinations of types and subcontracts.
+The set of operations that subcontract provides appear to          We would still keep the general purpose stubs available for
+be the right levers for obtaining control within a distrib-        these types, so as to be able to deal with different subcon-
+uted environment. By design, all the key actions taken on          tracts, but when we were lucky enough to receive an
+remote objects will involve the object’s subcontract in one        object that happened to be of the right type and subcon-
+way or another. Subcontract provides an effective way for          tract we would be able to use the specialized stubs.
+plugging in different policies for different objects,
+
+In practice subcontract has succeeded in reducing the              9.2    The OS environment
+functionality that must be provided by the base system.            Our subcontract work happens to have occurred in the
+We have been able to implement a number of interesting             context of a distributed operating system that provides an
+new subcontracts without requiring any new facilities in           object-oriented IPC facility. Given this IPC mechanism,
+the base system, including a number of new subcontracts            we have chosen to use it for a variety of our subcontracts
+(such as the caching subcontract) which we did not envis-          and also to acknowledge its existence in our basic mar-
+age in the original subcontract design.                            shalling machinery. However this is mere happenstance. In
+                                                                   different operating system environments it may be appro-
+                                                                   priate to use different IPC machinery for subcontracts or to
+9.1    Subcontracts versus specialized stubs                       operate at a lower level and build exclusively on raw net-
+Our current system maintains a complete separation                 work packets. Even in our environment it is possible to
+between stubs and subcontracts. Any set of stubs can work          mix the use of the kernel’s door mechanism with the use of
+with any subcontract and vice versa. An alternative solu-          raw IP packets, should one desire.
+tion would have been to define a similar framework, but
+provide the subcontract functionality directly in the stubs,
+by implementing different sets of stubs for different sub-         9.3    Performance overheads of subcontract
+contracts. There were two reasons for implementing sub-            Subcontract has some performance costs over simpler
+contracts as separable modules.                                    RPC systems. Each object invocation always requires an
+                                                                   additional two indirect procedure calls from the stubs into
+First, we wanted subcontract writers to be able to develop         the client subcontract and typically requires a third indi-
+new communication mechanisms without having to under-              rect call from the server-side subcontract into the server
+take the reasonably daunting task of developing (or modi-          stubs. Transmitting an object requires an extra pair of calls
+fying) a stub generator. This argues for a logical separation      for marshalling and unmarshalling and typically also
+between stubs and subcontracts. However, this require-             involves the cost of marshalling and unmarshalling a sub-
+ment could be satisﬁed by permitting subcontracts to exist         contract ID. However in our system we estimate that these
+as in-line procedures, which could be in-lined into gen-           costs add less than 2 microseconds (on a SPARCstation 2)
+eral-purpose stubs.                                                to the costs for a minimal remote call or to the costs of a
+                                                                   simple object transmission.
+Second, we wanted to avoid the need for client applica-
+tions to load specialized stubs in order to talk to individual     More significantly, subcontract makes it harder for the
+objects. If a program expects to receive an object of type         stubs to be optimized for particular sets of arguments and
+foo through an RPC interface, then it can arrange to have          results, as the subcontract may be adding an indeterminate
+the general-purpose foo stubs available and plug them              amount of data to the call or reply buffer. This is one of the
+together with appropriate subcontracts as needed. How-             factors causing us to investigate specialized combinations
+ever, it is a much more difficult proposition to have all          of stubs and subcontracts. (See Section 9.1 above.)
+possible flavors of specialized foo stubs available. We
+expect the set of subcontracts to be much smaller than the         Individual subcontracts can be as efficient or as profligate
+set of types. While we are prepared to accept some moder-          as they wish. For example, the caching subcontract adds a
+
+
+                                          Subcontract: A Flexible Base for Distributed Programming                            11
+                                                          Conclusion
+
+significant overhead to object unmarshalling to achieve           [Bershad et al 1990] B. N. Bershad, T.E Anderson, E. D.
+the useful optimization of local caching.                               Lazowska, and H. M. Levy. “Lightweight Remote
+                                                                        Procedure Call.” ACM Transactions on Computer
+                                                                        Systems 8(1), February 1990.
+10     Conclusion                                                 [Birman & Joseph 1987] K. P. Birman and T. A. Joseph.
+                                                                        “Exploiting Virtual Synchrony in Distributed Sys-
+We have shown that it is possible to build distributed sys-             tems.” Proc. of the 11th Symposium on Operating
+tems where a variety of different object mechanisms can                 Systems Principles, Austin, Texas, December
+co-exist. This enables the use of a range of lightweight and            1981.
+heavyweight mechanisms within the same system and
+                                                                  [Birrell & Nelson 1984] A. D. Birrell and B. J. Nelson.
+avoids the need to choose a single mechanism for all occa-               “Implementing Remote Procedure Calls.” ACM
+sions. Instead individual object implementations can select              Trans. on Computer Systems, 2(1), February 1984.
+those features that they require and that they are prepared
+to pay for.                                                       [Black et al 1987] A. Black, N. Hutchinson, E. Jul, H.
+                                                                        Levy, and L. Carter. “Distribution and Abstract
+These different object mechanisms are all on a par with                 Types in Emerald.” IEEE Trans on Software Engi-
+one another. There is no penalty for application writers                neering, 13(1), January 1987.
+who wish to use new subcontracts in place of the standard         [Draves 1990] R. Draves. “A Revised IPC Interface.”
+ones. A new type such as replicated_ﬁle, using a new sub-               Proc. of the Usenix Mach Workshop, Burlington,
+contract, such a replicon, can be used in all the places                Vermont, October 1990.
+where the earlier, simpler, type ﬁle was used.
+                                                                  [Foote & Johnson 1989] Brian Foote and Ralph E.
+It is therefore possible for object implementors to provide             Johnson. “Reflective Facilities in Smalltalk-80.”
+a wide range of different possibilities for security, for per-          Proc. of the Conference on Object-Oriented Sys-
+formance, for robustness, for scope of access, all behind               tems, Languages, and Applications, October 1989.
+the same set of application-visible interfaces.                   [Hamilton & Kougiouris 1993] G. Hamilton & P. Kou-
+                                                                        giouris. “The Spring nucleus: A microkernel for
+                                                                        objects.” Proc of the 1993 Summer Usenix confer-
+11     Acknowledgments                                                  ence, Cincinnati, June 1993.
+                                                                  [Herlihy & Liskov 1982] M. P. Herlihy and B. Liskov. “A
+We would like to acknowledge the contributions of Jon                    value transmission mechanism for abstract data
+Gibbons, Ted Goldstein, Tommy Joseph, Peter Kessler,                     types.” ACM Trans. on Programming Languages
+Yousef Khalidi, Panos Kougiouris, Mike Nelson, and San-                  and Systems, 4(4), October 1982.
+jay Radia to the evolution and implementation of subcon-
+                                                                  [Khalidi & Nelson 1993A] Y. A. Khalidi and M. N. Nel-
+tract and to the development of specific subcontracts. We
+                                                                         son. “The Spring Virtual Memory System.” Sun
+would also like to thank Bob Hagmann, Roger Hayes,
+                                                                         Microsystems Laboratories, SMLI TR-93-9, March
+Peter Kessler, and Mike Nelson for their helpful comments
+                                                                         1993.
+on earlier drafts of this paper.
+                                                                  [Khalidi & Nelson 1993B] Y. A. Khalidi and M. N. Nel-
+                                                                         son. “An Implementation of UNIX on an Object-
+12     References                                                        oriented Operating System.” Proc. of the 1993
+                                                                         Winter Usenix Conference, San Diego, January
+[Acetta et al 1986] M. Acceta, R. Baron, W. Bolosky, D.                  1993.
+       Golub, R. Rashid, A. Tevanian & M. Young.                  [Lazowska et al 1981] E. Lazowska, H. Levy, G. Almes,
+       “Mach: A New Kernel Foundation For UNIX                          M. Fischer, R. Fowler, and S. Vestal. “The Archi-
+       Development.” Summer USENIX Conference,                          tecture of the Eden System.” Proc. of the 8th Sym-
+       Atlanta, June 1986.                                              posium on Operating Systems Principles, Pacific
+[Almes et al 1985] Guy T. Almes, Andrew P. Black,                       Grove, California, December 1981.
+     Edward D. Lazowska, and Jerre D. Noe. The Eden               [Liskov 1988] B. Liskov, “Distributed programming in
+     System: A Technical Review.” IEEE Transactions                     Argus.” Communications of the ACM, 31(3),
+     on Software Engineering, 11(1), January 1985.                      March 1988.
+
+
+12                                             Subcontract: A Flexible Base for Distributed Programming
+                                                       References
+
+[Maes 1987] Pattie Maes. “Concepts and Experiments in
+      Computational Reflection.” Proc. of the Confer-
+      ence on Object-Oriented Systems, Languages, and
+      Applications, October 1987.
+[Nelson 1981] B. J. Nelson. “Remote Procedure Call.”
+      Tech report CSL-81-9, Xerox Palo Alto Research
+      Center, Palo Alto, California, 1981.
+[Nelson et al 1993] M. N. Nelson, Y. A. Khalidi, and P. W.
+      Madany. “The Spring File System.” Sun Microsys-
+      tems Laboratories, SMLI TR-93-10, March 1993.
+[OMG 1991] Object Management Group. “Common
+    Object Request Broker Architecture and Specifica-
+    tion.” OMG Document Number 91.12.1.
+[Schroeder & Burrows 1990] M. D. Schroeder and M.
+      Burrows. “Performance of Firefly RPC.” ACM
+      Transactions on Computer Systems 8(1), February
+      1990.
+[Schuller et al 1992] P. Schuller, H. Hartig, W. E. Kuh-
+      nhauser, and H. Streich. “Performance of the
+      BirliX Operating System.” Proc. of the Usenix
+      Workshop on Micro-kernels and Other Kernel
+      Architectures, Seattle, April 1992.
+
+
+
+
+                                       Subcontract: A Flexible Base for Distributed Programming   13
+© Copyright 1993 Sun Microsystems, Inc. The SMLI Technical Report Series is published by Sun Microsystems Laboratories, Inc.
+Printed in U.S.A.
+
+Unlimited copying without fee is permitted provided that the copies are not made nor distributed for direct commercial advantage, and credit to the
+source is given. Otherwise, no part of this work covered by copyright hereon may be reproduced in any form or by any means graphic, electronic, or
+mechanical, including photocopying, recording, taping, or storage in an information retrieval system, without the prior written permission of the copy-
+right owner.
+
+TRADEMARKS
+Sun, Sun Microsystems, and the Sun logo are trademarks or registered trademarks of Sun Microsystems, Inc. UNIX and OPEN LOOK are registered
+trademarks of UNIX System Laboratories, Inc. All SPARC trademarks, including the SCD Compliant Logo, are trademarks or registered trademarks of
+SPARC International, Inc. SPARCstation, SPARCserver, SPARCengine, SPARCworks, and SPARCompiler are licensed exclusively to Sun Microsys-
+tems, Inc. All other product names mentioned herein are the trademarks of their respective owners.
+

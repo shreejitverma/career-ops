@@ -1,0 +1,1073 @@
+                           Cluster-Based Scalable Network Services
+        Armando Fox            Steven D. Gribble              Yatin Chawathe             Eric A. Brewer             Paul Gauthier
+                  University   of California at Berkeley                                     Inktomi Corporation
+            (fox, gribble, yatin, biewer} @cs.berkeley.edu                                {gauthier} @inktomi.com
+
+      We identifit three fundamental requirements for scalable net-          shows that a large central ‘(virtual) server is more efficient in both
+ work services: incremental scalability and oveflow growth provi-            cost and utilization than a collection of smaller servers; standalone
+ sioning, 24x7 availability through fault masking, and cost-                 desktop systems represent the degenerate case of one “server” per
+ effectiveness. We argue that clusters of commodity workstations             user. All of these support the argument for Network Computers
+ interconnected by a high-speed SAN are exceptionally well-suited            Pa
+ to meeting these challenges for Internet-server workloads, pro-                  However, network services remain difficult to deploy because
+ vided the software infrastructure for managing partial failures and         of three fundamental challenges: scalability, availability and cost
+ administering a large cluster does not have to be reinvented for            effectiveness.
+ each new service. To this end, we propose a general, layered archi-           l  By scalabiliry, we mean that when the load offered to the
+ tecture for building cluster-based scalable network services that                service increases, an incremental and linear increase in
+ encapsulates the above requirements for reuse, and a service-pro-                hardware can maintain the same per-user level of service.
+ gramming model based on composable workers thatpe$onn trans-                  l  By availability, we mean that the service as a whole must bc
+formation, aggregation, caching, i and customization (TACC) of                    available 24x7, despite transient partial hardware or softwaro
+ Internet content. For both performance and implementation sim-                   failures.
+plicity, the architecture and TACC programming model exploit
+ BASE, a weaker-than-ACID data semantics that results from trad-
+                                                                               l  By cost effectiveness, we mean that the service must bc
+ ing consistency for availability and relying on sof statefor robust-
+                                                                                  economical to administer and expand, even though it
+ ness in failure management., Our ,qychitecture can be used as an
+                                                                                  potentially comprises many workstation nodes.
+ “off the shelf * irtfrastructural platfonn for creating new network              We observe that clusters of workstations have some fundnmen-
+services, allowing authors to focus on the “content” of the service          tal properties that can be exploited to meet these requirements:
+ {by composing TACC building blocks) rather than its implementa-             using commodity PCs as the unit of scaling allows the service to
+ tion. We discuss two real implemeritationsof services based on this         ride the leading edge of the cost/performance curve, the inheront
+ architecture: TranSend, a Web distillation proxy deployed to the            redundancy of clusters can be used to mask transient failuros, and
+ UC Berkeley dialup IP population, and HotBot, the commercial                “embarrassingly parallel” network service workloads map well
+ implementation of the Inktomi search engine. We present detailed            onto networks of workstations. However, developing cluster soft-
+ measurements of TranSend’s performance based on substantial cli-            ware and administering a running cluster remain complex. The pri-
+ ent traces, as well as anecdotal evidence from the TranSend and             mary contributions of this work are the design, analysis, and
+HotBot experience, to support the claims made for the architecture.          implementation of a layered framework for building network ser-
+                                                                             vices that addresses this complexity. New services can use thls
+                                                                             framework as an off-the-shelf solution to scalability, availability,
+1 Introduction                                                               and several other problems, and focus instead on the content of the
+       “One of the overall design goals is to create a computing             service being developed. The lower layer handles scalability, avall-
+    system which is capable of meeting almost all of the                     ability, load balancing, support for bursty offered load, and system
+    requirements of a large computer utility.Such systems must               monitoring and visualization, while the middle layer provldcs
+    run continuously and reliably 7 days a week, 24 hours a                  extensible support for caching, transformation among MIME
+    day... and must be capable of meeting wide service                       types, aggregation of information from multiple sources, and pcr-
+    demands.                                                                 sonalization of the service for each of a large number of users
+       “Because the system must ultimately be comprehensive                  (mass customization). The top layer allows composition of trans-
+    and able to aa’apt to unknown future requirements, its                   formation and aggregation into a specific service, such as acccler-
+   framework must be general, and cbpable of evolving over                   ated Web browsing or a search engine.
+    time.”                                                                        Pervasive throughout our design and implementation stratgies
+      - Corbat6 and Vyssotsky on Multics, 1965 [I71                          is the observation that much of the data manipulated by a network
+                                                                             service can tolerate semantics weaker than ACID 1261.We combine
+     Although it is normally viewed as an operating system, Multics          ideas from prior work on tradeoffs between availability and consis-
+(Multiplexed Information and Computer Service) was originally                tency, and the use of soft state for robust fault-tolerance to charac-
+conceived as an infrastructural computing service, so it is not sur-         terize the data semantics of many network services, which WCrofor
+prising that its goals as stated above are similar to our own. The           to as BASE semantics (basically available, soft state, eventual con-
+primary obstacle to deploying Multics was the absence of the net-            sistency). In addition to demonstrating how BASE simplilies the
+work infrastructure, which is now in place. Network applications             implementation of our architecture, we present a programming
+have exploded in popularity in part because they are easier to man-          model for service authoring that is a good fit for BASE semantics
+age and evolve than their desktop application counterparts: they             and that maps well onto our cluster-based service framework.
+eliminate the need for software distribution, and simplify customer
+service and bug tracking by avoiding the difficulty of dealing with          1.1 Validation: Two Real Services
+multiple platforms and versions. Also, basic queueing theory                      Our framework reflects the implementation of two real network
+ permission to make digital/hard copy of part or all this work for
+                                                                             services in use today: TranSend, a scalable transformation and
+ personal or classroom use is granted without fee provided that              caching proxy for the 25,000 Berkeley dialup IP users (connecting
+ copies are not made or distributed for profit or commercial advan-          through a bank of 600 modems), and the Inktomi search engine
+ tage, the copyright notice, the title of the publication and its date       (commercialized as HotBot), which performs millions of qucrics
+ appear, and notice is given that copying is by permission of ACM,           per day against a database of over 50 million web pages.
+ Inc. To copy otherwise, to republish, to post on servers. or to                  The Inktomi search engine is an aggregation server that was
+ redistribute to lists, requires prior specific permission and/or a fee.     initially developed to explore the use of cluster technology to ban-
+ SOSp-16     IO/97 Saint-Malo, France
+ @ 1997 ACM 0-89791-916-5/97/0010...$3.50
+
+                                                                        78
+ dle the scalability and availability requirements of network ser-            tage is cost/performance, since memory, disks, and nodes can all
+ vices, The commercial version, HotBot, handles several million               track the leading edge; for example, we changed the building block
+ queries per day against a full-text database of 54 million web               every time we grew the HotBot cluster, each time picking the reli-
+ pages, It has been incrementally scaled up to 60 nodes, provides             able high volume previous-generation commodity units, helping to
+ high availability, and is extremely cost effective. Inktomi predates         ensure stability and robustness. Furthermore, since many commod-
+ the framework we describe, and thus differs from it in some                  ity vendors compete on service (particularly for PC hardware), it is
+ respects. However, it strongly influenced the framework’s design,            easy to get high-quality configured nodes in 48 hours or less. In
+ and we will use it to validate particular design decisions.                  contrast, large SMPs typically have a lead time of 45 days, are
+     We focus our detailed discussion on TranSend, which provides             more cumbersome to purchase, install, and upgrade, and are sup-
+Web caching and data transformation. In particular, real-time,                ported by a single vendor, so it is much harder to get help when dif-
+datatype-specific distillation and refinement [22] of inline Web              ficulties arise. Once again, it is a “simple matter of software” to tie
+images results in an end-to-end latency reduction by a factor of 3-5,         together a collection of possibly heterogeneous commodity build-
+giving the user a much more responsive Web surfing experience                 ing blocks.
+with only modest image quality degradation. TranSend was devel-                    To summarize, clusters have significant advantages in scalabil-
+oped at UC Berkeley and has been deployed for the 25,000 dialup               ity, growth, availability, and cost. Although fundamental, these
+IP users there, and is being deployed to a similar community at UC            advantages are not easy to realize.
+Davis.
+     In the remainder of this section we argue that clusters are an           1.3 Challenges of Cluster Computing
+excellent fit for Internet services, provided the challenges we                    There are a number of areas in which clusters are at a disadvan-
+describe for cluster software development can be surmounted. In                tage relative to SMP’s. In this section we describe some of these
+Section 2 we describe the proposed layered architecture for build-             challenges and how they influenced the architecture we will pro-
+ing new services, and a programming model for creating services                pose in Section 2.
+that maps well onto the architecture. We show how TranSend and                     Administration: Administration is a serious concern for sys-
+HotBot map onto this architecture, using HotBot to justify specific            tems of many nodes. We leverage ideas in prior work [I], which
+design decisions within the architecture. Sections 3 and 4 describe            describes how a unified monitoring/reporting framework with data
+the TranSend implementation and its measured performance,                      visualization support was an effective tool for simplifying cluster
+including experiments on its scalability and fault tolerance proper-           administration.
+ties, Section 5 discusses related work and the continuing evolution                Component vs. system replication: Each commodity PC in a
+of this work, and we summarize our observations and contributions             cluster is not usually powerful enough to support an entire service,
+in Section 6.                                                                 but can probably support some components of the service. Compo-
+                                                                              nent-level rather than whole-system replication therefore allows
+1.2 Advantages of Clusters                                                    commodity PCs to serve as the unit of incremental scaling, pro-
+     Particularly in the area of Internet service deployment, clusters        vided the software can be naturally decomposed into loosely cou-
+provide three primary benefits over single larger machines, such as           pled modules. We address this challenge by proposing an
+SMPs: incremental scalability, high availability, and the costlper-           architecture in which each component has well-circumscribed
+formance and maintenance benefits of commodity PCs. We elabo-                 functional responsibilities and is largely “interchangeable” with
+rate on each of these in turn.                                                other components of the same type. For example, a cache node can
+     Scalability: Clusters are well suited to Internet service work-          run anywhere that a disk is available, and a worker that performs a
+loads, which are highly parallel (many independent simultaneous               specific kind of data compression can run anywhere that significant
+users) and for which the grain size typically corresponds to at most          CPU cycles are available.
+a few CPU-seconds on a commodity PC. For these workloads,                          Partial failures: Component-level replication leads directly to
+large clusters can dwarf the power of the largest machines. For               the fundamental issue separating clusters from SMPs: the need to
+example, Inktomi’s HotBot cluster contains 60 nodes with 120 pro-             handle partial failures (i.e., the ability to survive and adapt to fail-
+cessors, 30 GB of physical memory, and hundreds of commodity                  ures of subsets of the system). Traditional workstations and SMPs
+disks. Wal-Mart uses a cluster from TeraData with 768 processors              never face this issue, since the machine is either up or down.
+and 16 terabytes of online storage.                                                Shared state: Unlike SMPs, clusters have no shared state.
+     Furthermore, the ability to grow clusters incrementally over             Although much work has been done to emulate global shared state
+time is a tremendous advantage in areas such as Internet service              through software distributed shared memory [33,34,36], we can
+deployment, where capacity planning depends on a large number                 improve performance and reduce complexity if we can avoid or
+of unknown variables. Incremental scalability replaces capacity               minimize the need for shared state across the cluster.
+planning with relatively fluid reactionary scaling. Clusters corre-                These last two concerns, partial failure and shared state, lead us
+spondingly eliminate the “forklift upgrade”, in which you must                to focus on the sharing semantics actually required by network ser-
+throw out the current machine (and related investments) and                   vices.
+replace it via forklift with an even larger one.
+    High Availability: Clusters have natural redundancy due to the            1.4 BASE Semantics
+independence of the nodes: Each node has its own busses, power                     We believe that the design space for network services can be
+supply, disks, etc., so it is “merely” a matter of software to mask           partitioned according to the data semantics that each service
+(possibly multiple siinultaneous) transient faults. A natural exten-          demands. At one extreme is the traditional transactional database
+sion of this capability is to temporarily disable a subset of nodes           model with the ACID properties (atomicity, consistency, isolation,
+and then upgrade them in place (“hot upgrade”). Such capabilities             durability) [26], providing the strongest semantics at the highest
+are essential for network services, whose users have come to                  cost and complexity. ACID makes no guarantees regarding avail-
+expect 24hour uptime despite the inevitable reality of hardware               ability; indeed, it is preferable for an ACID service to be unavail-
+and software faults due to rapid system evolution.                            able than to function in a way that relaxes the ACID constraints.
+     Commodity Building BIocks: The final set of advantages of                ACID semantics are well suited for Internet commerce transac-
+clustering follows from the use of commodity building blocks                  tions, billing users, or maintaining user profile information for per-
+rather than high-end, low-volume machines. The obvious advan-                 sonalized services.
+
+
+
+
+                                                                         79
+                                                                                            Wide-Are?      Network
+
+
+                                                                                                                l-4
+     For other Internet services, however, the primary value to the
+user is not necessarily strong consistency or durability, but rather
+high availability of data:
+  l  Stale data can be temporarily tolerated as long as all copies
+     of data eventually reach consistency after a short time (e.g.,
+     DNS servers do not reach consistency until entry timeouts
+     expire 1411).
+  l  Soft state, which can be &generated at the expense of
+     additional computation or file I/O, is exploited to improve
+     performance; data is not durable.
+  l  Approximate answers (based on stale data or incomplete
+     soft state) delivered quickly may be more valuable than exact
+     answers delivered slowly.
+     We refer to the data semantics resulting from the combination
+of these techniques as BASE-Basically Available, Soft State,
+Eventual Consistency. By definition, any data semantics that are
+not strictly ACID are BASE. BASE semantics allow us to handle
+partial failure in clusters with less complexity and cost. Like pio-
+neering systems such as Grapevine [9] , BASE reduces the com-                                           Worker Pool
+plexity of the service implementation, essentially trading                        Figure 1: Architecture of a generic SNS. Components include
+consistency for simplicity; like later systems such as Bayou [21]                 front ends (FE), a pool of workers (W) some of which may be
+that allow trading consistency for availability, BASE provides                    caches ($), a user profile database, a graphical monitor, and a
+opportunities for better performance. For example, where ACID                     fault-tolerant load manager, whose functionality loglcally
+requires durable and consistent slate across partial failures, BASE               extends into the manaaer stubs (MS) and .worker stubs (WS).
+semantics often allows us to avoid communication and disk activity                  map directly dnto it.
+or to postpone it until a more convenient time.
+                                                                                  l Detailed measurements of a production scrvicc (hnt
+     In practice, it is simplistic to categorize every service as either
+                                                                                    instantiates the architecture and validates our performance
+ACID or BASE; instead, different components of services demand
+                                                                                    and reliability claims.
+varying data semantics. Directories such as Yahoo! [64] maintain a
+database of soft state with BASE semantics, but keep user customi-                  In the remainder of this section we review the benelits nnd
+zation profiles in an ACID database. Transformation proxies [23,57]             challenges of cluster computing and propose a network scrvicc
+interposed between clients and servers transform Internet content               architecture that exploits these observations and allows encnpsuln-
+on-the-fly; the transformed content is BASE data that can be regen-             tion of the SNS requirements. We then describe a programming
+erated by computation, but if the service bills the user per session,           model that minimizes service development effort by allowing
+the billing should certainly be delegated to an ACID database.                  implementation of new services entirely at the higher layers.
+     We focus on services that have an ACID component, but
+                                                                                2.1 Proposed Functional       Organization     of an SNS
+manipulate primarily BASE data. Web servers, search/aggregation
+servers [SS],caching proxies [14,44],and transformation proxies are                  The above observations lead us to the software-component
+all examples of such services; our framework supports a superset of             block diagram of a generic SNS shown Figure 1. Each physicnl
+these services by providing integrated support for the requirements             workstation in a network of workstations (NOW [2]) supports one
+of all four. As we will show, BASE semantics greatly simplify the               or,more software components in the figure, but each component in
+implementation of fault tolerance and availability and permit per-              the @ag.mm is confined to one node, In general, the components
+formance optimizations within our framework that would be pre-                  whose tasks are naturally parallelizable are replicated for scalnbil-
+cluded by ACID.                                                                 ity, fault tolerance, or both. In our measurements (S&on 4), wo
+                                                                                will argue that the performance demands on the non-replicated
+                                                                                components are not significant for the implementation of a lnrgc
+2 Cluster-Based Scalable Service Architecture                                   class of services, and that the practical bottlenecks are bandwidth
+     In this section we propose a system architecture and service-              into and out of the system and bandwidth in the system arcn nct-
+programming model for building scalablenetwork services on clus-                work (SAN).
+ters. The architecture atteypts to address both the challenges of                  Front Ends provide the interface to the SNS as seen by tho
+cluster computing and the challenges of deploying network ser-                        outside world (e.g., HTTP server). They “shepherd”
+vices, while exploiting clusters’ strengths. We view our contribu-                    incoming requests by matching them up with the approprinto
+tions as follows:                                                                     user profile from the customization database, and qucuelng
+  l  A proposed system architecture for scalable network services                     them for service by one or more workers. Front ends
+     that exploits the strengths of cluster computing, as                             maximize system throughput by maintaining stntc for mnny
+     exemplified by cluster-based servers such as TranSend aud                        simultaneous outstanding requests, and can be rcplicntcd far
+     HotBot.                                                                          both scalability and availability.
+  l  Separation of the content of network services (i.e., what the                 The Worker Pool consists of caches and service-specific
+     services do) from their implementation, by encapsulating the                     modules that implement the ‘Actual service (dntn
+     “scalable network service” (SNS) requirements of high                            transformation/filtering, content aggregation, etc.) Each typo
+     availability, scalability, and fault tolerance in a reusable layer               of module may be instantiated zero or mori: times, depending
+     with narrow interfaces.                                                          on offered load.
+  l  A programming model based on composition of stateless                        The Customization Database stores user profiles that allow
+     worker modules into new services. The model maps well                          mass customization of request processing.
+     onto our system architecture and numerous existing services
+
+
+
+
+                                                                           80
+                                                                               ager, and possibly the user profile database. Our measurements in
+   Service: Service-specific code                                              Section 4 confirm that even for very large systems, these shared
+     l Workers that present human interface to what TACC                       components do not become a bottleneck.
+       modules do, including device-specific presentation                          The static partitioning of functionality between front ends and
+     l User interface to control the service                                  workers reflects our desire to keep workers as simple as possible,
+                                                                              by localizing in the front ends the control decisions associated with
+   TACC; TransformationAggregation, Caching, Customization                    satisfying user requests. In addition to managing the network state
+     lAPI for composition of stateless dam transformation                     for outstanding requests, a front end encapsulates service-specific
+      and content aggregation modules                                         worker dispatch logic, accesses the profile database to pass the
+    * Uniform caching of original, post-aggregation and post-                 appropriate parameters to the workers, notifies the end user in a
+      transformation data                                                     service-specific way (e.g., constructing an HTML page describing
+     lTransparent access to Customization database                            the error) when one or more workers fails unrecoverably, provides
+                                                                              the user interface to the profile database, and so forth. This division
+   SNS: Scalable Network Service support                                      of responsibility allows workers to remain simple and stateless, and
+     lIncremental and absolute scalability                                    allows the behavior of the service as a whole to be defined almost
+     Worker load balancing and overflow management
+     l
+                                                                              entirely in the front end. If the workers are analogous to processes
+                                                                              in a Unix pipeline, the front end is analogous to an interactive shell.
+     Front-end availability, fault tolerance mechanisms
+     l
+
+
+     System monitoring and logging
+     l
+                                                                              2.2.2 Centralized Load Balancing
+   Figure 2: Scalable Network Service Layered Model                                Load balancing is controlled by a centralized policy imple-
+  The Manager balances load across workers and spawns                         mented in the manager. The manager collects load information
+    additional workers as offered load fluctuates or faults occur.            from the workers, synthesizes load balancing hints based on the
+    When necessary, it may assign work to machines in the                     policy, and periodically transmits the hints to the front ends, which
+    overflow pool, a set of backup machines (perhaps on                       make local scheduling decisions based on the most recent hints.
+    desktops) that can be harnessed to handle load bursts and                 The load balancing and overllow policies are left to the system
+    provide a smooth transition during incremental growth. The                operator. We describe our experiments with load balancing and
+    overflow pool is discussed in Section 2.2.3.                              overflow in Section 4.5.
+  The Graphical Monitor for system management supports                             The decision to centralize rather than distribute load balancing
+    tracking and visualization of the system’s behavior,                      is intentional: If the load balancer can be made fault tolerant, and if
+    asynchronous error notification via email or pager, and                   we can ensure it does not become a performance bottleneck, cen-
+    temporary disabling of system components for hot upgrades.                tralization makes it easier to implement and reason about the
+                                                                              behavior of the load balancing policy. In Section 3.1.3 we discuss
+  The System-Area Network provides a low-latency, high-                       the evolution that led to this design decision and its implications
+    bandwidth interconnect, such as switched loo-Mb/s Ethernet                for performance, fault tolerance, and scalability.
+    or Myrinet [43]. Its main goal is to prevent the interconnect
+    from becoming the bottleneck as the system scales.                        2.2.3 Prolonged Bursts and Incremental Growth
+2.2 Separating Service Content From Implementa-                                    Although we would like to assume that there is a well-defined
+                                                                               average load and that arriving traffic follows a Poisson distribution,
+tion: A Reusable SNS Support Layer                                             burstiness has been demonstrated for Ethernet traffic [35], file sys-
+     Layered software models allow layers to be isolated from each             tem traffic [27], and Web requests [IS], and is confirmed by our
+other and allow existing software in one layer to be reused in dif-            traces of web traffic (discussed later). In addition, Internet services
+ferent implementations. We observe that the components in the                 can experience relatively rare but prolonged bursts of high load:
+above architecture can be grouped naturally into three layers of              after the recent landing of Pathfinder on Mars, its web site served
+functionality, as shown in Figure 2: SNS (scalable network service            over 220 million hits in a Cday period [45]. Often, it is during such
+implementation), TACC (transformation, aggregation, caching,                  bursts that uninterrupted operation is most critical.
+customization), and Service. The key contributions of our architec-                Our architecture includes the notion of an overflow pool for
+ture are the reusability of the SNS layer, and the ability to add sim-        absorbing these bursts. The overtlow machines are not dedicated to
+ple, stateless “building blocks” at the TACC layer and compose                the service, and normally do not have workers running on them, but
+them in the Service layer. We discuss TACC in Section 2.3. The                the manager can spawn workers on the overflow machines on
+SNS layer, which we describe here, provides scalability, load bal-            demand when unexpected load bursts arrive, and release the
+ancing, fault tolerance, and high availability; it comprises the front        machines when the burst subsides. In an institutional or corporate
+ends, manager, SAN, and monitor in Figure 1.                                  setting, the overflow pool could consist of workstations on individ-
+                                                                              uals’ desktops. Because worker nodes are already interchangeable,
+2.2.1 Scalability                                                             workers do not need to know whether they are running on a dedi-
+    Components in our SNS architecture may be replicated for                  cated or an overflow node, since load balancing is handled exter-
+fault tolerance or high availability, but we also use replication to          nally. In addition to absorbing sustained bursts, the ability to
+achieve scalability. When the offered load to the system saturates            temporarily harness overflow machines eases incremental growth:
+the capacity of some component class, more instances of that com-             when the overflow machines are being recruited unusually often, it
+ponent can be launched on incrementally added nodes. The duties               is time to purchase more dedicated nodes for the service.
+of our replicated components are largely independent of each other
+(because of the nature of the intemet services’ workload), which              2.2.4 Soft State for Fault Tolerance and Availability
+means the amount of additional resources required is a linear func-               The technique of constructing robust entities by relying on
+tion of the increase in offered load. Although the components are             cached soft state refreshed by periodic messages from peers has
+mostly independent, they do have some dependence on the shared,               been enormously successful in wide-area TCPAP networks
+non-replicated system components: the SAN, the resource man-                  [5,20,39],another arena in which transient component failure is a
+
+
+
+
+                                                                         81
+fact of life. Correspondingly, our SNS components operate in this                    ized information aggregators [59.13], and search engines. The
+manner, and monitor one another using process peer fault toler-                      selection of which workers to invoke for a particular request is scr-
+ance’: when a component fails, one of its peers restarts it (on a dif-              vice-specific and controlled outside the workers themselves: for
+ferent node if necessary), while cached stale state carries the                     example, given a collection of workers that convert images
+surviving components through the failure. After the component is                    between pairs of encodings, a correctly chosen sequence of tmns-
+restarted, it gradually rebuilds its soft state, typically by listening to          formations can be used for general image conversion.
+multicasts from other components. We give specific examples of                           Customization represents a fundamental advantage of the Inter-
+this mechanism in Section 3.1.3.                                                    net over traditional wide-area media such as television, Many
+      We use timeouts as an additional fault-tolerance mechanism, to                online services, including the Wall Street Journal, the Los Angeles
+infer certain failure modes that cannot be otherwise detected. If the               Times, and C/Net, have deployed “personalized” versions of their
+condition that caused the timeout can be automatically resolved                     service as a way to increase loyalty and the quality of the service.
+(e.g., if workers lost because of a SAN partition can be restarted on               Such mass customization requires the ability to track users and
+still-visible nodes), the manager petiorms the necessary actions.                   keep profile data for each user, although the content of the proillcs
+Otherwise, the SNS layer reports the suspected failure condition,                   differs across services. The customization database, a traditional
+and the service layer determines how to proceed (e.g., report the                   ACID database, maps a user identification token (such as an IP
+error or fall back to a simpler task that does not require the failed               address or cookie) to a list of key-value pairs for each user of the
+worker).                                                                            service. A key strength of the TACC model is that the approprlatc
+                                                                                    profile information is automatically delivered to workers along
+2.2.5 Narrow Interface to Service-Specific Workers                                  with the input data for a particular user request: this allows the
+    To allow new services to reuse all these facilities, the manager                same workers to be reused for different services. For example, an
+and front ends provide a narrow API, shown as the Manager Stubs                     image-compression worker can be run with one set of parameters
+and Worker Stubs in Figure 1, for communicating with the workers,                   to reduce image resolution for faster Web browsing, and a different
+the manager, and the graphical system monitor. The worker stub                      set of parameters to reduce image size and bit depth for handheld
+provides mechanisms for workers to implement some required                          devices. We have found composable, customizable workers to be a
+behaviors for participating in the system (e.g., supplying load data                powerful building block for developing new services, and WCdis-
+to assist the manager in load balancing decisions and reporting                     cuss our experience with TACC and its continuing evolution in
+detectable failures in their own operation). The worker stub hides                  Section 5.
+fault tolerance, load balancing, and multithreading considerations                       Caching is important because recomputing or storing data has
+from the worker code, which may use all the facilities of the operat-              become cheaper than moving it across the Internet, For example, a
+ing system, need not be thread-safe, and can, in fact, crash without                study of the UK National web cache has shown that even a small
+taking the system down. The minimal restrictions on worker code                     cache (400MB) can reduce the load on the network infrastructure
+allow worker authors to focus instead on the content of the service,               by 40% 1611,and SingNet, the largest ISP in Singapore, has saved
+even using off-the-shelf code (as we have in TranSend) to imple-                   40% of its telecom charges using web caching [60]. In the TACC
+ment the worker modules.                                                           model, caches can store post-transformation (or post-aggregation)
+    The manager stub linked to the front ends provides support for                 content and even intermediate-state content, in addition to caching
+implementing the dispatch logic that selects which worker type(s)                  original Internet content.
+are needed to satisfy a request; since the dispatch logic is indepen-                    Many existing services are subsumed by the TACC model and
+dent of the core load balancing and fault tolerance mechanisms, a                  fit well with it. (In Section 5.4 we describe some that do not.) For
+variety of services can be built using the same set of workers.                    example, the HotPot search engine collects search results from a
+                                                                                   number of database partitions and collates the results. Transforma-
+2.3 TACC: A Programming                Model for Internet Services                 tion involves converting the input data from one form to another. In
+    Having encapsulated the “SNS requirements” into a separate                     TranSend, graphic images can be scaled’and filtered through a low-
+software layer, we now require a programming model for building                    pass filter to tune them for a specific client or to reduce their size. A
+the services themselves in higher layers. We focus on a particular                 key strength of our architecture is the ease of composition of tasks;
+subset of services, based on transfo~ation, aggregation, caching,                  this affords considerable flexibility in the transformations and
+and custonzization of Internet content (TACC). Transformation is                   aggregations the service can perform, without requiring workers to
+an operation on a single data object that changes its content; exam-               understand service-specific dispatch logic, load balancing, etc., any
+ples include filtering, transcoding, rerendering, encryption, and                  more than programs in a Unix pipeline need to understand the
+compression. Aggregation involves collecting data from several                     impIementation of the pipe mechanism.
+objects and collating it in a prespecified way; for example, collect-                    We claim that a large number of interesting services can be
+ing all listings of cultural events from a prespecified set of Web                 implemented entirely at the service and TACC layers, and that rela-
+pages, extracting the date and event information from each, and                    tively few services will benefit from direct modification to the SNS
+composing the result into a dynamically-generated “culture this                    layer unless they have very specific low-level performance needs,
+week” page. Our initial implementation allows Unix-pipeline-like                   In Section 5.1 we describe our experience adding functionality at
+chaining of an arbitrary number of stateless transformations and                   both the TACC and service layers.
+aggregations; this results in a very general programming model that
+subsumes transformation proxies 1221, proxy filters [67], custom-                  3 Service Implementation
+                                                                                       This section focuses on the implementation of TranSend, a
+                                                                                   scalable Web distillation proxy, and compares it with HotBot, Tho
+    1: Not to be confused with process pairs, a different fault-tolerance
+mechanismfor hard-stateprocesses,discussedin [6]. Processpeersare sim-             goals of this section are to demonstrate how each component
+ ilar to the fault tolerance mechanism explored in the early “Worm” pro-           shown in Figure 1 maps into the layered architecture, to discuss ml-
+grams [X5]and to “Robin Hood/FriarTuck” fault tolerance: “‘Eachghost-              evant implementation details and trade-offs, and to provide the nec-
+job would detect the fact that the other had been killed, and would start a        essary context for the measurements we report in the next section,
+new copy of the recently slain programwithin a few milliseconds.The only
+way to kill both ghosts wastokiil themsimultaneously(very difficult) or to
+deliberately crash the system.” [50]
+
+
+
+
+                                                                              82
+3.1 TranSend SNS Components                                                           manager can resort to starting up temporary distillers on a set of
+                                                                                      overflow nodes. Once the burst subsides, the distillers may be
+3.1.1 Front Ends                                                                      reaped.
+     TranSend runs on a cluster of SPARCstation 10 and 20                             3.1.3 Fault Tolerance and Crash Recovery
+machines, interconnected by switched 10 Mb/s Ethernet and con-
+nected to the dialup IP pool by a single 10 Mb/s segment. The                              In the original prototype for the manager, information about
+TranSend front end presents an HTTP interface to the client popu-                     distillers was kept as hard state, using a log file and crash recovery
+lation. A thread is assigned to each arriving TCP connection.                         protocols similar to those used-by ACID databases. Resilience
+Request processing involves fetching Web data from the caching                        against crashes was via process-pair fault tolerance, as in 161:the
+subsystem (or from the Internet on a cache miss), pairing up the                      primary manager process was mirrored by a secondary whose role
+request with the user’s customization preferences, sending the                        was to maintain a current copy of the primary’s state, and take over
+request and preferences to a pipeline of one or more distillers (the                  the primary’s tasks if it detects that the primary has failed. In this
+TranSend lossy-compression workers) to perform the appropriate                        scenario, crash recovery is seamless, since all state in the second-
+transformation, and returning the result to the client. Alternatively,                ary process is up-to-date.
+if an appropriate distilled representation is available in the cache, it                   However, by moving entirely to BASE semantics, we were able
+can be sent directly to the client. A large thread pool allows the                    to simplify the manager greatly and increase our confidence in its
+front end to sustain throughput and maximally exploit parallelism                     correctness. In TranSend, all state maintained by the manager is
+despite the large number of potentially long, blocking operations                     explicitly designed to be soft state. When a distiller starts up, it reg-
+associated with each task, and provides a clean programming                           isters itself with the manager, whose existence it discovers by sub-
+model. The production TranSend runs with a single front-end of                        scribing to a well-known multicast channel. If the distiller crashes
+about 400 threads.                                                                    before de-registering itself, the manager detects the broken connec-
+                                                                                      tion; if the manager crashes and restarts, the distillers detect bea-
+3.1.2 Load Balancing Manager                                                          cons from the new manager and re-register themselves. Timeouts
+                                                                                      are used as a backup mechanism to infer failures. Since all state is
+      Client-side JavaScript support [46] balances load across muhi-                  soft and is periodically beaconed, no explicit crash recovery or
+ ple front ends and masks transient front end failures, although                      state mirroring mechanisms are required to regenerate lost state.
+other mechanisms such as round-robin DNS [12] or commercial                           Similarly, the front end does not require any special crash recovery
+routers [16] could also be used. For internal load balancing,                         code, since it can reconstruct its state as it receives the next few
+TranSend uses a centralized manager whose responsibilities                            beacons from the manager.
+include tracking the location of distillers, spawning new distillers                       With this use of soft state, each “watcher” process only needs
+on demand, balancing load across distillers of the same class, and                    to detect that its peer is alive (rather than mirroring the peer’s state)
+providing the assurance of fault tolerance and system tuning. We                      and, in some cases, be able to restart the peer (rather than take over
+argue for a centralized as opposed to distributed manager because                     the peer’s duties). Broken connections, timeouts, or loss of beacons
+it is easier to change the load balancing policy and reason about its                 are used to infer component failures and restart the failed process.
+behavior; the next section discusses the fault-tolerance implications                 The manager, distillers, and front ends are process peers:
+of this decision.
+                                                                                        l  The manager reports distiller failures to the manager stubs,
+     The manager periodically beacons its existence on an IP multi-
+                                                                                           which update their caches of where distillers are running.
+cast group to which the other components subscribe. The use of IP
+multicast provides a level of indirection and relieves components                       l  The manager detects and restarts a crashed front end.
+of having to explicitly locate each other. When the front end has a                     l  The front end detects and restarts a crashed manager.
+task for a distiller, the manager stub code contacts the manager,                         This process peer functionality is encapsulated within the man-
+which locates an appropriate distiller, spawning a new one if neces-                  ager stub code. Simply by linking against the stub, front ends are
+sary. The manager stub caches the new distiller’s location for future                 automatically recruited as process peers of the manager.
+requests.
+     The worker stub attached to each distiller accepts and queues                    3.1.4 User Profile Database
+requests on behalf of the distiller and periodically reports load’
+                                                                                          The service interface to TranSend allows each user to register a
+information to the manager. The manager aggregates load informa-
+                                                                                      series of customization settings, using either HTML forms or a
+tion from all distillers, computes weighted moving averages, and
+                                                                                      Java/JavaScript combination applet. The actual database is imple-
+piggybacks the resulting information on its beacons to the manager
+                                                                                      mented using gdbnz because it is freely available and its perfor-
+stub. The manager stub (at the front end) caches the information in
+                                                                                      mance is adequate for our needs: user preference reads are much
+these beacons and uses lottery scheduling [63] to select a distiller
+                                                                                      more frequent than writes, and the reads are absorbed by a write-
+for each request. The cached information provides a backup so that
+                                                                                      through cache in the front end.
+the system can continue to operate (using slightly stale load data)
+even if the manager crashes. Eventually, the fault tolerance mecha-                   3.1.5 Cache Nodes
+nisms (discussed in Section 3.1.3) restart the manager and the sys-
+                                                                                          TranSend mns Harvest object cache workers [lo] on four sepa-
+tem returns to normal.
+                                                                                      rate nodes. Harvest suffers from three functional/performance defi-
+     To allow the system to scale as the load increases, the manager
+                                                                                      ciencies, two of which we resolved.
+can automatically spawn a new distiller on an unused node if it
+                                                                                          First, although a collection of Harvest caches can be treated as
+detects excessive load on distillers of a particular class. (The
+                                                                                      “siblings”, by default all siblings are queried on each request, so
+spawning and load balancing policies are described in detail in
+                                                                                      that the cache service time would increase as the load increases
+Section 4.5.) Another mechanism used for adjusting to bursts in
+                                                                                      even if more cache nodes were added. Therefore, for both scalabil-
+load is overtlow: if all the nodes in the system are used up, the
+                                                                                      ity and improved fault tolerance, the manager stub can manage a
+                                                                                      number of separate cache nodes as a single virtual cache, hashing
+  2: In the current implementation, distiller load is characterized in terms
+                                                                                      the key space across the separate caches and automatically re-hash-
+of the queue length at the distiller, optionally weighted by the expected cost        ing when cache nodes are added or removed. Second, we modified
+of distilling each item.                                                              Harvest to allow data to be injected into it, allowing distillers (via
+
+
+
+
+                                                                                 83
+                                                                              delay, interconnect),what resources the system is using, and other
+                                                                              such figuresof interest.
+
+                                                                              3.1.8 How ‘IkanSend Exploits BASE
+                                                                                  DistinguishingACIDvs. BASEsemanticsin the design of ser-
+                                                                              vice componentsgreatly simplifiesTranSend’sfault-toleranceand
+                                                                              improves its availability.Only the user-profiledatabase is ACID:
+                                                                              everything else exploits some aspect of BASE semanlics, both in
+                                                                              manipulatingapplicationdata (i.e., Web content) and in the imple-
+                                                                              mentationof the system componentsthemselves.
+                                                                                Stale load balancing data: The load balancing data in the
+  Figure 3: Scaling this JPEG image by a factor of 2 in each                       manager stub is slightly stale between updates from lhc
+  dimensionand reducing JPEG qualityto 25 results in a size                        manager,which arrive a few seconds apart. The USCof stale
+  reductionfrom 1OKBto 1.5KB.                                                      data for the load balancingand overIIowdecisions improves
+                                                                                   performanceand helps to hide faults, since using cached data
+                                                                                   avoids communicatingwith the source. Timeouts are used to
+                                                                                   recover from cases where stale data causes an incorrect load
+  Figure4: User Interfacefor manipulatingpreferences.                              balancing choice. For example, if a request is sent to a
+lhc worker stub) to store post-transformedor intermediate-state                    worker that no longer exists, the request will lime out and
+data into lhe large virtual cache. Finally, because the interface to               another worker will be chosen. From the standpoint of
+each cache node is HTTP, a separate TCP connection is required                     performance,as we will show in our measurements,the use
+for each cache request. We did not repair this deficiencydue to the                of slightlystale data is not a problem in practice.
+complexity of the Harvest code, and as a result some of the mea-                Soft state: The two advantages of soft state are improved
+surementsreported in Section 4.4 are slightly pessimistic.                         performance from avoiding (blocking) commits and lrivinl
+    Caching in TranSend is qnly an optimization.All cached data                    recovery. Transformed content is cached and can bc
+can be thrown away at the cost of performance-cache nodes are                      regeneratedfrom the original (which may bc also cached).
+workerswhose only job is the managementof BASEdata.                             Approximate answers: Users of TranSend request objects that
+                                                                                   are named by the object URL and the user preferences,
+3.1.6 Datatype-Specific Distillers                                                 which are used to derive distillationparameters.However,if
+    The second group of workers is the distillers, which perform                   the system is too heavily loaded to perform distillation,it can
+transformationand aggregation.As a result, we were able to lever-                  return a somewhat different version from the cache; if lhc
+age a large amount of off-the-shelf code for our distillers.We have                user clicks lhe “Reload” button later, they will get the
+built three parameterizabledistillersfor TranSend:scalingand low-                  distilled representationthey asked for if the system now has
+pass filteringof JPEG imagesusing the off-the-shelf&g-6u library                   sufficientresources to perform the distillation.If the required
+[29],GIF-lo-JPEGconversion followed by JPEG degradation3,and                       distiller has temporarily or permanently failed, the system
+a Per1HTML “munger”that marks up inline image referenceswith                       can return the original content. In all cases, an approximalc
+distillationpreferences, adds extra links next to distilled imagesso              ‘answer delivered quickly is more useful than the exact
+lhat users can retrieve the original content, and,adds a “toolbar”                 answerdeliveredslowly.
+(Figure 4) to each page that allows users to control variousaspects
+of TranSend’s operation. The user interface for TranSend is thus              3.2 HotBot Implementation
+controlled by the HTML distiller, under the direction of the user                  In this section we highlight the principal differences between
+preferences from the front end.                                               the implementationsof TranSendand HotBot.Theoriginal Inktomi
+    Each of these distillers took approximately5-6 hours to imple-            work, whichis the basis of HotBot, predatesthe layered model and
+ment, debug, and optimize. Althoughpathologicalinput data occa-               scalable server architecture presented here and uses ad hoc rather
+sionally causes a distiller to crash, the process-peerfault tolerance         than generalizedmechanismsin some places.
+guaranteed by the SNS layer means that we don’t have to worry                     Front ends and service interface: HotBot runs on a mixlure
+about eliminatingall such possible bugs and comer cases from the              of single- and multiple-CPUSPARCstationserver nodes, intcrcon-
+system.                                                                       netted by Myrinet [43].The HTTP front ends in HotBot run SO-80
+                                                                              threadsper node and handle the presentationand customizalionof
+3.1.7 Graphical Monitor                                                       results based on user preferences and browser type. The presenla-
+    Our extensibleTcVI’k[48]graphicalmonitor presentsa unified                tion is performed using a form of “dynamic HTML” based on Tel
+view of the system as a single virmal enfity. Componentsof the                macros [54].
+system report state information to the monitor using a multicast                   Load balancing: HotBot workers statically partition lho
+group, allowing multiple monitors to run at geographically dis-               search-enginedatabase for load balancing.Thus each worker han-
+persed locations for remote management.The monitor can page or                dies a subset of the database proportional lo its CPU power, and
+cmail the system operator if a serious error occurs, for example,if it        every query goes to all workersin parallel.
+slops receivingreports from some component.                                        Failure management: Unlike the workers in TranScnd, Hol-
+    The benefits of visualization are not just cosmetic: We can               Bot workernodes are not interchangeable,since each workeruses a
+immediatelydetect by looking at the visualizationpanel what state             local disk lo store its part of the database. The original Inktomi
+lhe system as a whole is in, whether any component is currently               nodes cross-mounteddatabases,so that there were always mulliplc
+causinga bottleneck (such as cache-misstime, distillationqueueing             nodes that could reach any databasepartition. Thus, when a node
+                                                                              when down, other nodes would automaticallytake over responsi-
+   3: Wechosethis approachablerdiscovering
+                                         thattheJPEGreprescnlalion            bility for that data, maintaininglbo% data availabilitywith graco-
+is smallerandfaslcrIOoperateon for moslimages.andproducesacstheli-            ful degradationin performance.
+ally superioresults.
+
+
+
+
+                                                                         84
+     Component             TranSend                  HotBot
+
+                       Dynamic, by queue
+                                                Static partitioning
+    Load balancing      lengths at worker
+                                                of read-only data
+                              nodes
+
+
+I-14pplication layer
+                     Composable TACC Fixed search service
+                         workers         application                             0.02
+
+
+                         Worker dispatch         Dynamic HTML                           I        Il./         I                        L   \I
+                                                                                 0.01
+     Service layer     logic, HTML / Java-      generation, HTML
+                             script UI                  UI                          0
+                                                                                        10      100        1000                1oQoo        1owQo   IWOOCO
+                         Centralized but                                                                          Data sib   (Qles)
+    Failure manage-                             Distributed to each
+                       fault-tolerant using                                     Figure 5: Distribution of content lengths for HTML, GIF, and
+          ment                                         node
+                          process-peers                                         JPEG files. The spikes to the leff of the main GIF and JPEG
+                                                                                distributions are error messages mistaken for image data,
+     Worker place-       FE’sandcaches          All workers bound               based on file name extension. Average content lengths: HTML -
+        ment           bound to their nodes        to their nodes               5131 bytes, GIF - 3428 bytes, JPEG - 12070 bytes.
+      User profile      Berkeley DB with         Parallel Informix            measurements requiring Internet access, the access was via a
+    (ACID) database        read caches                 server                 10 Mb/s switched Ethernet network connecting our workstation to
+                                                                              the outside world. In the following subsections we analyze the size
+                          Harvest caches                                      distribution and burstiness characteristics of TranSend’s expected
+                                                integrated cache of
+                       store pre- and post-                                   workload, describe the performance of two throughput-critical
+       Caching                                  recent searches, for
+                       transformation Web                                     components (the cache nodes and data-transformation workers) in
+                                               incremental delivery
+                               data                                           isolation, and report on experiments that stress TranSend’s fault
+-
+
+    Table 1: Main differences between TranSend and HoWot.                     tolerance, responsiveness to bursts, and scalability.
+     Since the database partitioning distributes documents ran-               4.1 HTTP Traces and the Playback Engine
+domly and it is acceptable to lose part of the database temporarily,               Many of the performance tests are based upon H’lTP trace data
+HotBot moved to a model in which RAID storage handles disk fail-              that we gathered from our intended user population, namely the
+ures, while fast restart minimizes the impact of node failures. For           25,000 UC Berkeley dialup IP users, up to 600 of whom may be
+example, with 26 nodes the loss of one machine results in the data-           connected via a bank of 14.4K or 28.8K modems. The modems’
+base dropping from 54M to about 51M documents, which is still                 connection to the Internet passes through a single 10 Mb/s Ethernet
+significantly larger than other search engines (such as Alta Vista at         segment; we placed a tracing machine running an IP packet filter
+30M).                                                                         on this segment for a month and a half, and unobtrusively gathered
+    The success of the fault management of HotBot is exemplified              a trace of approximately 20 million (anonymized) HTTP requests.
+by the fact that during February 1997, HotBot was physically                  GIF, HTML, and JPEG were by far the three most common MIME
+moved (from Berkeley to San Jose) without ever being down, by                 types observed in our traces (50%, 22%, and 18%, respectively),
+moving half of the cluster at a time and changing DNS resolution              and hence our three implemented distillers cover these common
+in the middle, Although various parts of the database were unaqail-           cases. Data for which no distiller exists is passed unmodified to the
+able at different times during the move, the overall service was still        user.
+up and useful-user       feedback indicated that few people were                   Figure 5 illustrates the distribution of sizes occurring for these
+affected by the transient changes.                                            three MIME types. Although most content accessed on the web is
+     User profile database: We expect commercial systems to use               small (considerably less than 1 KB), the average byte transferred is
+a real database for ACID components. HotBot uses Informix with                part of large content (3-12 KB). This means that the users’ modems
+primary/backup failover for the user profile and ad revenue track-            spend most of their time transferring a few, large files. It is the goal
+ing database, with each front end linking in an Informix SQL cli-             of TranSend to eliminate this bottleneck by distilling this large con-
+ent. However, all other HotBot data is BASE, and as in TranSend,              tent into smaller, but still useful representations; data under 1 KB is
+timeouts are used to recover from stale cluster-state data.                   transferred to the client unmodified, since distillation of such small
+3.3 Summary                                                                   content rarely results in a size reduction.
+                                                                                   Figure 5 also reveals a number of interesting properties of the
+    The TranSend implementation quite closely maps into the lay-              individual data types. The GIF distribution has two plateaus-one
+ered architecture presented in Section 2, while the HotBot imple-             for data sizes under 1KB (which correspond to icons, bullets, etc.)
+mentation differs in the use of a distributed manager, static load            and one for data sizes over 1KB (which correspond to photos or
+balancing by data partitioning, and workers that are tied to particu-         cartoons). Our 1KB distillation threshold therefore exactly sepa-
+lar machines, The careful separation of responsibility into different         rates these two classes of data, and deals with each correctly.
+components of the system, and the layering of components accord-              JPEGs do not show this same distinction: fhe distribution falls of
+ing to the architecture, made the implementation complexity man-              rapidly under the 1KB mark.
+ageable.                                                                           In order to realistically stress test TranSend, we created a high
+                                                                              performance trace playback engine. The engine can generate
+4 Measurements of the TranSend Implementation                                 requests at a constant (and dynamically tunable) rate, or it can
+                                                                              faithfully play back a trace according to the timestamps in the trace
+    We took measurements of TranSend using a cluster of 15 Sun
+                                                                              file. We thus had fine-grained control over both the amount and
+SPARC Ultra-l workstations connected by 100 Mb/s switched
+                                                                              nature of the load offered to our implementation during our experi-
+Ethernet and isolated from external load or network traffic. For
+                                                                              mentation.
+
+
+
+
+                                                                         85
+                                   ,,(4            -
+
+
+
+                                                                                                                            GIFsize (bytes)
+
+                                                                                                Figure 7: Average distillation latency VS. GIF size, based on Gl
+                                                    L                                           data gathered from the dialup IP trace.
+                      23:jl &39      m20          0150        02m
+                                                             lima                         the performance of our distillers by timing distillation latency as a 1
+                                     (b)
+                                                                                          tion of input data size, calculated across approximately 100,000 i
+                                                                                          from the dialup IP trace file. Figure 7 shows that for the GIF dis
+                                                                                          there is an approximately linear relationship between distillation
+                                                                                          and input size, although a large variation in distillation time is obs
+                                                                                          for any particular data size. The slope of this relationship IS apl
+                                                                                          mately 8 milliseconds per kilobyte of input. Similar results
+                                                                                          observed for the JPEG and HTML distillers, although the HTM’
+                                                                                          tiller is far more efficient.
+          23X3&10         233550           23:37:30         23:37SO
+                                                                                          4.4 Cache Partition Performance
+                                                                                               In [lo], a detailed performance analysis of the Harvest cachir
+     Figure 6: The number of requests per second far traced dialop
+     IP users, showing burstiness across different time scales. (a) 24                    tern is presented. We summarize the results here:
+     hours with 2 minute buckets, 5.8 req/s avg., 12.6 req/s max. (b)                       l  The average cache hit takes 27 ms to service, including nc
+     3 hr 20 inin with 30 second buckets, 5.6 reqls avg., 10.3 reqfs                            and OS o&head, implying a maximum average service rate
+     peak, (c) 3 min 20 set, 8.1 reqls avg., 20 reqls peak.                                    each partitioned cache instance of 37 requests per second
+4.2 Burstiness                                                                                  connection and tear-down overhead is attributed to 15 ms I
+                                                                                                service time.
+      Burstiness is a fundamental property of a great variety of computing
+                                                                                                95% of all cache hits take less than 100 ms to service, im
+systems, and can be observed across all time scales [18,27,35].Our HTTP                         cache hit rate has low variation.
+traces show that the offered load to our implementation will contain
+bursts-Figure 6 shows the request rate observed from the user base                              The miss penalty (i.e., the time to fetch data from tho Ir
+across a 24 hour, 3.5 hour, and 3.5 minute time interval. The 24 hour                           varies widely, from 100 ms through 100 seconds. This Imp1
+interval exhibits a strong 24 hour cycle that is overlaid with shorter time-                    should a cache miss occur, it is likely to dominate the end
+scale bursts. The 3.5 hour and 3.5 minute intervals reveal finer grained                        latency through the system, and therefore much effort sb
+bursts.                                                                                         expended to minimize cache miss rate.
+      We described in Section 2.2.3 how our architecture allows an arbi-                        As a supplement to these results, we ran a number of cache
+trary subset of machines to be managed as an overflow pool during tem-                     tions to explore the relationship between user population sis
+porary but prolonged periods of high load. The overflow pool can also be                   size, and cache hit rate, using LRU replacement. We obscrvec
+used to absorb bursts on shorter time scales. We argue that there are two                  size of the user population greatly affects the attainable hit ml
+possible administrative avenues for managing the overflow pool:                            hit rate increases monotonically as a function of cache size, bu
+    1. Select an average desired utilization level for the dedicated                       out at a level that is a function of the user population size. Fo
+       worker pool. Since we can observe a daily cycle, this amounts to                    population observed across the traces (approximately go00 pe
+       drawing a line across Figure 6a (i.e., picking a number of tasks/                   the I.5 month period), six gigabytes of cache space (in total, p
+       sea) such that the fraction of black under the line is the desired                  over all instances) gave us a hit rate of 56%. Similarly, we obs
+       utilization level.                                                                  for a given cache size, increasing the size of the user ]
+                                                                                           increases the hit rate in the cache (due to an increase in loca
+    2. Select an acceptable percentage of time that the system wiI1
+                                                                                           the users), until the point at which the sum of the users’ WC
+       resort to the overflow pool. This amounts to drawing a line
+       across Figure 6a such that the fraction of columns that cross the                   exceeds the cache size, causing the cache hit rate to fall.
+       line is this percentage.4                                                                From these results, we can deduce that the capacity of a s
+      Since we have measured the average number of requests/s that a dis-                   end will be limited by the high cache miss penalties, The
+ tiller of a given class can handle, the number of tasks /s that we picked                  simultaneous, outstanding requests at a front end is equal
+ (from step 1 or 2 above) dictates how many distillers will need to be in                   where N is the number of requests arriving per second, and T
+ the dedicated (non-overflow) pool.                                                         age service time of a request. A high cache miss penalty im
+                                                                                            will be large. Because two TCP connections (one bctwcen th
+4.3 Distiller Performance                                                                   front end, the other between the front end and a cache partiti
+   If the system is behaving well, the distillation of images is the most                   thread context are maintained in the front end for each
+computationally expensive task performed by TranSend. We measured                           request, implying that front ends are vulnerable to slate mans
+                                                                                            context switching overhead. As an example, for offered
+  4: Note that the utilization level cannot necessarilybe predictedgiven a certain          requests per second to a front end, we have observed 150-3
+acceptabIepercentage,and vice-versa.                                                        ing requests and therefore up to 700 open TCP connectif
+
+
+                                                                                     86
+                                                                               loaded and started up one more distiller, causing the load to stabi-
+                                                                               lize.
+                                                                                    When we first ran this experiment, we noticed rapid oscilla-
+                                                                               tions in queue lengths. Inspection revealed that since the front
+                                                                               end’s manager stubs only periodically received distiller queue
+                                                                               length reports, they were making load balancing decisions based on
+                                                                               stale data. To repair this, we changed the manager stub to keep a
+                                                                               running estimate of the change in distiller queue lengths between
+                                                                               successive reports; these estimates were sufficient to eliminate the
+                                                                               oscillations. ‘Ihe data in Figure 8 reflects the modified load balanc-
+                                                                               ing limctionality.
+
+                                                                               4.6 Scalability
+                                                                                    To demonstrate the scalability of the system, we needed to
+                                                                               eliminate two bottlenecks that limit the load we could offer: the
+   (4                                                                          overhead associated with having a very large number of open file
+                                                                               descriptors, and the bottleneck lOMb/s Ethernet connecting our
+                                                                               cluster to the Internet. To do this, we prepared a trace file that
+                                                                               repeatedly requested a fixed number of JF’EG images, all approxi-
+                                                                               mately 1OKB in size, based on the distributions we observed (Sec-
+                                                                               tion 4.1). These images would then remain resident in the cache
+                                                                               partitions, eliminating cache miss penalty and the resulting buildup
+                                                                               of file descriptors in the front end. We recognize that although a
+                                                                               non-zero cache miss penalty does not introduce any additional net-
+                                                                               work, stable storage, or computational burden on the system, it
+                                                                               does result in an increase in the amount of state in the front end,
+                                                                               which as we mentioned in Section 4.4 limits the performance of a
+                                                                               single front end. On the other hand, by turning off caching of dis-
+                                                                               tilled images, we force our system to re-distill the image every time
+                                                                               it was requested, and in that respect our measurements are pessi-
+                                                                               mistic relative to the system’s normal mode of operation.
+                                                                                    Our strategy for the experiment was as follows:
+  Figure 8: Distiller queue lengths observed over time as the load
+  presented to the system fluctuates, and as distillers are                          Begin with a minimal instance of the system: one front          .
+  manuallv brought down. (bl is an enlaroement of (a).                               end, one distiller, the manager, and some fixed number of
+                                                                                     cache partitions. (Since for these experiments we repeat-
+active thread contexts at any given time. As a result, the front end                 edly requested the same subset of images, the cache was
+spends more than 70% of its time in the kernel (as reported by the                   effectively not tested.)
+top utility) under this load. Eliminating this overhead is the subject
+                                                                                     Increase the offered load until some system component sat-
+of ongoing research.                                                                 urates (e.g., distiller queues grow too long, front ends
+                                                                                     cannot accept additional connections, etc.).
+4.5 Self Thing      and Load Balancing
+                                                                                     Add more resources to the system to eliminate this satura-
+     TranSend uses queue lengths at the distillers as a metric for                   tion (in many cases the system does this automatically, as.
+load balancing. As queue lengths grow due to increased load, the                     when it recruits overflow nodes to run more workers), and
+moving average of the queue length maintained by the manager                         record the amount of resources added as a function of the
+starts increasing; when the average crosses a configurable threshold                 increase in offered load, measured in requests per second.
+H, the manager spawns a new distiller to absorb the load. The                        Continue until the saturated resource cannot be replenished
+threshold H maps to the greatest delay the user is willing to tolerate               (i.e., we run out of hardware), or until adding more of the
+when the system is under high load. To allow the new distiller to                    saturated resource no longer results in a linear or close-to-
+stabilize the system, the spawning mechanism is disabled for D                       linear improvement in performance.
+seconds; the parameter D represents a tradeoff between stability                    Table 2 presents the results of this experiment. At 24 requests
+(rate of spawning and reaping distillers) and user-perceptible delay.          per second, as the offered load exceeded the capacity of the single
+     Figure S(a) shows the variation in distiller queue lengths over           available distiller, the manager automatically spawned one addi-
+time. The system was bootstrapped with one front end and the                   tional distiller, and then subsequent distillers as necessary. At 87
+manager. On-demand spawning of the first distiller was observed                requests per second, the Ethernet segment leading into the front
+as soon as load was offered. With increasing load, the distiller               end saturated, requiring a new front end to be spawned. We were
+queue gradually increased until the manager decided to spawn a                 unable to test the system at rates higher than 159 requests per sec-
+second distiller, which reduced the queue length of the first distiller        ond, as all of our cluster’s machines were hosting distillers, front
+and balanced the load across both distillers within five seconds.              ends, or playback engines. We did observe nearly perfectly linear
+Continued increase in load caused a third distiller to startup, which          growth of the system over the scaled range: a distiller can handle
+again reduced and balanced the queue lengths within five seconds.              approximately 23 requests per second, and a 100 Mb/s Ethernet
+     Figure 8(b) shows an enlarged view of the graph in Figure 8(a).           segment into a front-end can handle approximately 70 requests per
+During the experiment, we manually killed the first two distillers,            second.5 We were unable to saturate the front end, the cache parti-
+causing the load on the remaining distiller to rapidly increase. The
+manager immediately reacted and started up a new distiller. Even                 5: We believe that TCP connection setup and processing overhead is the
+after D seconds, the manager discovered that the system was over-              dominating factor. Using a more efficient TCP implementation such as Fast
+                                                                               Sockets [52] may alleviate this limitation, although more investigation is
+                                                                               needed.
+
+
+
+
+                                                                          87
+                                                                              the normal use of the system, suggesting that Myrinet will support
+                                                                              systems of at least several tens of nodes.
+
+                                                                              5 Discussion
+                                                                                   In previous sections we presented detailed measurements of a
+                                                                              scalable network service implementation that confirmed the effcc-
+                                                                              tiveness of our layered architecture. In this section, we discuss
+                                                                              some of the more interesting and novel aspects of our architecture,
+                                                                              reflect on further potential applications of this research, and corn4
+                                                                              pare our work with others’ efforts.
+
+                                                                              5.1 Extensibility:*New Workers and Composition
+                                                                                   One of our goals was to make the system easily cxtcnsiblc at
+                                                                              the TACC and Service layers by making it easy to create workers
+                                                                              and chain them together. Our HTML and JPEG distillers consist
+                                                                              almost entirely of off-the-shelf code, and each took an afternoon to
+                                                                              write. .Debugging the pathological cases for the HTML distlllcr
+  Table 2: Results of the scalability experiment
+                                                                              was spread out over a period of days-since the system masked
+ tions, or fully saturate the interior SAN during this experiment. We         transient faults by bypassing original content “around” the faulting
+draw two conclusions from this result:                                        distiller, we could only deduce the existence of bugs by noticing
+  l  Even with a commodity 100 Mb/s SAN, linear scaling is                    (using the Monitor display) that the HTML distiller had been
+     limited primarily by bandwidth into the system rather than               restarted several times over a period of hours.
+     bandwidth inside the system.                                                  The other aspect of extensibility is the ease with which new
+  l  Although we run TranSend on four SPARC lo’s, a single                    services can be added by composing workers and modifying the
+     Ultra-l class machine would suffice to serve the entire dialup           service presentation interface. We now discuss several exnmplcs of
+     IP population of UC Berkeley (25,000 users officially, over              new services in various stages of construction, indicating what
+     8000 of whom surfed during the trace).                                   must be changed in the TACC and Service layers for each. The scr-
+     Ultimately, the scalability of our system is limited by the              vices share the following common features, which make them amc-
+shared or centralized components of the system, namely the user               nable to implementation using our framework:
+profile database, the manager, and the SAN. In our experience, nei-             l  Compute-intensive transformation or aggregation
+ther the database nor the manager have ever been close to satura-               l  Computation is parallelizable with granularity of a few CPU
+tion. The main task of the manager (in steady state) is to                         seconds
+accumulate load announcements from all distillers and multicast                 l  Substantial value added by mass customization
+this information to the front ends. We conducted an experiment to               l  Data manipulated has BASE semantics
+test the capability of the manager to handle these load announce
+ments. Nine hundred distillers were created on four machines. Each                 We restrict our discussion here to services that can be implc-
+of these distillers generated a load announcement packet for the              mented using the HlTP proxy model (i.e., transparent interposition
+manager every half a second. The manager was easily able to han-              of computation between Web clients and Web servers). The follow4
+dle this aggregate load of 1800 announcements per second. With                ing applications have all been prototyped using TranSend,
+each distiller capable of processing over 20 front end requests per             Keyword Filtering: The keyword filter aggregator is very
+second, the manager is computationally capable of sustaining a                      simple (about 10 lines of Perl). It allows users to specify n
+total number of distillers equivalent to 18000 requests per second.                 Per1 regular expression as customization preference. This
+This number is nearly three orders of magnitude greater than the                    regular expression is then applied to all HTML before
+peak load ever seen on UC Berkeley’s modem pool which is com-                       delivery. A simple example filter marks all occurrences of
+parable to a modest-sized ISP. Similarly, HotBot’s ACID database                    the chosen keywords with large, bold, red typeface.
+(parallel Infonnix server), used for ad revenue tracking and user              Bay Area Culture Page: This service retrieves scheduling
+profiles, can serve about 400 requests per second, significantly                 information from a number of cultural pages on the web, and
+greater than HotBot’s load.                                                      collates the results into a single, comprehensive calendar of
+     On the other hand, SAN saturation is a potential concern for                upcoming events, bounded by dates stored as part of each
+communication-intensive workloads such as TranSend’s. The prob-                  user’s profile. The service is implemented as a single
+lem of optimizing component placement given a specific network                   aggregator in the TACC layer, and is composed with tho
+topology, technology, and workload is an important topic for future              unmodified TranSend service layer, delivering the bcnctlts of
+research. As a preliminary exploration of how TranSend behaves as                distillation automatically. This service exploits BASE
+the SAN saturates, we repeated the scalability experiments using a               “approximate answers” semantics at the application lnycr:
+10 Mb/s switched Ethernet. As the network was driven closer to                   extremely general, layout-independent heuristics arc used to
+saturation, we noticed that most of our (unreliable) multicast traffic           extract scheduling information from the cultural pages,
+was being dropped, crippling the ability of the manager to balance               About lo-20% of the time, the heuristics spuriously pick up
+load and the ability of the monitor to report system conditions.                 non-date text (and the accompanying non-descriptions of
+     One possible solution to this problem is the addition of a low-             events), but the service is still useful and users simply ignore
+speed utility network to isolate control traffic from data traffic,              spurious results. Early experience with services such as this
+allowing the system to more gracefully handle (and perhaps avoid)                one suggest that our SNS architecture may be a promising
+SAN saturation. Another possibility is to use a higher-performance               platform for deploying certain kinds of simple network
+SAN interconnect: a Myrinet [43] microbenchmark run on the Hot-                  agents.
+Bot implementation measured 32 MBytes/s all-pairs traffic
+between 40 nodes, far greater than the traffic experienced during
+
+
+
+
+                                                                         88
+  !&a&end M&search: The metascarch service is similar to                       5.3 Related Work
+    the Bay Area Culture Page in that it collates content from
+                                                                                     Content transformation by proxy: Filtering and on-the-fly
+    other sources in the Internet. This content, however, is
+                                                                                compression have become particularly popular for HTI? [31],
+    dynamically produced-an        aggregator accepts a search
+                                                                                whose proxy mechanism was originally intended for users behind
+    string from a user, queries a number of popular search
+                                                                                security firewalls. The mechanism has been used to shield clients
+    engines, and collates the top results from each into a single
+                                                                                from the effeCtSof poor (especially wireless) networks [22,37],per-
+    result page. Commercial metasearch engines already exist
+                                                                                form filtering [67] and anonymization, and perform value-added
+    [SS], but the TranSend metasearch engine was implemented
+                                                                                transformations on content, including Kanji transcoding 1561,
+    using 3 pages of Per1 code in roughly 2.5 hours, and inherits
+                                                                                Kanji-to-GIF conversion 1651,application-level stream transducing
+    scalability, fault tolerance, and high availability from the
+                                                                                [13,59],and personalized agent services for Web browsing [7].
+    SNS layer.
+                                                                                    Fault tolerance and high availability: The Worm programs
+  Anonymous Rewebber: Just as anonymous remailer chains                         1551are an early example of process-peer fault tolerance. Tandem
+    [24] allow email authors to anonymously disseminate their                  Computer and others explored a related mechanism, process-pair
+    content, an anonymous rewebber network allows web                          fault tolerance, [6] in which a secondary (backup) process ran in
+    authors to anonymously publish their content. The rewebber                 parallel with the primary and maintained a mirror of the primary’s
+    described in [25] was implemented in one week using our                    internal state by processing the same message traffic as the pri-
+    TACC architecture. The rewebber’s workers perform                          mary, allowing it to immediately replace the primary in the event of
+    encryption and decryption, its user profile database maintains             failure. Tandem also advocated the use of simple “building blocks”
+    public key information for anonymous servers, and its cache                to ensure high availability. The Open Group SHAWS project [49]
+    stores decrypted versions of frequently accessed pages.                    plans to build scalable highly available web servers using a fault
+    Since encryption and decryption of distinct pages requested                tolerance toolkit called CORDS, but that project is still in progress.
+    by independent users is both computationally intensive and                      BASE: Grapevine [9] was an important early example of trad-
+    highly parallelizable, this service is a natural fit for our               ing consistency for simplicity; Bayou [21] later explored trading
+    architecture.                                                              consistency for availability in application-specific ways, providing
+  Real Web Access for PDAs and Smart Phones: We have                           an operational spectrum between ACID and BASE for a distributed
+    already extended TranSend to support graphical Web                         database. The use of soft state to provide improved performance
+    browsing on the USR PalmPilot [62], a typical “thin client”                and increase fault tolerance robustness has been well explored in
+    device. Previous attempts to provide Web browsing on such                  the wide-area Internet, in the context of IP packet routing [39], mul-
+    devices have foundered on the severe limitations imposed by                ticast routing [20], and wireless TCP optimizations such as TCP
+    small screens, limited computing capability, and austere                   Snoop [5]; the lessons learned in those areas strongly influenced
+    programming environments, and virtually all have fallen                    our design philosophy for the TACC server architecture.
+    back to simple text-only browsing. But the ability of our                       Load balancing and scaling: WebOS 1661and SWEBt+ [3]
+    architecture to move complexity into the service workers                   have exploited the extensibility of client browsers via Java and Jav-
+    rather than the client allows us to approach this problem                  aScript to enhance scalability of network-based services by divid-
+    from a different perspective. We have built TranSend                       ing labor between the client and server. We note that our system
+    workers that output simplified markup and scaled-down                      does not preclude, and in fact benefits from, exploiting intelligence
+    images ready to be “spoon fed” to an extremely simple                      and computational resources at the client, as we do for the
+    browser client, given knowledge of the client’s screen                     TranSend user interface and coarse-grained load balancing. How-
+    dimensions and font metrics. This greatly simplifies client-               ever, as discussed in the Introduction, we expect the utility of cen-
+    side code since no HTh4L parsing, layout, or image                         tralized, highly-available services to continue to increase, and this
+    processing is necessary, and as a side benefit, the smaller and            cannot occur without the growth path provided by linear incremen-
+    more efficient data representation reduces transmission time               tal scalability in the SNS sense.
+    to the client.
+                                                                               5.4 Future Work
+5.2 Economic Feasibility                                                            Our past work on adaptation via distillation [23,22] described
+     Given the improved quality of service provided by TranSend,               how distillation could be dynamically tuned to match the behavior
+an interesting question is the additional cost required to operate this        of the user’s network connection, and we have successfully demon-
+service. From our performance data, a US$5000 Pentium Pro                      strated adaptation to network changes by combining our original
+server should be able to support about 750 modems, or about                    WWW proxy prototype with the Event Notification mechanisms
+15,000 subscribers (assuming a 2O:l subscriber to modem ratio).                developed by Welling and Badrinath [4], and plan to leverage these
+Amortized over 1 year, the marginal cost per user is an amazing 25             mechanisms to provide an adaptive solution for Web access from
+cents/month.                                                                   wireless clients.
+     If we include the savings to the ISP due to a cache hit rate of                We have not investigated how well our proposed architecture
+50% or more, as we observed in our cache experiments, then we                  works outside the Internet-server domain. In particular, we do not
+can eliminate the equivalent of l-2 Tl lines per TranSend installa-            believe it will work well for write-intensive services where the
+tion, which reduces operating costs by about US$3000 per month.                writes carry hard state or where strong consistency is desired, such
+Thus, we expect that the server would pay for itself in only two               as commerce servers, file systems, or online voting systems.
+months. In this argument we have ignored the cost of administra-                   The programming model for TACC services is still embryonic.
+tion, which is nontrivial, but we believe administration costs for             We plan to develop it into a well-defined programming environ-
+TranSend would be minimal- we run TranSend at Berkeley with                    ment with an SDK, and we will encourage our colleagues to author
+essentially no administration except for feature upgrades and bug              services of their own using our system.
+fixes, both of which are performed without bringing the service                     Previous research into operating systems support for busy
+down.                                                                          Internet servers [32, 421 has identified inadequacies in OS imple-
+                                                                               mentations and the set of abstractions available to applications. We
+                                                                               plan to investigate similar issues related specifically to cluster-
+
+
+
+
+                                                                          89
+based middleware services, as motivated by our observations in                 [5] H. Baltishnan, S. Seshan, E. Amir. R. Katz. Improving TCP//P Per-
+Section 4.4.                                                                        formance over Wireless Networks. Proeedings.of the 1st ACM Con-
+                                                                                    ference on Mobile Computing and Networking, Berkeley, CA,’
+                                                                                 j November1995.
+6 Conclusions
+                                                                               [6] J. F. Bartlett.ANonStop Kernel. Proc.8thSOSPand OperatingSystems
+     We proposed a layered architecture for cluster-based scalable
+                                                                                     Review 15(5), December1981
+network services. We identified challenges of cluster-based com-
+puting, and showed how our architecture addresses these chal-                  [7] Rob Barrett, Paul Maglio, and Daniel Kellem. How to Personalize the
+lenges. The architecture is reusable: authors of new network                        Web. Proc. CHI 97.
+services write and compose stateless workers that transform, aggre-            [8] Berkeley HomeIP Service FAQ. http://ack.berkeley.edu/dcns/modems/
+gate, cache, and customize (TACC) Internet content, but are                         hip/hip-faq.html.
+shielded from the software complexity of automatic scaling, high
+availability, and failure management. We argued that a large class             [9] A.D. Birrell et al. Grapevine: An Exercise in Distributed Computing.
+of network services can get by with BASE, a weaker-than-ACID                        Communications of the ACM 25(4), Feb. 1984.
+data semantics that results from the combination of trading consis-            [lo] C.M. Bowman et al. Harvest:A Scalable, Customizable Discovery and
+tency for availability and exploiting soft state for performance and                Access System. Technical Report CU-CS-732-94, Department of
+failure management.                                                                 Computer Science, University of Colomdo. Boulder, August 1994
+     We discussed in depth the design and implementation of two
+                                                                               [ll] Tim Bray. Measuring the Web. Proc. WWW-5, Paris, May 1996.
+cluster-based scalable network services: the TranSend distillation
+Web proxy and the HotBot search engine. Using extensive client                 [12] T. B&co. RFC 1764: DNSSupportfor Load Balancing, April 1995.
+traces, we conducted detailed performance measurements of                      [13] C. Brooks, M.S. Mazer, S. Meeks and J. Miller. Application-SpeclJlc
+TranSend. While gathering these measurements, we scaled                             Proxy Servers as HTTP Stream Transducers. Proc. WWW-4, Boston,
+TranSend up to 10 Ultra-l workstations serving 159 web requests                     May 1996. http:llwww.w3.org/pub/Conference&VWW4lPapers~56~
+per second, and demonstrated that a single such workstation is suf-
+ficient to serve the needs of the entire 600 modem UC Berkeley                 [14] A. Chankhunthod, P. B. Danzig, C. Neerdaels, M. F. Schwartz and K,
+dialup IP bank.                                                                     J. Worre1l.A Hierarchical Internet Object Cache. Proceedings of the
+     Since the class of cluster-based scalable network services we                  1996 Usenix Annual Technical Conference, 153-163, Jnmnuy 1996.
+have identified can substantially increase the value of Internet               [15] D.Clark. Policy Routing in Internet Protocols. Internet Request for
+access to end users while remaining cost-efficient to deploy and                    Comments 1102, May 1989,
+administer, we believe that cluster-based value-added network ser-
+                                                                               [16] Cisco Systems. Local Director. httpY/www.cisco.com/warp/public/
+vices will become an important Internet-service paradigm.
+                                                                                    75l/lodir/index.html.
+                                                                               [17] F. J. Corbat6 and V. A. Vyssotsky. Introduction and Overview of the
+7 Acknowledgments                                                                   Multics System. AFIPS Conference Proceedings, 21, 185-196, (1965
+     This paper has benefited from the detailed and perceptive com-                 Fall Joint Computer Conference), 1965. http://www.lilli.com/fjccl.ht-
+ments of our reviewers, especially our shepherd Hank Levy. We                       ml
+thank Randy Katz and Eric Anderson for their detailed readings of
+                                                                               [18] ME. Crovella and A. Bestavros. Explaining World Wide Web Traflc
+early drafts of this paper, and David Culler for his ideas on TACC’s
+                                                                                    SeZfSimilarity. TechRep.TR-95-015,ComputerScienceDcpartmcnt,
+potential as a model for cluster programming. Ken Lutz and Eric
+                                                                                    Boston University, October 1995.
+Fraser configured and administered the test network on which the
+TranSend scaling experiments were performed. Cliff Frost of the                1191P. B. Danzig, RI S. Hall and M. F. Schwartz. A Case for Caching File
+UC Berkeley Data Communications and Networks Services group                        Objects Inside Internetworks. Proceedings of SIGCOMM ‘93.239.
+allowed us to collect traces on the Berkeley dialup IP network and                 248, September 1993.
+has worked with us to deploy and promote TranSend within Berke-                [20] S. Deering, D. E&in, D. Farinacci, V. Jacobson, C.-G. Liu, and L. Wcl,
+ley. Undergraduate researchers Anthony Polito, Benjamin Ling,                       An Architecture for Wide-Area Multicast Routing. Proceedings of
+and Andrew Huang implemented various parts of TranSend’s user                       SIGCOMM ‘94, University College London, London, U.K., Septem-
+profile database and user interface. Ian Goldberg and David Wag-                    ber 1994.
+ner helped us debug TranSend, especially through their implemen-
+tation of the rewebber.                                                        [21] A. Demers. K. Petersen, M. Spreitzer, D. Terry. M. Theimer, B, Welch,
+                                                                                    The Bayou Architecture: Supportfor Data Sharing Among Mobile Us-
+                                                                                    ers.
+8 References
+                                                                               [22] A. Fox and E. A. Brewer. Reducing WWWLutency and Bandwidth Re-
+[l] E. Anderson and D. A. Patterson.System Monitoring and Diagnostic                quirements via Real-Time Distillation. Proc. WWW-5, Paris, May
+     Console for a Network of Workstations. SecondNOW Workshopat                    1996.
+     ASPLOS-VII,Boston, October 1996.http://now.cs.berkeley.edu/
+                                                                               [23] A. Fox, S. D. Gribble, E. Brewer and E. Amir. Adapting to Network
+     SysadminlslideslASPLOS7.ps.gz
+                                                                                    and Client Variation Via On-Demand Dynamic Distillation. Proceed-
+[2] T. E. Anderson et al. The Case for NOW (Networks of Workstations).              ings of ASPLOS-VII. Boston, October 1996.
+     IEEE Micro,February 1995.
+                                                                               [24] Ian Goldberg, David Wagner, and Eric Brewer. Privacy-enhancing
+[3] D. Andresen,T. Yang,0. Egecioglu,0. H. Ibarra,and T. R. Smith.Scai-             Technologiesfor the Internet. Proc. of IEEE Spring COMPCON, 1997
+     ability Issues for High Performance Digital Libraries on the Worki
+                                                                               [25] Ian Goldberg and David Wagner. TAZServers and the Rewebber Net4
+     Wide Web.Proceedings of ADL ‘96, Forum on Research and Technol-
+                                                                                    work Enabling Anonymous Publishing on the World Wide Web. Un.
+     ogy Advances in Digital Libraries, IEEE, Washington D.C., May 1996
+                                                                                    published manuscript, May 1997, available at http://
+[4] B. R. Badrinath and G. Welling. A Frameworkfor Environment Aware                www.cs.berkeley.edul-dawics2681.
+     Mobile Applications. International Conference on Distributed Com-
+                                                                               [26] J. Gray. The Transaction Concept: Virtues and Limitations. Proceed-
+     puting Systems, May 1997 (to appear)
+                                                                                    ings of VLDB. Cannes, France, September 1981.144-154.
+
+
+
+
+                                                                          90
+[27] SD. Gribble, G.S. Manku, and E. Brewer. Self-Similarity in File-Sys-             Work, Chapel Hill, NC.
+     tems: Measurement and Applications. Unpublished, available at http:/        [52] S. H. Rodrigues and T. E. Anderson. High-Peermance Local-Area
+     lwww.cs.berkeley.edu&ibbl~papers/papers.html                                     Communication Using Fast Sockets. Pmt. 1997 Winter USENIX,
+[28] T.R. Hallhill. Inside the Web PC. Byte Magazine, March 1996.                     Anaheim, CA.
+[29] Independent JPEG Group.jpeg6a library.                                      [53] Jacques AJ. Roufs. Perceptual Image Quality: Concept and Measure-
+                                                                                      ment. Philips Journal of Research, 47:3-14.1992.
+[30] Inktomi Corporation: The Inhtomi Technology Behind HotBot. May
+     1996. http://www.inktomi.com/wbitepap.html.                                 [54] A. Sah, K. E. Brown and E. Brewer. Programming the Internetfrom
+                                                                                      the Server-Side with Tel and Audiencel. Proceedings of Tc196,July
+[31] Internet Engineering Task Force. Hypertext Transfer Protocol-HTTP
+                                                                                      1996.
+      1.1. RFC 2068, March 1,1997.
+                                                                                 [55] J. F. Shoch and J. A. Hupp. The “Worm” Programs-Early Experience
+[32] M. F. Kaashoek, D. R. Engler, G. R. Ganger, and D. A. Wallach.Server
+                                                                                       with a Distributed System. CACM 25(3):172-180, March 1982.
+     Operating Systems. Proceedings of the SIGOPS European Workshop,
+     September 1996.                                                             [56] Y. Sato. DeleGate Server. Documentation available at httpJl
+                                                                                      www.aubg.edu:8080/ciiisrc/delegate3.O.l7/doc/Manual.txt.
+[33] P. Keleher, A. Cox, and W. Zwaenepoel. lazy Release Consistencyfor
+     Sofivare DistributedSharedMemory. Proceedings ofthe 19thAnnual              [57] B. Schilit and T. Bickmore. Digestor: Device-Independent Access to
+     Symposium on Computer Architecture. May, 1992.                                   the World Wide Web. Proc. WWW-6, Santa Clara, CA, April 1997.
+
+[34] P. Keleher, A. Cox, S. Swarkadas, and W. Zwaenepoel. TreadMarks:            [58] E. Selberg, 0. Etzioni and G. Lauckhart. Metacrawlec About Our Ser-
+     Distributed Shared Memory on Standard Workstationsand Operating                  vice. http$www.metacrawler.com/about.html.
+     Systems. Proceedings of the 1994 Winter USENIX Conference, Janu-            [59] M.A. Schickler. M.S. Mazer, and C. Brooks. Pan-Browser Supportfor
+     ary, 1994.                                                                       Annotations and Other Meta-Information on the World Wide Web.
+[35] W. Leland, M.S. Taqqu, W. Willinger, and D.V. Wilson. On the Self-               Proc. WWW-5. Paris, May 1996. http://www5conf.inria.fr/tich_htmv
+     Similar Nature of Ethernet Trafic (extended version). IEEE/ACM                   papers/Pl5/0verview.html
+     Transactions on Network v2, February 1994.                                  [60] SingNet (Singapore ISP).‘Heretical Caching Effortfor SingNet Cus-
+1361 K. Li. Shared Virtual Memory on Loosely Coupled Microprocessors.                 tomers. http:llwww.singnet.com.sg/cache/proxy
+     PhD Thesis, Yale University, September 1986.                                [61] N. Smith. The UK National Web Cache - The State of the Art. Proc.
+[37] M. Liljeberg et al. Enhanced Servicesfor World Wide Web in Mobile                WWW-5, paris, May 1996. http://www5conf.inria.fr/tich~htmllpa-
+     WAN Environment. University of Helsinki CS Technical Report No.                  pem/P45/0verview.html
+     C-1996-28, April 1996.                                                      [62] US Robotics Pahn Pilot home page - http://www.usr.comlpahn/.
+[38] Bruce A. Mah. An Empirical Model ofHfTP Network Traffic. Proc.              [63] C. Waldspurger and W. Weihl. Lottery Scheduling: Flexible Propor-
+     INFOCOM 97, Kobe, Japan, April 1997.                                             tional Share Resource Management. Proceedings of the First OSDI,
+[39] J. McQuillan, I Richer, E. Rosen. The New Routing Algorithmfor the               November 1994.
+     ARPANET IEEE Transactions on Communications COM-28, No. 5,                  [64] Yahoo!, Inc. httpzJlwww.yahoo.com
+     pp. 711-719, May 1980.
+                                                                                 [65] Kao-Ping Yee. Shoduoka Mediator Service. httpz//www.lfw.orgl
+[40] M. Meeker and C. DePuy. The Internet Report. Morgan Stanley Equity               shodouka.
+     Research, April 1996. http://www.mas.com/mis~inet/morganh.html
+                                                                                 [66] C. Yoshiiawa, B. Chun, P. Eastham, A. Vahdat. T. Anderson, and D.
+[41] P.V. Mockapetris and K.J. Dunlap. Development of the Domain Name                 Culler. Using Smart Clients to Build Scalable Services. Proceedings of
+     System. ACM SIGCOMM Computer Communication Review, 1988.                         Winter 1997 USENM. January 1997.
+[42] Jeffrey C. Mogul. Operating Systems Supportfor Busy Internet Serv-          [67] B. Zenel. A Proxy Based Filtering Mechanismfor the Mobile Environ-
+     ers. Proceedings of HotOS-V, Orcas Island, Washington, May 1995.                 ment. Ph.D. Thesis Proposal, Department of Computer Science, Co-
+[43] Myricom Inc. Myrinet: A Gigabit Per Second Local Area Network                    lumbia University, March 1996.
+     IEEE-Micro, Vo1.15, No.1, February 1995, pp. 29-36.
+[44] National Laboratory for Applied Network Research. The Squid Inter-
+     net Object Cache. http~/squid.nlanr.net.
+
+[45] National Aeronautics and Space Administration. The Mars Pathfinder
+     Mission Home Page. http://mpl%vw.jpl.nasa.gov/defaultl.html.
+
+[46] Netscape Communications Corporation. Netscape Proxy Automatic
+     Configuration. http://home.netscape.comleng/mozilla/2.02/relnot~
+     Unix-2.02.html#Proxies.
+[47] Nokia Communicator 9000 Press Release. Available at http://
+     www.club.nokia.com/support/9OOO/press.html.
+[48] J.K. Ousterhout. Tel and the Tk Toolhit. Addison-Wesley, 1994.
+[49] Open Group Research Institute. Scalable Highly AvaitizbleWeb Server
+     Project (SHAWS). httpr//www.osf.org/RIIPubProjPg~SFfWWW.htm
+
+[SO] Eric S. Raymond, ed. The New Hackers’ Dictionary. Cambridge, MA:
+     MIT Press, 1991. Also http~/www.ccil.org/jargon/jargon.html.
+[Sl] P. Resnick, N. Iacovou, M. Suchak, P. Bergstrom, J. Ried. GroupLens:
+     An Open Architecture for Collaborative Filtering of Netnews. Pro-
+     ceedings of 1994 Conference on Computer Supported Cooperative
+
+
+
+
+                                                                            91
+

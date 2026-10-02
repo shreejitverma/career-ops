@@ -1,0 +1,1008 @@
+                                   Virtualize Everything but Time
+
+       Timothy Broomhead         Laurence Cremean        Julien Ridoux      Darryl Veitch
+                  Center for Ultra-Broadband Information Networks (CUBIN)
+    Department of Electrical & Electronic Engineering, The University of Melbourne, Australia
+     {t.broomhead, l.cremean}@ugrad.unimelb.edu.au, {jridoux, dveitch}@unimelb.edu.au
+
+
+
+                       Abstract                                     Software clocks are based on local hardware (oscilla-
+                                                                 tors), corrected using synchronization algorithms com-
+   We propose a new timekeeping architecture for virtu-
+                                                                 municating with reference clocks. For cost and conve-
+alized systems, in the context of Xen. Built upon a feed-
+                                                                 nience reasons, reference clocks are queried over a net-
+forward based RADclock synchronization algorithm, it
+                                                                 work.
+ensures that the clocks in each OS sharing the hardware
+                                                                    Since a notion of universally shared absolute time is
+derive from a single central clock in a resource effective
+                                                                 tied to physics, timekeeping poses particular problems
+way, and that this clock is both accurate and robust. A
+                                                                 for virtualization, as a tight ‘real’ connection must be
+key advantage is simple, seamless VM migration with
+                                                                 maintained across the OSs sharing the hardware. Both
+consistent time. In contrast, the current Xen approach
+                                                                 timekeeping and timestamping rely heavily on hardware
+for timekeeping behaves very poorly under live migra-
+                                                                 counters. Virtualization adds an extra layer between the
+tion, posing a major problem for applications such as fi-
+                                                                 hardware and the OSs, which creates additional resource
+nancial transactions, gaming, and network measurement,
+                                                                 contention, and increased latencies, that impact perfor-
+which are critically dependent on reliable timekeeping.
+                                                                 mance.
+We also provide a detailed examination of the HPET and
+Xen Clocksource counters. Results are validated using a             In this paper we propose a new timekeeping architec-
+hardware-supported testbed.                                      ture for para-virtualized systems, in the context of Xen
+                                                                 [1]. Using a hardware-supported testbed, we show how
+                                                                 the current approach using the Network Time Protocol
+1   Introduction                                                 (NTP) system is inadequate, in particular for VM migra-
+                                                                 tion. We explain how the feed-forward based synchro-
+Virtualization represents a major movement in the evo-           nization adopted by the RADclock [14] allows a depen-
+lution of computer infrastructure. Its many benefits in-         dent clock paradigm to be used and ensures that all OSs
+clude allowing the consolidation of server infrastructure        sharing the hardware share the same (accurate and ro-
+onto fewer hardware platforms, resulting in easier man-          bust) clock in a resource effective way. This results in
+agement and energy savings. Virtualization enables the           robust and seamless live migration because each phys-
+seamless migration of running guest operating systems            ical host machine has its own unique clock, with hard-
+(guest OSs), which reduces reliance on dedicated hard-           ware specific state, which never migrates. Only a state-
+ware, and eases maintenance and failure recovery.                less clock-reading function migrates. We also provide a
+   Timekeeping is a core service on computing plat-              detailed examination and comparison of the HPET and
+forms, and accurate and reliable timekeeping is im-              Xen Clocksource counters.
+portant in many contexts including network measure-                 Neither the idea of a dependent clock, nor the RAD-
+ment and high-speed trading in finance. Other applica-           clock algorithm, are new. The key contribution here is to
+tions where accurate timing is essential to maintain at          show how the feed-forward nature, and stateless clock
+all times, and where virtualization can be expected to           read function, employed by the RADclock, are ideally
+be used either now or in the future, include distributed         suited to make the dependent clock approach actually
+databases, financial transactions, and gaming servers.           work. In what is the first evaluation of RADclock in a vir-
+The emerging market of outsourced cloud computing                tualized context, we show in detail that the resulting so-
+also requires accurate timing to manage and correctly bill       lution is orders of magnitude better than the current state
+customers using virtualized systems.                             of the art in terms of both average and peak error follow-
+
+
+                                                             1
+ing disruptive events, in particular live migration. We                  figuration and Power Interface (ACPI) [10], and the
+have integrated our work into the RADclock [14] pack-                    High Precision Event Timer (HPET) [5].
+ages for Linux, which now support the architecture for                      The TSC enjoys high resolution and also very fast ac-
+Xen described here.                                                      cess. Care is however needed in architectures where a
+   After providing necessary background in Section 2,                    unique TSC of constant nominal frequency may not ex-
+we motivate our work in depth by demonstrating the in-                   ist. This can occur because of multiple processors with
+adequacies of the status quo in Section 3. Since hardware                unsynchronized TSC’s, and/or power management ef-
+counters are key to timekeeping in general and to our so-                fects resulting in stepped frequency changes and execu-
+lution in particular, Section 4 provides a detailed exam-                tion interruption. Such problems were endemic in archi-
+ination of the behavior of counters of key importance to                 tectures such as Intel Pentium III and IV, but have been
+Xen. Section 5 describes and evaluates our proposed tim-                 resolved in recent architectures such as Intel Nehalem
+ing architecture on a single physical host, and Section 6                and AMD Barcelona.
+deals with migration. We conclude in Section 7.                             In contrast to CPU counters like the TSC, HPET and
+                                                                         ACPI are system-wide counters which are unaffected by
+                                                                         processor speed issues. They are always on and run at
+2     Background                                                         constant nominal rate, unless the entire system is sus-
+                                                                         pended, which we ignore here. HPET is accessed via
+We provide background on Xen, hardware counters,
+                                                                         a data bus and so has much slower access time than the
+timekeeping, the RADclock and NTP clocks, and com-
+                                                                         TSC, as well as lower resolution as its nominal frequency
+parison methodology.
+                                                                         is about 14.3MHz. ACPI has even lower resolution with
+   To the best of our knowledge there is no directly rel-
+                                                                         a frequency of only 3.57MHz. It has even slower access,
+evant peer-reviewed published work on timekeeping in
+                                                                         since it is also read via a bus but unlike HPET is not
+virtualized systems. A valuable resource however is [21].
+                                                                         memory mapped.
+                                                                            Beyond the counter ticking itself, power management
+2.1      Para-Virtualization and Xen                                     affects all counters through its impact on counter access
+                                                                         latency, which naturally requires CPU instructions to be
+All virtualization techniques rely on a hypervisor, which,
+                                                                         executed. Recent processors can, without stopping exe-
+in the case of Xen [1, 2, 9], is a minimal kernel with
+                                                                         cution, move between different P-States where the oper-
+exclusive access to hardware devices. The hypervisor
+                                                                         ating frequency and/or voltage are varied to reduce en-
+provides a layer of abstraction from physical hardware,
+                                                                         ergy consumption. Another strategy is to stop processor
+and manages physical resources on behalf of the guests,
+                                                                         execution. Different such idle states, or C-States C0, C1,
+ensuring isolation between them. We work within the
+                                                                         C2. . . are defined, where C0 is normal execution, and the
+para-virtualization paradigm, whereby all guest OS’s are
+                                                                         deeper the state, the greater the latency penalty to wake
+modified to have awareness of, and access to, the native
+                                                                         from it [12]. The impact on latency of these strategies is
+hardware via hypercalls to the hypervisor, which are sim-
+                                                                         discussed in more detail later.
+ilar to a system call. It is more challenging to support
+accurate timing under the alternative fully hardware vir-
+tualized paradigm [2], and we do not consider this here.                 2.3    Xen Clocksource
+   Although we work in the context of para-virtualized
+Xen, the architecture we propose has broader applicabil-                 The Xen Clocksource is a hardware/software hybrid
+ity. We focus on Linux OS’s as this is the most active                   counter presented to guest OSs by the hypervisor. It
+platform for Xen currently. In Xen, the guest OSs be-                    aims to combine the reliability of a given platform timer
+long to two distinct categories: Dom0 and DomU. The                      (HPET here) with the low access latency of the TSC.
+former is a privileged system which has access to most                   It is based on using the TSC to interpolate between
+hardware devices and provides virtual block and network                  HPET readings made on ‘ticks’ of the periodic inter-
+devices for the other, DomU, guests.                                     rupt scheduling cycle of the OS (whose period is typi-
+                                                                         cally 1ms), and is scaled to a frequency of approximately
+                                                                         1GHz. It is a 64-bit cumulative counter, and is effectively
+2.2      Hardware Counters                                               initialized to zero for each guest when they boot (this is
+                                                                         implemented by a ‘system time’ variable they keep) and
+The heart of any software clock is local oscillator hard-
+                                                                         monotonically increases.
+ware, accessed via dedicated counters. Counters com-
+monly available today include the Time Stamp Counter                        The Xen Clocksource interpolation is a relatively
+(TSC) [6] which counts CPU cycles1 , the Advanced Con-                   complex mechanism that accounts for lost TSC ticks
+                                                                         (it actively overwrites the TSC register) and frequency
+    1 TSC is x86 terminology, other architectures use other names.       changes of the TSC due to power management (it main-
+
+
+                                                                     2
+tains a TSC scaling factor which can be used by guests to          2.5   Synchronization Algorithms
+scale their TSC readings). Such compensation is needed
+on some older processors as described in Section 2.2.              The ntpd daemon [11] is the standard clock synchro-
+                                                                   nization algorithm used today. It is a feedback based
+                                                                   design, in particular since system clock timestamps are
+                                                                   used to timestamp the timing packets. The existing ker-
+                                                                   nel system clock, which provides the interface for user
+2.4    Clock Fundamentals                                          and kernel timestamping and which is ntpd-oriented, is
+                                                                   disciplined by ntpd. The final software clock is therefore
+A distinction must be drawn between the software clock             quite a complex system as the system clock has its own
+itself, and timestamping. A clock may be perfect, yet              dynamics, which interacts with that of ntpd via feedback.
+timestamps made with it be very inaccurate due to large            On Xen, ntpd relies on the Xen Clocksource as its under-
+and/or variable access latency. Such timestamping er-              lying counter.
+rors will vary widely depending on context and may er-                The RADclock [20] (Robust Absolute and Difference
+roneously reflect on the clock itself.                             Clock) is a recently proposed alternative clock synchro-
+    By a raw timestamp we mean a reading of the underly-           nization algorithm based on a feed-forward design. Here
+ing counter. For a clock C which reads C(t) at true time           timing packets are timestamped using raw packet times-
+t, the final timestamp will be a time in seconds based not         tamps. The clock error is then estimated based on these
+only on the raw timestamp, but also the clock parameters           and the server timestamps, and subtracted out when the
+set by the synchronization algorithm.                              clock is read. This is a feed-forward approach, since er-
+                                                                   rors are corrected based on post-processing outputs, and
+   A local (scaled) counter is not a suitable clock and
+                                                                   these are not themselves fed back into the next round of
+needs to be synchronized because all counters drift if left
+                                                                   inputs. In other words, the raw timestamps are indepen-
+to themselves: their rate, although very close to constant
+                                                                   dent of clock state. The ‘system clock’ is now stateless,
+(typically measured to 1 part in 106 or less), varies. Drift
+                                                                   simply returning a function of parameters maintained by
+is primarily influenced by temperature.
+                                                                   the algorithm.
+   Remote clock synchronization over a network is based               More concretely, the (absolute) RADclock is defined
+on a (typically bidirectional) exchange of timing mes-             as Ca (t) = N (t)· p̄ + K E(t), where N (t) is the raw
+sages from an OS to a time server and back, giving rise to         timestamp made at true time t, p̄ is a stable estimate of
+four timestamps: two made by the OS as the timing mes-             average counter period, K is a constant which aligns the
+sage (here an NTP packet) leaves then returns, and two             origin to the required timescale (such as UTC), and E(t)
+made remotely by the time server. Typically, exchanges             is the current estimate of the error of the ‘uncorrected
+are made periodically: once every poll-period.                     clock’ N (t) · p̄ + K which is removed when the clock
+   There are two key problems faced by remote synchro-             is read. The parameters p̄, K and E are maintained by
+nization. The first is to filter out the variability in the        the clock algorithm (see [20] for details of the algorithm
+delays to and from the server, which effectively corrupt           itself). The clock reading function simply reads (or is
+timestamps. This is the job of the clock synchronization           passed) the raw timestamp N for the event of interest,
+algorithm, and it is judged on its ability to do this well         fetches the clock parameters, and returns Ca (t).
+(small error and small error variability) and consistently            The RADclock can use any counter which satisfies ba-
+in real environments (robustness).                                 sic requirements, namely that it be cumulative, does not
+                                                                   roll over, and has reasonable stability. In this paper we
+   The second problem is that of a fundamental ambigu-
+                                                                   provide results using both the HPET and Xen Clock-
+ity between clock error and the degree of path asymme-
+                                                                   source.
+try. Let A = d" d# denote the true path asymmetry,
+where d" and d# are the true minimum one-way delays
+to and from the server, respectively; and let r = d" + d#          2.6   Experimental Methodology
+be the minimal Round Trip Time (RTT). In the absence
+of any external side-information on A, we must guess a             We give a brief description of the main elements of our
+value, and Â = 0 is typically chosen, corresponding to            methodology for evaluating clock performance. More
+a symmetric path. This allows the clock to be synchro-             details can be found in [15].
+nized, but only up to an unknown additive error lying                 The basic setup is shown in Figure 1. It incorporates
+somewhere in the range [ r, r]. This ambiguity cannot              our own Stratum-1 NTP server on the LAN as the ref-
+be circumvented, even in principle, by any algorithm.              erence clock, synchronised via a GPS-corrected atomic
+We explore this further under Experimental Methodol-               clock. NTP timing packets flow between the server and
+ogy below.                                                         the clocks in the host machine (two OS’s each with two
+
+
+                                                               3
+clocks are shown in the figure) for synchronization pur-                                                It is essential to note that the delays experienced by
+poses, typically with a poll period of 16 seconds. For                                               timing packets have components both in the network, and
+evaluation purposes, a separate box sends and receives                                               in the host itself (namely the NIC + hardware + OS),
+a flow of UDP packets (with period 2 seconds) to the                                                 each with their own minimum RTT and asymmetry val-
+host, acting as a set of timestamping ‘opportunities’ for                                            ues. Whereas the DAG card timestamps enable the net-
+the clocks under test. In this paper a separate stream was                                           work side to be independently measured and corrected,
+sent to each OS in the host, but for a given OS, all clocks                                          the same is not true of the host side component. Even
+timestamp the same UDP flow.                                                                         when using the same server then, a comparison of dif-
+   Based on timestamps of the arrival and departure of                                               ferent clocks, which have different asymmetry induced
+the UDP packets, the testbed allows two kinds of com-                                                errors, is problematic. Although the spread of errors can
+parisons.                                                                                            be meaningfully compared, the median errors can only
+External: a specialized packet stamping ‘DAG’ card [4]                                               be compared up to some limit imposed by the (good but
+timestamps packets just before they enter the NIC of the                                             not perfect) methodology, which is of the order of 1 to
+host machine. These can be compared to the timestamps                                                10 µs. Despite these limitations, we believe our method-
+for the same packets taken by the clocks inside the host.                                            ology to be the best available at this time.
+The advantage is an independent assessment; the disad-
+vantage is that there is ‘system’ lying between the two
+                                                                                                     3   Inadequacy of the Status-Quo
+timestamping events, which adds a ‘system noise’ to the
+error measurement.                                                                                   The current timekeeping solution for Xen is built on top
+Internal: clocks inside the same OS timestamp the pack-                                              of the ntpd daemon. The single most important thing
+ets back-to-back (thanks to our kernel modifications), so                                            then regarding the performance of Xen timekeeping is to
+subtracting these allows the clocks to be compared. The                                              understand the behavior first of ntpd in general, and then
+advantage is the elimination of the system noise between                                             in the virtualized environment.
+the timestamps; the disadvantage is that differences be-                                                There is no doubt that ntpd can perform well under
+tween the clocks cannot be attributed to any specific                                                the right conditions. If a good quality nearby time server
+clock.                                                                                               is available, and if ntpd is well configured, then its per-
+   The results appearing in this paper all use the external                                          formance on modern kernels is typically in the tens of
+comparison, but internal comparisons were also used as                                               microseconds range and can rival that of the RADclock.
+a key tool in the process of investigation and validation.                                           An example in the Xen context is provided in Figure 2,
+   As far as possible experiments are run concurrently so                                            where the server is a Stratum-1 on the same LAN, and
+that clocks to be compared experience close to identical                                             both RADclock and ntpd, running on Dom0 in paral-
+conditions. For example, clocks in the same OS share                                                 lel, are synchronizing to it using the same stream of
+the very same NTP packets to the time server (and hence                                              NTP packets. Here we use the host machine kultarr, a
+in particular, share the same poll period). There are a                                              2.13GHz Intel Core 2 Duo. Xen selects a single CPU for
+number of subtle issues we have addressed regarding the                                              use with Xen Clocksource, which is then used by ntpd.
+equivalence between what the test UDP packets, and the                                               Power management is disabled in the BIOS.
+NTP packets actually used by the algorithm, ‘see’, which                                                The errors show a similar spread, with an Inter-
+depends on details of the relative timestamping locations                                            Quartile Range (IQR) of around 10 µs for each. Note that
+in the kernel. This topic is discussed further below in                                              here path asymmetry effects have not been accounted for,
+relation to ‘host asymmetry’.                                                                        so that as discussed above the median errors do not re-
+                                                                                                     flect the exact median error for either clock.
+                                                                                                        In this paper our focus is on the right architecture
+                                                                               GPS
+  Internal Monitor                                External Monitor
+                                                                              Receiver               for timing in virtualized systems, in particular such that
+                            ntpd-NTP
+                                                  DAG            DAG-GPS       Atomic                seamless VM migration becomes simple and reliable,
+                                                  Card                         Clock
+
+
+                DomU
+   Host                                                                                              and not any performance appraisal of ntpd per se. Ac-
+                                                                                                     cordingly, unless stated otherwise we consistently adopt
+   Hypervisor
+                            RADclock
+
+                                                                                                     the configuration which maximizes ntpd performance –
+                            ntpd-NTP
+                                                                                                     single nearby statically allocated Stratum-1 server, static
+                Dom0
+                                                                Unix PC                 SW-GPS
+
+
+                            RADclock
+                                                         Hub
+                                                                 UDP Sender
+                                                                 & Receiver
+                                                                              NTP Server             and small polling period.
+                                                                              Stratum 1
+                                                                                                        The problem with ntpd is the sudden performance
+                PPS Sync.              NTP flow              UDP flow         Timestamping
+                                                                                                     degradations which can occur when conditions deviate
+                                                                                                     from ‘ideal’. We have detailed these robustness issues of
+                                                                                                     ntpd in prior work, including [17, 18]. Simply put, when
+ Figure 1: Testbed and clock comparison methodology.                                                 path delay variability exceeds some threshold, which is a
+
+
+                                                                                                 4
+                                                                                                                            −3                                   −3
+                                                                                                                         x 10                                 x 10
+                    80                                                            ntpd                              2
+
+
+
+
+ Clock error [µs]
+                                                                                                                       RADclock                         1.5                     ntpd
+                                                                                  RADclock
+                    60                                                                                             1.5 Med: 33.3                                                Med: 42.5
+                                                                                                                       IQR: 10.9                                                IQR: 12.2
+                    40                                                                                                                                   1
+                                                                                                                    1
+                    20
+                                                                                                                   0.5                                  0.5
+                     0
+                      0              5               10                15                                 20        0                                    0
+                                                                                                                            20    30      40       50           30       40      50      60
+                                                  Time [day]                                                                  Clock Error [µs]                        Clock Error [µs]
+
+
+Figure 2: RADclock and ntpd uncorrected performance on dom0, measured using the external comparison with DAG.
+
+                     4000                                                             in this case Xen Clocksource. The fact that Xen Clock-
+
+
+Clock error [µs]
+                     2000                                                             source is in reality only very approximately 1GHz means
+                          0                                                           that this drift is rapid, indeed appearing to first order as
+                    −2000                                                             a simple skew, that is a constant error in frequency. This
+                    −4000                                      ntpd dependent         failure of the dependent clock approach using ntpd has
+                          0   0.2   0.4   0.6    0.8      1    1.2   1.4    1.6       led to the alternative solution used today, where each
+                                             Time [Hours]
+                                                                                      guest runs its own independent ntpd daemon.
+                                                                                      Example 2 – Independent ntpd clock In an inde-
+Figure 3: Error in the DomU dependent clock (dependent                                pendent clock paradigm, which is used currently in Xen
+on the ntpd on Dom0 shown in Figure 2), measured using                                timekeeping, each guest OS (both Dom0 and DomU) in-
+the external comparison with DAG. This 2 hour zoom is                                 dependently runs its own synchronization algorithm, in
+representative of an experiment 20 days long.                                         this case ntpd, which connects to its own server using its
+                                                                                      own flow of NTP timing packets. Clearly this solution
+                                                                                      is not ideal in terms of the frugal use of server, network,
+complex function of parameters, stability of the feedback                             NIC and host resources. In terms of performance, the un-
+control is lost, resulting in errors which can be large over                          derlying issue is that the additional latencies suffered by
+small to very long periods. Recovery from such periods                                guests in the virtual context make it more likely ntpd will
+is also subject to long convergence times.                                            be pushed into instability. Important examples of such
+   Consider now the pitfalls of using ntpd for timekeep-                              latencies are the descheduling and time-multiplexing of
+ing in Xen, through the following three scenarios.                                    guests across physical cores.
+Example 1 – Dependent ntpd clock In a dependent                                           An example is given in Figure 4, where, despite syn-
+clock paradigm, only Dom0 runs a full clock synchro-                                  chronizing to the same high quality server on the LAN as
+nization algorithm, in this case ntpd. Here we use a                                  before, stability is lost and errors reach the multiple mil-
+2.6.26 kernel, the last one supporting ntpd dependent                                 lisecond range. This was brought about simply by adding
+timekeeping.                                                                          a moderate amount of system load (some light churn of
+   In the solution detailed in [19], synchronizing times-                             DomU guests and some moderate CPU activity on other
+tamps from ntpd are communicated to DomU guests via                                   guests), and allowing NTP to select its own polling pe-
+the periodic adjustment of a ‘boot time’ variable in the                              riod (in fact the default configuration), rather than fixing
+hypervisor. Timestamping in DomU is achieved by a                                     it to a constant value.
+modified system clock call which uses Xen Clocksource
+to extrapolate from the last time this variable was up-
+dated forward to the current time. The extrapolation as-                                                                                                                                 ntpd
+
+
+
+                                                                                      Clock error [µs]
+sumes Xen Clocksource to be exactly 1GHz, resulting                                                       5000
+in a sawtooth shaped clock error which, in the example
+from our testbed given in Figure 3, is in the millisecond                                                      0
+range. This is despite the fact that the Dom0 clock it
+derives from is the one depicted in Figure 2, which has                                                  −5000
+                                                                                                              0             2      4       6        8     10             12      14      16
+excellent performance in the 10 µs range.                                                                                                        Time [Hours]
+   These large errors are ultimately a result of the way
+in which ntpd interacts with the system clock. With no                                Figure 4: Error in the ntpd independent clock on DomU
+ntpd running on DomU (the whole point of the depen-                                   synchronizing to a Stratum-1 server on the LAN, with
+dent clock approach), the system clock has no way of in-                              polling period set by ntpd. Additional guests are created
+telligently correcting the drift of the underlying counter,                           and destroyed over time.
+
+                                                                                  5
+Example 3 – Migrating independent ntpd clock This                  0.25
+                                                                        TSC
+                                                                                                            0.15
+                                                                                                                                     HPET
+example considers the impact of migration on the syn-               0.2 Min: 248                                                     Min: 1056
+                                                                        Med: 320                                                     Med: 1096
+chronization of the ntpd independent clock (the current            0.15 IQR: 24
+                                                                                                             0.1
+                                                                                                                                     IQR: 40
+solution) of a migrating guest. Since migration is treated
+                                                                    0.1
+in detail in Section 6, we restrict ourselves here to point-                                                0.05
+ing to Figure 11, where extreme disruption – of the order          0.05
+
+of seconds – is seen following migration events. This is             0
+                                                                      200       250   300      350    400
+                                                                                                              0
+                                                                                                                     1050     1100 1150      1200
+not a function of this particular example but is a generic                        [CPU cycles]                              [CPU cycles]
+
+result of the design of ntpd in conjunction with the in-                XEN dom0
+                                                                                                            0.06
+                                                                                                                                    HPET dom0
+dependent clock paradigm. A dependent ntpd clock so-               0.15 Min: 408                                                    Min: 1576
+lution would not exhibit such behavior under migration,                 Med: 528
+                                                                                                            0.04
+                                                                                                                                    Med: 1800
+                                                                    0.1 IQR: 28                                                     IQR: 72
+however it suffers from other problems as detailed above.
+                                                                                                            0.02
+   In summary, there are compelling design and robust-             0.05
+
+ness reasons for why ntpd is ill suited to timekeeping in
+virtual environments. The RADclock solution does not                 0
+                                                                            400    450 500 550        600
+                                                                                                              0
+                                                                                                              1500           2000        2500
+                                                                                  [CPU cycles]                              [CPU cycles]
+suffer from any of the drawbacks detailed above. It is
+highly robust to disruptions in general as described for           0.15                     XEN domU        0.04                    HPET domU
+example in [20, 15, 16], is naturally suited to a depen-                                    Min: 392
+                                                                                            Med: 536
+                                                                                                                                    Min: 1544
+                                                                                                                                    Med: 1824
+                                                                                                            0.03
+dent clock paradigm as detailed in Section 5, as well as            0.1                     IQR: 32                                 IQR: 232
+to migration (Section 6).                                                                                   0.02
+                                                                   0.05
+                                                                                                            0.01
+4     Performance of Xen Clocksource                                 0                                        0
+                                                                          400     500   600     700           1500          2000      2500
+                                                                                   [CPU cycles]                             [CPU cycles]
+The Xen Clocksource hybrid counter is a central compo-
+nent of the current timing solution under Xen. In this sec-        Figure 5: Distribution of counter latencies. Top: TSC
+tion we examine its access latency under different condi-          and HPET in an unvirtualized system using feed-forward
+tions. We also compare it to that of HPET, both because            compatible access; Middle: Xen Clocksource and HPET
+HPET is a core component of Xen Clocksource, so this               from Dom0; Bottom: from DomU.
+enables us to better understand how the latter is perform-
+ing, and because HPET is a good choice of counter, be-
+ing widely available and uninfluenced by power manage-             purpose we use the rdtsc() function, a wrapper for the
+ment. This section also provides the detailed background           x86 RDTSC instruction to read the relevant register(s)
+necessary for subsequent discussions on network noise.             containing the TSC value and to return it as a 64-bit in-
+   Access latency, which impacts directly on timekeep-             teger. This provides direct access to the TSC with very
+ing, depends on the access mechanism. Since the tim-               low overhead from both user and kernel space. To en-
+ing architecture we propose in Section 5 is based on a             sure a unique and reliable TSC, from the BIOS we dis-
+feed-forward paradigm, to be of relevance our latency              able power management (both P-states and C-states), and
+measurements must be of access mechanisms that are                 also disable the second core to avoid any potential failure
+adequate to support feed-forward based synchronization.            of TSC synchronization across the cores.
+The fundamental requirement is that a counter be de-                  We begin by providing a benchmark result for HPET
+fined, which is cumulative, wide enough to not wrap be-            on a non-virtualized system. The top right plot in Fig-
+tween reboots (we use 64-bit counters which take 585               ure 5 gives its latency histogram measured from within
+years to roll over on a 1GHz processor), and accessible            kernel context, using the access mechanism described in
+from both kernel and user context. The existing ntpd-              [3]. This mechanism augments the Linux clocksource
+oriented software clock mechanisms do not satisfy these            code (which supports a choice among available hardware
+conditions. We describe below the alternatives we im-              counters), to expose a 64-bit cumulative version of the
+plement.                                                           selected counter. For comparison, in the top left plot we
+                                                                   give the latency of the TSC accessed in the same way –
+4.1    Baseline Latencies                                          it is much smaller as expected, but both counters have
+                                                                   low variability. Note (see [3]) that the latency of TSC
+In this section we use the host machine kultarr, a                 accessed directly via rdtsc() is only around 80 cycles, so
+2.13GHz Intel Core 2 Duo, and measure access latencies             that the feed-forward friendly access mechanism entails
+by counting the number of elapsed CPU cycles. For this             an overhead of around 240 cycles on this system.
+
+
+                                                               6
+   Now consider latency in a Xen system. To provide               3GHz Intel Core 2 Duo E8400. Since we do not use
+the feed-forward compatible access required for each of           rdtsc() for latency measurement in this section, we do
+HPET and Xen Clocksource, we first modified the Xen               not disable the second core as we did before. Instead we
+Hypervisor (4.0) and the Linux kernel 2.6.31.13 (Xen              measure time differences in seconds, to sub-nanosecond
+pvops branch) to expose the HPET to Dom0 and DomU.                precision, using the RADclock difference clock [20] with
+We added a new hypercall entry that retrieves the current         HPET as the underlying counter2 . P-states are disabled
+raw platform timer value, HPET in this case. Like Xen             in the BIOS, but C-states are enabled.
+Clocksource, this is a 64-bit counter which satisfies the             Ideally one would like to directly measure Xen Clock-
+cumulative requirement. We then added a system call to            source’s interpolation mechanism and so evaluate it in
+enable each counter to be accessed from user context. Fi-         detail. However, the Xen Clocksource recalibrates the
+nally, for our purposes here we added an additional sys-          HPET interpolation on every change in P-State (fre-
+tem call that measures the latency of either HPET or Xen          quency changes) or C-State (execution interruption), as
+Clocksource from within kernel context using rdtsc().             well as once per second. Since oscillations for exam-
+   The middle row in Figure 5 shows the latency of Xen            ple between C-States occur hundreds of times per second
+Clocksource and HPET from Dom0’s kernel point of                  [8], it is not possible to reliably timestamp these events,
+view. The Xen Clocksource interpolation mechanism                 forcing us to look at coarser characterizations of perfor-
+adds an extra 200 CPU cycles compared to accessing                mance.
+the TSC alone in the manner seen above, for a total of                From the timestamping perspective, the main problem
+250 ns at this CPU frequency. The HPET latency suf-               is the obvious additional latency due to the computer be-
+fers from the penalty created by the hypercall needed to          ing idle in a C-State when an event to timestamp occurs.
+access it, lifting its median value by 800 cycles for a to-       For example, returning from C-State C3 to execution C0
+tal latency of 740 ns. More importantly, we see that the          takes about 20 µs [8].
+hypercall also adds more variability, with an IQR that in-            For the purpose of synchronization over the network,
+creases from 40 to 72 CPU cycles, and the appearance              the timestamping of outgoing and incoming synchroniza-
+of a multi-modal distribution which we speculate arises           tion packets is of particular interest. A useful measure of
+from some form of contention among hypercalls. The                these is the Round-Trip-Time (RTT) of a request-reply
+Xen Clocksource in comparison has an IQR only slightly            exchange, however since this includes network queuing
+larger than that of the TSC counter.                              and delays at the time server as well as delays in the host,
+   The bottom row in Figure 5 shows the latency of Xen            it is of limited use in isolating the latter.
+Clocksource and HPET from DomU’s kernel point of                      To observe the host latency we introduce a metric we
+view. The Xen Clocksource shows the same performance              call the RTThost, which is roughly speaking the compo-
+as in the Dom0 case. HPET is affected more, with an in-           nent of the RTT that lies within the host. More precisely,
+crease in the number of modes and the mass within them,           for a given request-reply packet pair, the RTThost is the
+resulting in a considerably increased IQR.                        sum of the two one-way delays from the host to the DAG
+   In conclusion, Xen Clocksource performs well despite           card, and from the DAG card to the host. It is not possible
+the overhead of its software interpolation scheme. In par-        to reliably measure these one-way delays individually in
+ticular, although its latency is almost double that of a          our testbed. However, the RTThost can be reliably mea-
+simple TSC access (and 7 times a native TSC access), it           sured as the difference of the RTT seen by the host and
+does not add a significant latency variability even when          that seen by the DAG card. The RTThost is a measure
+accessed from DomU. On the other hand however, the                of ‘system noise’ with a specific focus on packet times-
+simple feed-forward compatible way of accessing HPET              tamping. The smaller RTThost, the less noisy the host,
+used here is only four times slower than the much more            and the higher the quality of packet timestamps.
+complicated Xen Clocksource and is still under 1 µs.                  Figure 6 shows RTThost values measured over 80
+This performance could certainly be improved, for exam-           hours on two DomU guests on the same host. The cap-
+ple by replacing the hypercall by a dedicated mechanism           ture starts with only the C-State C0 enabled, that is with
+such as a read-only memory-mapped interface.                      power management functions disabled. Over the period
+                                                                  of the capture, deeper C-States are progressively enabled
+                                                                  and we observe the impact on RTThost. At each stage
+4.2    Impact of Power Management
+                                                                  the CPU moves between the active state C0 and the idle
+Power management is one of the key mechanisms po-                 states enabled at the time. Table 1 gives a breakdown of
+tentially affecting timekeeping. The Xen Clocksource is
+                                                                     2 This level of precision relates to the difference clock itself, when
+designed to compensate for its effects in some respects.
+                                                                  measuring time differences of size of the order of 100 µs as here. It
+Here we examine its ultimate success in terms of latency.         does not take into account the separate issue of timestamping errors,
+   In this section we use the host machine sarigue, a             such as the (much larger!) counter access latencies studied above.
+
+
+                                                              7
+                                                          RTT Host [µs]
+                110   Xen Clocksource                                     100 C0              C1
+                      HPET Hypervisor
+                100
+
+                 90                                                                                                       C2              C3
+
+
+
+
+RTT Host [µs]
+                                                                           50
+                                                                             0     10        20     30       40      50     60      70      80
+                 80                                                                                      Time [hour]
+
+
+
+
+                                                          RTT Host [µs]
+                 70                                                       100 C0              C1
+
+                 60
+
+                 50                                                                                                       C2              C3
+                                                                           50
+                                                                             0     10        20     30       40      50     60      70      80
+                      C0        C1       C2       C3                                                     Time [hour]
+
+Figure 6: System noise as a function of the deepest enabled C-State for Xen Clocksource (upper time series and left
+box plots) and HPET (lower time series and right box plots). Time series plots have been sampled for clarity.
+
+
+time spend in different states. It shows that typically the                               We conclude that Xen Clocksource, and HPET using
+CPU will rest in the deepest allowed C-state unless there                              our proof of concept access mechanism, are affected by
+is a task to perform.                                                                  power management when it comes to details of times-
+   The left plot in Figure 6 is a compact representation of                            tamping latency. These translate into timestamping er-
+the distribution of RTThost values for Xen Clocksource                                 rors, which will impact both clock reading and poten-
+and HPET, for each section of the corresponding time se-                               tially clock synchronization itself. The final size of
+ries presented on the right of the figure. Here whiskers                               such errors however is also crucially dependent on the
+show the minimum and 99th percentile values, the lower                                 asymmetry value associated to RTThost, which is un-
+and upper sides of the box give the 25th and 75th per-                                 known. Thus the RTTHost measurements effectively
+centiles, while the internal horizontal line marks the me-                             place a bound on the system noise affecting timestamp-
+dian.                                                                                  ing, but do not determine it.
+   The main observation is that, for each counter, RT-
+Thost generally increases with the number of C-States                                  5     New Architecture for Virtualized Clocks
+enabled, although it is slightly higher for HPET. The in-
+crease in median RTThost from C0 to C3 is about 20 µs, a                               In this section we examine the performance and detail
+value consistent with [8]. The minimum value is largely                                the benefits of the RADclock algorithm in the Xen en-
+unaffected however, consistent with the fact that if a                                 vironment, describe important packet timestamping is-
+packet (which of course is sent when the host is in C0),                               sues which directly impact clock performance, and fi-
+is also received when it is in C0, then it would see the                               nally propose a new feed-forward based clock architec-
+RTThost corresponding to C0, even if it went idle in be-                               ture for para-virtualized systems.
+tween.                                                                                    In Section 5.1 we use sarigue, and in Section 5.2 kul-
+   We saw earlier that the access latencies of HPET and                                tarr, with the same BIOS and power management set-
+Xen Clocksource differ by less than 1 µs, and so this can-                             tings described earlier.
+not explain the differences in their RTThost median val-
+ues seen here for each given C-State. These are in fact                                5.1    Independent RADclock Performance
+due to the slightly different packet processing in the two
+DomU systems.                                                                          We begin with a look at the performance of the RAD-
+                                                                                       clock in a Xen environment. Figure 7 shows the final er-
+                                                                                       ror of two independent RADclocks, one using HPET and
+                                C0        C1       C2         C3                       the other Xen Clocksource, running concurrently in two
+        C0 enabled            100%         –        –          –                       different DomU guests. Separate NTP packet streams
+        C1 enabled            2.17%     97.83%      –          –                       are used to the same Stratum-1 server on the LAN with
+        C2 enabled            2.85%     0.00%    97.15%        –                       a poll period of 16 seconds. The clock error for each
+        C3 enabled            2.45%     0.00%    1.84%      95.71%                     clock has been corrected for path asymmetry, in order
+                                                                                       to reveal the underlying performance of the algorithm as
+Table 1: Residency time in different C-States. Here “Cn                                a delay variability filter (this is possible in our testbed,
+enabled” denotes that all states from C0 up to Cn are                                  but impossible for the clocks in normal operation). The
+enabled.                                                                               difference of median values between the two clocks is
+
+
+                                                                                   8
+                                                                                                                        −3                               −3
+                       20                                                                                         x 10                             x 10
+
+
+
+
+RADclock Error [µs]
+                                                                                                           XEN                                   HPET
+                       10                                                                                3 Med: 3.4                            3 Med: −2.5
+                                                                                                           IQR: 9.5                              IQR: 9.3
+                        0                                                                                2                                     2
+
+                      −10                                    Xen Clocksource                             1                                     1
+                                                             HPET
+                      −20                                                                                0                                     0
+                         0   50   100   150      200   250      300      350                              −10                 0          10                −10       0        10
+                                          Time [mn]                                                                      RADclock error [µs]              RADclock error [µs]
+
+
+Figure 7: RADclock performance in state C0 using Xen Clocksource and HPET, running in parallel, each in a separate
+DomU guest.
+
+
+extremely small, and below the detection level of our                                                              20     RADclock Xen
+                                                                                                                          RADclock HPET
+methodology. We conclude that the clocks essentially
+
+
+
+
+                                                                               RADclock Error: E−median(E) [µs]
+                                                                                                                   15
+
+have identical median performance.                                                                                 10
+
+   In terms of clock stability, as measured by the IQR of                                                           5
+
+the clock errors, the two RADclock instances are again                                                              0
+
+extremely similar, which reinforces our earlier observa-                                                          −5
+
+tions that the difference in stability of the Xen Clock-                                                          −10
+
+source and HPET is very small (below the level of detec-                                                          −15
+
+tion in our testbed), and that RADclock works well with                                                           −20
+
+any appropriate counter. The low frequency oscillation                                                                    C0              C1        C2             C3
+
+present in the time series here is due to the periodic cy-
+cle of the air conditioning system in the machine room,                Figure 8: Compact centred distributions of RADclock
+and affects both clocks in a similar manner consistent                 performance as a function of the deepest C-State enabled
+with previous results [3]. It is clearly responsible for the           (whiskers give 1st to 99th percentile).
+bulk of the RADclock error in this and other experiments
+shown in this paper.
+                                                                       sequently, only the timestamping of received packets is
+   Power management is also an important factor that                   likely to be affected by power management, which trans-
+may impact performance. Figure 8 shows the distribu-                   lates into a bias towards an extra path asymmetry, in the
+tion of clock errors of the RADclock, again using HPET                 sense of ‘most but not all packets’, in the receiving direc-
+and the Xen Clocksource separately but concurrently as                 tion. This bias is difficult to measure independently and
+above, with different C-State levels enabled. In this case             authoritatively. The measurement of the RTThost shown
+the median of each distribution has simply been shifted                in Figure 6 gives however a direct estimate of an upper
+to zero to ease the stability (IQR) comparison. For each               bound for it.
+of the C-State levels shown, the stability of the RADclock
+is essentially unaffected by the choice of counter.
+   As shown in Figure 6, power management creates ad-                  5.2     Sharing the Network Card
+ditional delays of higher variability when timestamping
+timing packets exchanged with the reference clock. The                 The quality of the timestamping of network packets is
+near indifference of the IQR given in Figure 8 to C-State              crucial to the accuracy the synchronization algorithm can
+shows that the RADclock filtering is robust enough to see              achieve. The networking in Xen relies on a firewall and
+through this extra noise.                                              networking bridge managed by Dom0. In Figure 9 we
+   Power management also has an impact on the asym-                    observe the impact of system load on the performance of
+metry error all synchronization algorithms must face. In               this mechanism.
+an excellent example of systematic observation bias, in                   The top plot shows the RTThost time series, as seen
+a bidirectional paradigm a packet send by an OS would                  from the Dom0 perspective, as we add more DomU
+not be delayed by the power management strategy, be-                   guests to the host. Starting with Dom0 only, we add an
+cause the OS chooses to enter an idle state only when it               additional guest every 12 hours. None of the OSs run
+has nothing to do. On the other hand, over the time in-                any CPU or networking intensive tasks. The middle plot
+terval defined by the RTT of a time request, it is likely              gives the box plots of the time series above, where the
+the host will choose to stop its execution and enter an                increase in median and IQR values is more clearly seen.
+idle state (perhaps a great many times) and the return-                For reference the ‘native’ RTThost of a non-virtualized
+ing packet may find the system in such a state. Con-                   system is also plotted. The jump from this distribution
+
+
+                                                                   9
+to the one labeled ‘Dom0’ represents the cost of the net-                                                5.3    A Feed-Forward Architecture
+working bridge implemented in Xen.
+                                                                                                         As described in Section 2.5, the feed-forward approach
+   The last plot in figure 9 shows the distribution of RT-
+                                                                                                         used by the RADclock has the advantage of cleanly
+Thost values from each guest’s perspective. All guests
+                                                                                                         separating timestamping (performed as a raw times-
+have much worse performance than Dom0, but perfor-
+                                                                                                         tamp in the kernel or user space as needed), which is
+mance degrades by a similar amount as Dom0 as a func-
+                                                                                                         stateless, and the clock synchronization algorithm itself,
+tion of the number of guests. For a given guest load
+                                                                                                         which operates asynchronously in user space. The algo-
+level, the performance of each guest clock seems essen-
+                                                                                                         rithm updates clock parameters and makes them avail-
+tially the same, though with small systematic differences
+                                                                                                         able through the OS, where any authorized clock reading
+which may point to scheduling policies.
+                                                                                                         function (a kind of almost trivial stateless ‘system clock’)
+   The observations above call for the design of a                                                       can pick them up and use them either to compose an ab-
+timestamping system under a dependent clock paradigm                                                     solute timestamp, or robustly calculate a time difference
+where Dom0 has an even higher priority in terms of net-                                                  [20].
+working, so that it can optimize its timestamping qual-                                                     The RADclock is then naturally suited for the depen-
+ity and thereby minimize the error in the central Dom0                                                   dent clock paradigm and can be implemented in Xen as a
+clock, to the benefit of all clocks on the system. Fur-                                                  simple read/write stateless operation using the XenStore,
+ther, DomU packet timestamping should be designed to                                                     a file system that can be used as an inter-OS communica-
+minimize any differences between DomU guests, and re-                                                    tion channel. After processing synchronization informa-
+duce as much as possible the difference in host asym-                                                    tion received from its time server, the RADclock running
+metry between Dom0 and DomU guests, to help make                                                         on Dom0 writes its new clock parameters to the Xen-
+the timestamping performance across the whole system                                                     Store. On DomU, a process reads the updated clock pa-
+more uniform.                                                                                            rameters upon request and serves them to any application
+                                                                                                         that needs to timestamp events. The application times-
+                     80
+                                                                                                         tamps the event(s) of interest. These raw timestamps can
+                          Dom0                                                                           then be easily converted either into a wallclock time or
+
+
+   RTT Host [µs]
+                     70
+                                                                                                         a time difference measured in seconds (this can even be
+                     60                                                                                  done later off-line).
+                     50                                                                                     Unlike with ntpd and its coupled relationship to the
+                     40                 1 guest       2 guests      3 guests        4 guests             (non-trivial) incumbent system clock code, no adjust-
+                      0            12             24         36                48              60        ment is passed to another dynamic mechanism, which
+                                                   Time [hour]
+                                                                                                         ensures that only a single clock, clearly defined in a sin-
+                     70                                                                                  gle module, provides universal time across Dom0 and all
+                                                                                                         DomU guests.
+
+     RTT Host [µs]
+                     60
+                     50                                                                                     With the above architecture, there is only one way in
+                                                                                                         which a guest clock can not be strictly identical with the
+                     40
+                                                                                                         central Dom0 clock. The read/write operation on the
+                     30                                                                                  XenStore is not instantaneous and it is possible that the
+                          Native    Dom0          1 guest 2 guests 3 guests 4 guests                     update of clock parameters, which is slightly delayed af-
+                            DomU #1
+                                                                                                         ter the processing of a new synchronization input to the
+                   200      DomU #2                                                                      RADclock, will result in different parameters being used
+
+
+RTT Host [µs]
+                            DomU #3                                                                      to timestamp some event. In other words, the time across
+                   150      DomU #4                                                                      OSs may appear different for a short time if a timestamp-
+                                                                                                         ing function in a DomU converts a raw timestamp with
+                   100                                                                                   outdated data. However, this is a minor issue since clock
+                                                                                                         parameters change slowly, and using out of date values
+                          1 guest          2 guests              3 guests           4 guests
+                                                                                                         has the same impact as the synchronization input simply
+                                                                                                         being lost, to which the clock is already robust.
+Figure 9: kultarr: RTThost (a.k.a. system noise) as a                                                       In Figure 10 we measured the time required to write to
+function of the number of active guests. Top: RTThost                                                    the XenStore using the RADclock difference clock which
+timeseries seen by Dom0; Middle: corresponding dis-                                                      has an accuracy well below 1 µs [20]. We present results
+tribution summaries (with native non-Xen case added on                                                   obtained on 2 host machines with slightly different hard-
+the left for comparison); Bottom: as seen by each DomU.                                                  ware architectures, namely kultarr (2.13 GHz Intel Core
+Whiskers show the minimum and 99th percentile.                                                           2 Duo) and tastiger (3.40 GHz Intel Pentium D), that
+
+
+                                                                                                    10
+                          Tastiger                         Kultarr             after migration for example. Furthermore, ntpd will also
+0.015                     Med: 1440.2
+                          IQR: 49.0
+                                         0.01              Med: 1234.1         inevitably suffer from an inability to account for the time
+                                                           IQR: 202.3
+ 0.01
+                                                                               during which DomU has been halted during the migra-
+                                        0.005
+                                                                               tion. When DomU restarts, the reference wallclock time
+0.005                                                                          and last Xen Clocksource value maintained by its system
+                                                                               clock will be quite inconsistent with the new ones, lead-
+    0
+        1400     1600 1800 2000
+                                           0
+                                                1000 1200 1400 1600
+                                                                               ing to extreme oscillator rate estimates. In summary, the
+               XenStore latency [µs]              XenStore latency [µs]        sudden change in status of ntpd’s state information, from
+                                                                               valid to almost arbitrary, will, at best, deliver a huge error
+                                                                               immediately after migration, which we expect to decay
+Figure 10: Distribution of clock update latency through                        only slowly according to ntpd’s usual slow convergence.
+the xenstore, tastiger (left, Pentium D, 3.4GHz) and kul-                      At worst, the ‘shock’ of migration may push ntpd into an
+tarr (right, Core 2 Duo, 2.13GHz).                                             unstable regime from which it may never recover.
+                                                                                  In contrast, by decomposing the time information into
+                                                                               raw timestamps and clock parameters, as described in
+show respective median delays of 1.2 and 1.4 ms. As-
+                                                                               Section 5, the RADclock allows the daemon running on
+suming a 16 s poll period, this corresponds to 1 chance
+                                                                               DomU to be stateless within an efficient dependent clock
+out of 11,500 that the clocks would (potentially) disagree
+                                                                               strategy. The migration then becomes trivial from a time-
+if read at some random time.
+                                                                               keeping point of view. Once migrated, DomU times-
+   The dependent RADclock is ideally suited for time
+                                                                               tamps events of interests with its chosen counter and re-
+keeping on Xen DomU. It is a simple, stateless, standard
+                                                                               trieves the RADclock clock parameters maintained by the
+read/write operation that is robust as it avoids the danger-
+                                                                               new Dom0 to convert them into absolute time. DomU
+ous dynamics of feedback approaches, ensures that the
+                                                                               immediately benefits from the accuracy of the dedicated
+clocks of all guests agree, and is robust to system load
+                                                                               RADclock running on Dom0 – the convergence time is
+and power management effects. As a dependent clock
+                                                                               effectively zero.
+solution, it saves both host and network resources and
+is inherently scalable. Thanks to a simple timestamping                           The plots in Figure 11 confirm the claims above and il-
+function it provides the same level of final timekeeping                       lustrate a number of important points. In this experiment,
+accuracy to all OSs.                                                           each of tastiger and kultarr run an independent RAD-
+                                                                               clock in Dom0. The clock error for these is remarkably
+                                                                               similar, with an IQR below 10 µs as seen in the top plot
+6       A Migration-Friendly Architecture                                      (measured using the DAG external comparison). Here
+                                                                               for clarity the error time series for the two Dom0 clocks
+Seamlessly migrating a running system from one phys-                           have been corrected for asymmetry error, thereby allow-
+ical machine to another is a key innovation of virtu-                          ing their almost zero inherent median error, and almost
+alization [13, 7]. However this operation becomes far                          identical behavior (the air-conditioning generated oscil-
+from seamless with respect to timing when using ntpd.                          lations overlay almost perfectly), to be clearly seen.
+As mentioned in Section 3, ntpd’s design requires each                            For the migration experiment, a single DomU OS is
+DomU to run its own instance of the ntpd daemon, which                         started on tastiger, and two clocks launched on it: a de-
+is fundamentally unsuited to migration, as we now ex-                          pendent RADclock, and an independent ntpd clock. A
+plain.                                                                         few hours of warm up are then given (not shown) to al-
+   The synchronization algorithm embodied in the ntpd                          low ntpd to fully converge. The experiment proper then
+daemon is stateful. In particular it maintains a time vary-                    begins. At the 30 minute mark DomU is migrated to kul-
+ing estimate of the Xen Clocksource’s rate-of-drift and                        tarr, it migrates back to tastiger after 2 hours then back
+current clock error, which in turn is defined by the char-                     again after another 2, followed by further migrations with
+acteristics of the oscillator driving the platform counter.                    a smaller period of 30 minutes.
+After migration, the characteristics seen by ntpd change                          The resulting errors of the two migrating DomU
+dramatically since no two oscillators drift in the same                        clocks are shown in the top plot, and in a zoomed out
+way. Although the Xen Clocksource counters on each                             version in the middle plot, as measured using the ex-
+machine nominally share the same frequency (1GHz), in                          ternal comparison. Before the results, a methodologi-
+practice this is only true very approximately. The tem-                        cal point. The dependent RADclock running on DomU
+perature environment of the machine DomU migrates to                           is by construction identical to the RADclock running on
+can be very different from the previous one which can                          Dom0, and so the two time series (if asymmetry cor-
+have a large impact, but even worse, the platform timer                        rected) would superimpose almost perfectly, with small
+may be of a different nature, HPET originally and ACPI                         differences owing to the different errors in the times-
+
+
+                                                                          11
+                   250
+                                                                                                  Dom0 − Tastiger
+                   200                                                                            Dom0 − Kultarr
+
+
+
+
+Clock error [µs]
+                                                                                                  Migrated Guest RADclock
+                   150                                                                            Migrated Guest ntpd
+                   100
+                    50
+                        0
+                   −50
+                      0                 1    2                 3                     4                 5
+                                                          Time [Hours]
+                   30
+                                                                                                                     ntpd
+                   25
+
+
+
+
+Clock error [s]
+                   20
+                   15
+                   10
+                    5
+                    0
+                   −5
+                     0                  1   2                 3                      4                 5                    6
+                                                         Time [Hours]
+
+                    50       ntpd
+                    40       RADclock
+
+
+
+
+Clock error [µs]
+                    30
+                    20
+                    10
+                        0
+                   −10
+                         0              1    2                 3                     4                 5
+                                                          Time [Hours]
+
+Figure 11: Clock errors under migration. Top: asymmetry corrected unmigrated RADclock Dom0 clocks, and (uncor-
+rected) migrated clocks on DomU; Middle: zoom out on top plot revealing the huge size of the migration ‘shock’ on
+ntpd; Bottom: effect of migration load on Dom0 clocks on kultarr.
+
+
+tamping of the separate UDP packet streams. We choose              with respect to the horizontal lines representing the ex-
+however, in the interests of fairness and simplicity of            pected jumps due to asymmetry changes as just de-
+comparison, not to apply the asymmetry correction in               scribed. These jumps are in any case small, of the order
+this case, since it is not possible to apply an analogous          of a few microseconds. Note that these corrections are
+correction to the ntpd error time series. As a substi-             a function both of RTThost and asymmetry that are both
+tute, we instead draw horizontal lines over the migrating          different between tastiger and kultarr.
+RADclock time series representing the correction which
+would have been applied. No such lines can be drawn in                Finally, we present a load test comparison. The bottom
+the ntpd case.                                                     plot in Figure 11 compares in detail the performance of
+                                                                   the independent RADclock running on Dom0 on kultarr,
+   Now to the results. As expected, and from the very              and an independent ntpd clock, also running on Dom0
+first migration, ntpd exhibits extremely large errors (from        during the experiment (not shown previously). Whereas
+-1 to 27 s!) for periods exceeding 15 minutes (see zoom            the RADclock is barely affected by the changes in net-
+in middle plot) and needs at least another hour to con-            work traffic and system load associated with the migra-
+verge to a reasonable error level. The dependent RAD-              tions of the DomU guest, ntpd shows significant devi-
+clock on the other hand shows seamless performance                 ation. In summary, not only is ntpd in an independent
+
+
+                                                              12
+clock paradigm incompatible with clock migration, it is            any counter satisfying basic properties, and we showed
+also, regardless of paradigm, affected by migration oc-            its performance using HPET or Xen Clocksource was in-
+curring around it.                                                 distinguishable.
+   One could also consider the performance of an inde-                The RADclock [14] packages for Linux now support a
+pendent RADclock paradigm under migration. However,                streamlined version of the architecture for Xen described
+we expect that the associated ‘migration shock’ would be           here using Xen Clocksource as the hardware counter.
+severe as the RADclock is not designed to accommodate              With the special code allowing system instrumentation
+radical changes in the underlying counter. Since the de-           and HPET access removed, no modifications to the hy-
+pendent solution is clearly superior from this and many            pervisor are finally required.
+other points of view, we do not present results for the
+independent case under migration.
+                                                                   8    Acknowledgments
+7   Conclusion                                                     The RADclock project is partially supported under Aus-
+                                                                   tralian Research Council’s Discovery Projects funding
+Virtualization of operating systems and accurate com-              scheme (project number DP0985673) and a Google Re-
+puter based timing are two areas set to increase in im-            search Award.
+portance in the future. Using Xen para-virtualization as              We thank the anonymous reviewers and our shepherd
+a concrete framework, we highlighted the weaknesses                for their valuable feedback.
+of the existing timing solution, which uses indepen-
+dent ntpd synchronization algorithms (coupled to state-
+ful software clock code) for each guest operating system.          9    Availability
+In particular, we showed that this solution is fundamen-
+                                                                   RADclock packages for Linux and FreeBSD,
+tally unsuitable for the important problem of live VM
+                                                                   software   and     papers,    can    be    found at
+migration, using both arguments founded on the design
+                                                                   http://www.cubinlab.ee.unimelb.edu.au/radclock/.
+of ntpd, as well as detailed experiments in a hardware-
+validated testbed.
+    We reviewed the architecture of the RADclock algo-             References
+rithm, in particular its underlying feed-forward basis, the         [1] Xen.org History. http://www.xen.org/community/
+clean separation between its timestamping and synchro-                  xenhistory.html.
+nization aspects, and its high robustness to network and            [2] BARHAM , P., D RAGOVIC , B., F RASER , K., H AND , S.,
+system noise (latency variability). We argued that these                H ARRIS , T., H O , A., N EUGEBAUER , R., P RATT, I., AND
+features make it ideal as a dependent clock solution, par-              WARFIELD , A. Xen and the Art of Virtualization. In SOSP ’03:
+                                                                        Proceedings of the nineteenth ACM symposium on Operating sys-
+ticularly since the clock is already set up to be read                  tems principles (New York, NY, USA, 2003), ACM, pp. 164–177.
+through combining a raw hardware counter timestamp
+                                                                    [3] B ROOMHEAD , T., R IDOUX , J., AND V EITCH , D. Counter
+with clock parameters sourced from a central algorithm                  Availability and Characteristics for Feed-forward Based Synchro-
+which owns all the synchronization intelligence, via a                  nization. In Int. IEEE Symp. Precision Clock Synchronization for
+commonly accessible data structure. We supported our                    Measurement, Control and Communication (ISPCS’09) (Brescia,
+                                                                        Italy, Oct. 12-16 2009), IEEE Piscataway, pp. 29–34.
+claims by detailed experiments and side-by-side com-
+parisons with the status quo. For the same reasons, the             [4] E NDACE. Endace Measurement Systems. DAG series PCI and
+                                                                        PCI-X cards. http://www.endace.com/networkMCards.htm.
+RADclock approach enables seamless and simple migra-
+tion, which we also demonstrated in benchmarked ex-                 [5] I NTEL C ORPORATION. IA-PC HPET (High Precision Event
+                                                                        Timers) Specification (revision 1.0a). http://www.intel.
+periments. The enabling of a dependent clock approach                   com/hardwaredesign/hpetspec_1.pdf, Oct. 2004.
+entails considerable scalability advantages and suggests
+                                                                    [6] K AMP, P. H. Timecounters: Efficient and precise timekeeping
+further improvements through optimizing the timestamp-                  in SMP kernels. In Proceedings of the BSDCon Europe 2002
+ing performance of the central clock in Dom0.                           (Amsterdam, The Netherlands, 15-17 November 2002).
+    As part of an examination of timestamping and                   [7] K EIR , C. C., C LARK , C., F RASER , K., H, S., H ANSEN ,
+counter suitability for timekeeping in general and the                  J. G., J UL , E., L IMPACH , C., P RATT, I., AND WARFIELD , A.
+feed-forward paradigm in particular, we provided a de-                  Live Migration of Virtual Machines. In Proceedings of the 2nd
+                                                                        ACM/USENIX Symposium on Networked Systems Design and Im-
+tailed evaluation of the latency and accuracy of the Xen                plementation (NSDI) (2005), pp. 273–286.
+Clocksource counter, and compared it to HPET. We con-
+                                                                    [8] K IDD , T. Intel Software Network Blogs. http://software.
+cluded that it works well as intended, however note that                intel.com/en-us/blogs/author/taylor-kidd/.
+it is a complex solution created to solve a problem which           [9] M ENON , A., S ANTOS , J. R., T URNER , Y., JANAKIRAMAN ,
+will soon disappear as reliable TSC counters again be-                  G. J., AND Z WAENEPOEL , W. Diagnosing performance over-
+come ubiquitous. The RADclock is suitable for use with                  heads in the xen virtual machine environment. In VEE ’05:
+
+
+                                                              13
+     Proceedings of the 1st ACM/USENIX international conference
+     on Virtual execution environments (New York, NY, USA, 2005),
+     ACM, pp. 13–23.
+[10] M ICROSOFT C ORPORATION. Guidelines For Providing Multi-
+     media Timer Support. Tech. rep., Microsoft Corporation, Sep.
+     2002. http://www.microsoft.com/whdc/system/
+     sysinternals/mm-timer.mspx.
+[11] M ILLS , D. L. Computer Network Time Synchronization: The
+     Network Time Protocol. CRC Press, Inc., Boca Raton, FL, USA,
+     2006.
+[12] M OGUL , J., M ILLS , D., B RITTENSON , J., S TONE , J., AND
+     W INDL , U. Pulse-Per-Second API for UNIX-like Operating Sys-
+     tems, Version 1.0. Tech. rep., IETF, 2000.
+[13] N ELSON , M., HONG L IM , B., AND H UTCHINS , G. Fast
+     transparent migration for virtual machines. In Proceedings of
+     the annual conference on USENIX Annual Technical Conference
+     (2005), USENIX Association.
+[14] R IDOUX , J., AND V EITCH , D. RADclock Project webpage.
+[15] R IDOUX , J., AND V EITCH , D. A Methodology for Clock Bench-
+     marking. In Tridentcom (Orlando, FL, USA, May 21-23 2007),
+     IEEE Comp. Soc.
+[16] R IDOUX , J., AND V EITCH , D. The Cost of Variability. In Int.
+     IEEE Symp. Precision Clock Synchronization for Measurement,
+     Control and Communication (ISPCS’08) (Ann Arbor, Michigan,
+     USA, Sep. 24-26 2008), pp. 29–32.
+[17] R IDOUX , J., AND V EITCH , D. Ten Microseconds Over LAN, for
+     Free (Extended). IEEE Trans. Instrumentation and Measurement
+     (TIM) 58, 6 (June 2009), 1841–1848.
+[18] R IDOUX , J., AND V EITCH , D. Principles of Robust Timing Over
+     the Internet. ACM Queue, Communications of the ACM 53, 5
+     (May 2010), 54–61.
+[19] T HE X EN T EAM. Xen Documentation. http://www.xen.
+     org/files/xen_interface.pdf.
+[20] V EITCH , D., R IDOUX , J., AND KORADA , S. B. Robust Syn-
+     chronization of Absolute and Difference Clocks over Networks.
+     IEEE/ACM Transactions on Networking 17, 2 (April 2009), 417–
+     430.
+[21] VM WARE. Timekeeping in VMware Virtual Machines. Tech.
+     rep., VMware, May 2010. http://www.vmware.com/
+     files/pdf/Timekeeping-In-VirtualMachines.
+     pdf.
+
+
+
+
+                                                                       14
+

@@ -1,0 +1,1550 @@
+                                        PROTECTION IN THE HYDRAOPERATINGSYSTEM
+
+
+                                                   Ellis Cohen and David Jefferson 1
+                                                        Carnegie-lvlellon University
+                                                             Pittsburgh, Pa.
+
+
+
+
+                                                                               In this paper, we will primarily be discussing access
+Abstract
+                                                                        prot:ect~ott - the permission or denial of access to information.
+                                                                        In a companion paper [Lev75], we discuss the related issue of
+       This paper describes the capability based protection             control prot:ect~orL which involves guaranteeing or preventing
+mechanisms provided by the Hydra Operating System Kernel.               execution of programs at scheduled times for specific durations
+These mechanisms support the construction of user-defined               using specific resources. Problems of access protection can be
+protected subsystems, including file and directory subsystems,          viewed along two orthogonal dimensions:
+which do not therefore need to be supplied directly by Hydra.
+In addition, we discuss a number of well known protection                      1)      P r ~ r us. Future Dac/a~nJ: By a prior
+problems, including Mutual Suspicion, Confinement and                                  decision, we mean deciding in advance the
+Revocation, and we present the mechanisms that Hydra                                   circumstances under which access to certain
+supplies in order to solve them.                                                       information will be permitted or denied. By a
+                                                                                       future decision, we mean deciding at
+Keywords     and phrases: operating system, protection,                                arbitrary times to revoke or restore access
+capability, type, protected subsystem, protection problem,                             permissions, that is, to change the
+mutual suspicion, confinement, revocation.                                             circumstances of access at some time in the
+                                                                                       future.
+
+                                                                               2)      U~lozeroJ   us. Negotl~ated Dscia~nJ: By a
+1. Introduction                                                                        unilateral decision we refer to a single user
+                                                                                       deciding how other users are to be able to
+                                                                                       access information Under his aegis. By a
+       Hydra was designed with the philosophy that protection                          negotiated decision we refer to a user
+must be an integral part of any general purpose operating                              wanting to temper or limit the restrictions to
+system. A set of protection mechanisms should be part of the                           access imposed by another user.
+lowest level of an operating system, and those mechanisms
+must be flexible enough to support the wide range of security                 We can give examples to illustrate each of these
+policies needed by both high level subsystems and user                  categories. In parentheses following each example are a list of
+programs. In this paper we will describe the capability based           problems discussed In section 3 that fall into the same
+mechanism in the Hydra kernel, its use in constructing                  category.
+protected subsystems and in solving a number of well known
+protection problems. We expect that the reader is already                           Prior and Unilateral - The creator of a file
+familiar with the contents of the companion paper [WLP75]                           wishes other users to be permitted to read, but
+which discusses in greater detail our philosophy of what a                          not write, the file.       (Mutual Suspicion,
+protection system should be.                                                        Modification,   Limiting    Propagation      of
+                                                                                    Capabilities,   Conservation,     Confinement,
+       When users share access to information, there is                             Initialization)
+inevitably a possibility for malicious or accidental disclosure of
+                                                                                    Future and Unilateral - The creator of the file
+that information. It is necessary to restrict the behavior of
+                                                                                    wishes at some later point to revoke some
+possible computations in order to guarantee that such mishaps
+                                                                                    user's permission to read the file. (Revocation)
+do not occur. In a general sense [Coh75], a protect~n problle~=
+is simply a description of some class of restricted behaviors.
+                                                                                    Prior and Negotiated - A user requires a
+A protection problem can be solved in a protection system if                        guarantee in advance that his permission to
+the system provides some set of mechanisms which, when                              read the file will never be revoked. (Freezing)
+invoked, guarantee that the behavior of the system will be
+appropriately restricted.
+                                                                                    Future and Negotiated - A user requires a
+                                                                                    guarantee that, if the creator ever attempts to
+                                                                                    revoke access, the matter wilt be submitted to
+I. This work was supported by the Defense Advanced                                  (some trusted procedure which implements)
+Research Projects Agency under Contract F44620-73-C-0074                            binding arbitration.    (Accounting and Lost
+and is monitored by the Air Force Office of Scientific Research.                    Object Problems)
+
+
+
+                                                                 141
+      In section 2 of this paper, we will describe the                 2)   Objects ar__e distinRushed .b.Y_ t.ype. Each
+basic protection mechanisms supplied by Hydra, their use in                 object is of a particular type, which remains
+constructed protected subsystems. We will also see how the                  constant for the lifetime of the object.
+mechanisms directly solve certain straightforward problems                  Certain types of objects (e.g. Procedure,
+and can be combined, through procec~.croJ anzbedd~nif to solve              Process, Semaphore) and the operations
+any of the problems described above.                                        relevant to each (e.g. CALL, START, P) are
+                                                                            directly provided by Hydra. Hydra also
+      [n section 3, we will look at a number of well                        provides mechanisms for creating new types
+known problems and present additional Hydra mechanisms that                 of objects and defining the operations which
+can be used to solve them directly.                                         manipulate them. At the same time, because
+                                                                            all objects have the same structure,
+                                                                            regardless of type (the type is used in
+                                                                            interpreting the contents of the object), the
+2. Protection Mechanisms                                                    kernel provides a set of generic operations
+                                                                            (for example, reading or writing the object)
+                                                                            which are type independent.
+2.1 [ntroduction
+                                                                       3)   Access    t...o objects   is   controlled
+                                                                            c~po.bUi¢~es. Capabilities may be passed from
+       Clearly, there are a huge number of protection                       one user to another and may be retained by
+problems. Hydra cannot even begin to provide policies that                  a user between terminal sessions. Each
+solve each one directly. But that is not Hydra's purpose. In                capability contains a large (compared to
+[Lev75], we discuss in some detail a central philosophy of                  other systems) number of access rights
+Hydra, that of Policy/Mechanism separation. Briefly, we                     which determine how the object named by
+believe that an operating system should not attempt to provide              the capability can be accessed; some of these
+a fixed set of policies, particularly protection policies. Rather,          rights are type independent (related to the
+it should provide a set of mechanisms with which a large set of             fact that all objects have the same structure)
+policies (hopefully including all useful and interesting ones) can          while some aretype specific.
+be constructed. For example, we do not wire into Hydra a
+policy that permits the creator of a file to revoke access to it.           Possession of a capability is the sole
+;nstead, there is a mechanism that permits revocation and                   determinant of access, although through the
+another (freezing) that prevents it. Yet other mechanisms                   use of other mechanisms (procedures,
+(procedures, amplification) can be used to build arbitrarily                amplification), one can construct policies that
+complex policies that determine under what circumstances                    take into account other criteria (e.g. who is
+revocation is to be permitted or prevented.
+                                                                            the accessor?).      Objects do not have
+                                                                            "owners" as such. All holders of capabilities
+        The particular protection mechanisms provided have a                for an object share control of it in
+substantial impact on the protection policies obtainable. The
+                                                                            proportion to their rights. (Of course, one
+mechanisms provided by Hydra are based on five philosophical
+                                                                            user might retain all rights to an object
+p!-inciples. These principles and the mechanisms they induce                himself without granting any rights to others,
+are:                                                                        becoming the de-facto owner.)
+       1)   Information ca._.n be divided into distinct                4)   Each proRram should execute with th.~.
+            objects fo_zE purposes o.f. protection. We                      smallest set of access rights necessary. The
+            really want a protection system to control                      protection domain is that set of capabilities
+            access to and propogation of information.                       which may be exercised by an executing
+            Unfortunately, we do not understand how to                      procedure. It changes with each procedure
+            do this directly. Instead, Hydra forces users                   call. Proced~.Lres (a type of object) in Hydra
+            to group information together into a uniform                    have     access    to "own" objects (via
+            data structure called an object and provides                    capabilities), inaccessible to users with only
+            protection at the level of the object as a                      the right to execute the procedure. Each
+            whole. 2 This is often quite natural, as when a                 time a procedure is called, it executes in a
+            user wishes to restrict access to an entire                     completely new environment, determined
+            file. ]n other cases, the distinction makes an                  solely by the procedures "owns" and by
+            enormous difference. For example, it is one                     capabilities passed as arguments by the
+            thing to revoke access to a file; it is quite                   caller. This Permits a direct solution to the
+            another to revoke access to all information in                  Mutual Suspicion problem and (as we shall
+            the system derived from or dependent upon                       see) permits the construction of arbitrary
+            the data contained in that file.                                protection policies.
+
+
+
+
+2.     Other     systems    [Din73,Gr a72,Lau74]   permit
+differential protection of structured subsets of an
+object. Actually, in Hydra, objects are divided into two
+2 parts, a C-list and a Data-part, and in some ways, each
+may be protected separately.
+
+
+
+                                                                 142
+      5)    AJ_J.knowledge about th..~, representation an__d.                    2)    New object types (new kinds of resources)
+            implementation o~ operation~ for each type                                 may be defined in terms of existing object
+            o_f object should be hidden i3 modules Failed                              types. For example, one might imagine a
+            #u.bsystem$. in general, users of an object of                             File-directory which contains both a list of
+            a particular type cannot access it directly~                               files and a semaphore which provides mutual
+            they can only do so through procedures                                     exclusion of operations on the file-directory.
+            associated with the subsystem for that type.                               in the terminology of Hydra, the C-list of an
+            Hydra supports this through the mechanism                                  object of type FILE-DiRECTORY would
+            of riLght$ anzp~..f'i.coJ'i.on. Under certain                              contain capabilities for objects of type FILE,
+            circumstances, when a capability is passed as                              as well as a capability for an object of type
+            an argument to a procedure, it will have                                   SEMAPHORE
+            greater rights (in particular, those necessary
+            to access the contents of the object) in the                         in addition to a C-list, an object contains a DoXa-po.rt, a
+            new domain created for that procedure                         block of storage holding relevant information. Together, the
+            invocation than it had in the domain of the                   C-list and the Data-part constitute the represetzt=~ of the
+            caller.                                                       object. Returning to our FiLE-DiRECTORY example, the Data-
+                                                                          part of a file-directory might be used to hold the string names
+     in the remainder of this section, we will explore the                of the files in the file-directory.
+mechanisms that support these principles in greater detail.
+                                                                                 The decision to divide the representation of an object
+                                                                          into two parts, Data-part and C-list, was made primarily on
+2.2 Objects, Capabilities and LNS's                                       pragmatic rather than theoretical grounds. As Fabry notes
+                                                                          [Fab74], data and capabilities could, in principle, be combined
+                                                                          into one segment, if there were some way to allow complete
+       An object is a data structure that represents an instance
+                                                                          freedom to alter the datas while at the same time preventing
+of a resource, either virtual or physical. It may be thought of
+                                                                          arbitrary manipulation of the capabilities. This would be
+as a three-tuple:
+                                                                          possible on a processor with a tagged architecture, such as
+                                                                          the Burroughs 5500 [Org73]. However, we were limited to the
+       < unique-name, type, representation •
+                                                                          architectural confines of a PDP-I 1.
+       The un.i.que-nxLnze of an object distinguishes it from all
+                                                                                 There are other reasons for keeping the Data-part and
+other objects that ever existed in the past or will exist in the
+                                                                          C-list separate as well. Since any object may potentially
+future. The type of the object defines the nature of the
+                                                                          contain a capability for any other object, objects may form
+resource the object represents. Some example of types might
+                                                                          general directed graph structures which require garbage
+b e DEVICE, DIRECTORY, PROCEDURE, PROCESS, SEMAPHORE,
+                                                                          collection. Gathering capabilities together in a separate C-list
+FILE, SEQF]LE and RANDFiLE (the last three representing
+                                                                          simplifies the garbage collection mechanism.
+different kinds of files).
+
+       A primary purpose of a protection system is to control
+access to objects. This is accomplished in Hydr a through the             2.3 LNSes and Paths
+use of capo.b~ULes. Associated with each executing program is
+a C-Ust, a linearly numbered list of capabilities. Each                           An LNS defines the instantaneous protection domain of
+capability contains both the name of a particular object as well            an executing program; its C-list contains capabilities for all of
+as a set of ox;cess ri.ghts. An access right (for example, i'ead-          the objects that may be directly accessed (including
+rights or write-rights to a file) usually represents an operation          capabilities for PAGE objects, which define the LNS's address
+which the possessor of a capability may legally perform on the             space). ~ objects accessed must be referenced through •the
+object.                                                                    LNS, but since the objects referenced by capabilities may
+                                                                           themselves contain capabilities for other objects, it should be
+       The representations of capabilities and rights are                  clear that the actual protection domain extends to all objects
+manipulated only by the Hydra kernel, it is impossible to                 • reachable via some capability path rooted in the LNS. Access
+"forge' a capability or gain access to an object without having            to such objects is limited though, by the rights in the
+a capability for it.                                                       capabilities along the path.
+
+                                                                                 In addition to acting as the protection domain of an
+       In many capability based operating systems, a capability           executing program, the LNS also serves a naming function.
+is an attribute only of executors, in such systems, the C-list            Objects referenced in the C-list of an LNS are never referred
+associated with an executing program defines its protection               to by their unique names. They are always named by their
+domain. While this is also true in Hydra, we have generalized             LNS C-list indices. Similarly, objects indirectly accessible via a
+the notion of objects and capabilities in an important direction.         capability chain rooted in the LNS can be directly named by
+Regardless of type, ~ objects have the same structure; the                the sequence of C-list indices along the path to the object. As
+type of an object simply provides an interpretation for the               a general rule, anywhere (the LNS index of) a capability may
+contents of the object. Capabilities are not an attribute of              appear in the calling sequence of a kernel call or procedure
+executing programs alone; ~       object may contain a C-list.            call, a path to a more distant object may also appear, The
+This generalization has two important effects.                            Hydra kernel handles all of the details of following the path to
+                                                                          the target object.
+       1)   Executing programs may be represented as a
+            type of object. This type is an LN3, short
+            for "Local Name Space".
+
+
+
+
+                                                                    143
+ 2.4 Generic Operations
+                                                                              The Delete k-call removes a capability from the C-list of
+                                                                      an object. Deleting a capability from a C-list does not cause it
+         Hydra supports objects of many different types. Some         to collapse, with the consequent renumbering of the higher
+  o f the types are implemented by the kernel, for example            numbered capabilities. The slot in which the deleted capability
+  PROCEDURE, SEMAPHORE, PROCESS and TYPE. Others, such as             sat is simply written over with a capability of the special type
+  FILE and DIRECTORY, are defined by user level subsystems.           NULL (whose only use is the indication of empty C-list slots.)
+  But all objects, regardless of type, whether defined by the         Note that the Delete operation does not destroy the object
+ kernel or by user software, have a common underlying
+                                                                      referred to by the capability; it only destroys the capability
+ structural    representation,   i.e. Data-part      and C-list.
+                                                                      itself. Only if al_Lof the capabilities for an object have been
+ Furthermore, all operations on objects can be composed from
+                                                                      deleted is the object itself eligible for destruction. We are
+ simple manipulations of their Data-parts and C-lists. Therefore
+                                                                      planning to implement a Destroy k-call which will destroy an
+ the Hydra kernel provides a number of type independent
+                                                                      object even though capabilities for it are still outstanding.
+ "generic" operations for these manipulations.            These
+                                                                      Attempts to access a destroyed object will signal an error.
+ operations are kernel calls, k-calls for short, and are
+ implemented by instructions which trap to the kernel.
+                                                                             Finally, there is a Copy k-call which copies the Data-part
+                                                                      and C-list of an object, given a capability for it, to a new
+        The k-call Cetd~:~ta provides access to the Data-part of
+                                                                      object, placing a capability for the new object in a designated
+an object. Its first parameter is a path to a capability for the
+                                                                      slot in the caller's LNS. The capability for the new object will
+object whose Data-part is to be read. The other parameters            contain the same rights as did the original.4 The Cre~e k-call,
+specify what part of the Data-part of the object is to be read        which creates an entirely new object will be discussed in
+(i.e. offset and length) and the address in the caller's address      section 2.11.
+space into which the information should be copied. 3 A similar
+k-call, P~td~o.., allows the user to write into the Data-part of             The generic operations are important because they form
+an object. There is a third kernel call, Add~o., which allows         the primitive basis for the definition of "higher level" type
+the caller to append data onto the end of the Data-part of the        specific operations implemented as procedures. The C-list
+object (extending the length of the Data-part as a side-effect.)      manipulating operations are especially important because they
+                                                                      allow the construction of collections of objects which are
+       There are similar operations for manipulating the C-lists      passed around and manipulated together as a unit.
+of objects. For "reading" a C-list, i.e. copying a capability into
+the current LNS, the user executes a Load k-call. Load's first               It should be noted that each of the generic operations
+parameter is a path to the capability which is to be "read".          described above is implemented indivisibly. This means that
+The second parameter is the index of a current LNS slot into          two processes cannot operate on the same object at the same
+which the capability is copied.
+                                                                      time even if they are executing concurrently on different
+                                                                      pi'ocessors. However, this mutual exclusion holds for the
+        Of course there is also a Store k-call which copies a         duration of a single kernel call only. For mutual exclusion of
+capability from the current LNS into the C-list of another            composite operations requiring more than one kernel call, some
+object or into a slot in the LNS. However, in addition to the         other form of synchronization, such as semaphores, is
+source and destination parameters, Store takes a third                necessary.
+ parameter, a rights restriction mask. When a capability is
+stored, it is often desirable for the copy that is stored to have           We did expect that users would desire certain sequences
+fewer rights than the original. Storing a capability into a           of k-calls executed indivisibly frequently enough that we
+public object (or at any rate an object that at least one other       packaged them as separate k-calls. For example, the k-calls,
+user can access) is the primary mechanism Hydra provides for          Take and Po.ss are equivalent to the composites (Looxi; De/el:e)
+sharing access rights, and often what is desired is to share          and (Store; Delete) respectively.
+some, but not all, of the rights to an object, e,g. read-rights,
+but not write-rights to a file. The rights restriction mask
+passed to 3tore acts as a rights "filter", and is "anded" with the    2.5 Sharing
+set of rights contained in the source capability to produce the
+restricted rights that are placed in the destination capability.               Perhaps the major benefit of the very general
+In the case that the source and destination are the same, Store       object/capability structure is the ease with which it permits
+simply removes the masked-out rights from the designated              sharing. If two executing LNS's, User-1 and User-2 both have
+capability.                                                           a Capability for some object Comm-1, they can easily share
+                                                                      both data and capabilities. User-1 can store data into Comm-
+       An Appen.d k-call, which appends a capability to a C-list,      l's Data-part and User-2 can then retrieve it (assuming their
+is also provided. As with 3tore, the user can restrict the rights     capabilities contain the rights that allow the necessary k-calls).
+of the appended capability.                                           More interestingly, imagine a situation where User-1 has rights
+                                                                      t h a t permit both read and write access for some file and
+                                                                      wishes to grant User-2 read access only. As figure 2.1
+                                                                      illustrates, it is possible for User-1 to store a capability for
+                                                                      the file in Comm-1, restricting rights so that the capability for
+                                                                      the file placed in Comm-1 only contains the rights permitting
+                                                                      read access. Through Comm-1, User-2 can then gain read
+                                                                      access to the file (steps (1) and (2) in the figure),
+
+
+
+
+3. Hardware limitations prevent mapping the Data-parts of
+objects directly into the user's address space.                       4. This is not strictly true, but will suffice for this discussion.
+
+
+
+                                                                144
+                                                                                                        The interpretation of auxiliary rights is type dependent.
+ Our-, (X.,~S)                                                                                   Thus, in a capability for an object of type PROCEDURE,one of
+                                                           Before                                the rights, known as CALLRTS (call-rights) permits the user to
+                                          -- -- -- ~ After                                       CoJL the procedure. Such a right makes no sense for objects
+                                                                                                 that are not procedures. Similarly, a capability for an object
+                                                                                                 of type FILE may have one of the auxiliary rights bits
+ |     °'°   I~                                                                                  interpreted as WRITERTS (write-rights). This right makes no
+                                                                                                 sense for objects of type SEMAPHORE or PROCESS or
+                                                                                                 PROCEDURE.
+ ....              //   I----1               o-\                \
+                                                                                                        The representation of rights lists as bit vectors is
+                                                                                                 particularly convenient because it makes the two basic
+                                                                                                 operations on rights lists, namely rights checking and rights
+                                                                                                 restriction, very simple. Testing whether a capability contains
+ I-----I .........                                                                               a certain set of rights involves a single (24 bit) comparison.
+ ,                    oo=., \ @      ' II                                         ......
+             -"~.r---'~'l      i    / ~l                                    ,|                   Restricting rights is just a single "and" operation.
+                A,=====.tj       ,,' :1                             " ' "   ,.I
+     u,~-3 (u~s)    /   L-.-.--I          ~ ~               I                                           The fact that rights checking and rights restriction are
+                        I         "1                                                             merely bit vector operations gains more than just speed and
+                                                                                                 simplicity. It means that the mechanism of rights checking and
+
+ I--I
+ i     "'"
+              :
+
+
+              I
+                        I   "-"
+
+                                  v
+                                      I
+
+                                      - wire-rights
+                                                      "/                                         restriction can be implemented without regard to the meaning
+                                                                                                 of the rights. The assignment of meaning to the auxiliary
+                                                                                                 rights is a matter left up to the software defining the types.
+                                                                                                 This is a clear example of the basic Hydra principle of
+                                      Figure 2.1                                                 policy/mechanism separation.
+
+                                                                                                        There are only a small number of generic rights defined
+       If User-2 can communicate with User-3 via Comm-2,                                         by Hydra, and we can list them here. They are divided into
+then User-2 can then share access Of the file with User-3                                        two groups. The first nine rights control the nine generic
+(steps (3) and (4) in the figure).5 One can view User-2 as an                                    operations discussed in section 2.4. |n each case, the
+intermediary, receiving files from User-I and then passing                                       appropriate right must be present in a capability or else, an
+them on to User-3. Our general object structure actually                                         attempt to perform the corresponding operation on the object
+permits User-2 to withdraw from this arrangement while still                                     it references will fail.
+arranging for files to be shared between User-1 and User-3.
+User-2 can simply store his capability for Comm-1 into Comm-                                            1.   GETRTS   - to get data from an object's Data-
+2 (step (5) in the figure). User-3 can now access Comm-1                                                     part
+directly through Comm-2 and retrieve any data or capabilities
+placed in it by User-1.                                                                                 2.   PUTRTS   - to put data into an object's Data-
+                                                                                                             part
+
+2.6      Rights                                                                                         3.   ADDRTS - to add (append) data onto an
+                                                                                                             object's Data-part
+      As described above in section 2.2, a capability contains
+the name of an object and a set of rights to that object. In                                            4.   LOADRTS        to load a capability from an
+general, each right corresponds to a class of allowed accesses                                               object's C-list (into an LNS)
+to the object. The rights list is in fact implemented as a bit
+vector of length 24. Each bit represents the presence or                                                5.   STORTS - to store a capability into an
+absence of one right.                                                                                        object's C-list
+
+       Most rights are associated with a single operation. The                                          6.   APPRTS - to append a capability onto an
+presence of a particular right in a capability permits the                                                   object's C-list
+associated operation to be performed on the object, and the
+absence of the right causes the operation to fail. But some                                             7.   KILLRTS - to delete a capability from an
+rights, those used directly in the solution of protection                                                    object's C-list
+problems, are used to permit or deny certain wider classes of
+behavior. The important property of rights in Hydra is not                                              8.   COPYRTS - to copy an object
+one-to-one correspondence with operations, but monotonicity:
+the presence of a right in a capability always allows more (or                                          9.   OBJRTS - to destroy an object
+at least no less) behavioral freedom for the holder of the
+capability than the absence of that right.                                                             The remaining rights, DLTRTS, MDFYRTS, UCNFRT5,
+                                                                                                 ENVRTS, ALLYRTS and FRZRTS are used in the direct solution
+       The rights lists in Hydra are divided into two parts: the                                 of protection problems, and with the exception of DLTRTS,
+(16) gen.erLc r~ghts and the (8) o~/Ji.o.ry rights. Generic rights                               discussed below, are left to section 3.
+affect type independent behavior, either by permitting the
+generic operations discussed previously or through their use
+in the direct Solution of problems.
+
+5. If User-1 desires, this can be prevented as we shall see in
+our discussion of Limiting Propogation of Capabilities.
+
+
+                                                                                           145
+         As we mentioned in section 2.4, a version of Store allows
+                                                                             We believe that ideally, all procedures, including simple
+ a user to restrict his own access to an object. A good
+                                                                       subroutines such as sq~ or sine, should execute in an
+ protection mechanism protects users not only from other
+ users, but from themselves as well. This is especially                environment providing the smallest set of access rights
+ important when a user is testing a program about which he is          necessary. This implies frequent changes in the protection
+ still a bit uncertain, and wants to limit the havoc he can wreak      domain. But in much the same way that one might decide
+ among objects he can access.                                          whether a subroutine should be called or expanded in line, one
+                                                                       must consider the costs involved in switching protection
+        DLTRTS provides an example of such a safeguard.                domains. Unfortunately this cost in Hydra is considerable, due
+                                                                       to the limitations of hardware and to certain design flaws. As
+ Normally all capabilities contain DLTRT$, though we will not
+ show them in any of our diagrams. A capability may not be             a result, users package routines as Hydra Procedures only
+                                                                       when the protection domain must be changed to protect either
+ deleted, nor may any right be removed from it, unless it
+                                                                       the caller or the supplier of the routine, or when the routine is
+ contains DLTRTS.v Thus, an uncertain user can remove DLTRTS
+                                                                       so large that the overhead of domain switching is insignificant.
+ from capabilities in his own LNS in order to guarantee that he
+                                                                       For example, a compiler might be packaged as a procedure
+ wild not mistakenly reduce his own access rights. A user may
+                                                                       which takes a capability for a source file as an argument and
+ also find ff occasionally useful to restrict DLTRTS when storing
+                                                                       returns a capability for an object file.
+ a capability in an object before granting K[LLRTS for that
+ object to another user.
+                                                                             The difference between a procedure and an LNS is an
+                                                                       important one even though it is frequently blurred. (We
+                                                                       sometimes speak of the executing procedure when we actually
+ 2.7 Procedures and LNSs                                               mean the LN$ created from that procedure during the call
+                                                                       operation.) An LN$ may change during the course of its
+       A procedure is an object which serves as an abstraction         execution, for instance by creating new objects and storing
+ of the ordinary programming notion of procedure or                    capabilities for them in the LNS's C-list. But the procedure
+ subroutine. Thusj it has some "code" and some "owns"                  object itself is never affected by the LNS's execution. Thus~
+ associated with it. ]t may take capabilities as parameters and        procedures are potentially reentrant and recursive.
+ it may return a capability to its caller. Procedures may Ca//
+ one another in a potentially recursive manner, because
+ procedure activations (LNSes) are stacked.                            2,8   Processes
+         However, Hydra procedures go beyond this simple model
+                                                                             Objects of type PROCESS correspond to the usual
+  by including protection facilities. The procedure object
+                                                                       informal notion of a process, that is, an entity which may be
+  actually serves as a prototype or model for the LNS created
+                                                                       scheduled for execution. The Data-part of a process object
+  when the procedure is called. For example, the procedure's C-
+                                                                       contains process state information (e.g. scheduling parameters).
+  list Contains a capability for each of the objects considered to
+                                                                       The C-list of a process object contains a list of LNS's, treated
+  be "own" to the procedure, and copies of those capabilities are
+                                                                       as a stack. The "top" LN$ defines the current protection
+  placed in the instantiated LN$ during a procedure call. In
+                                                                       domain of the process.
+  addition, the C-list of a procedure may contain structures
+  which are not capabilities at all, but "prototype capabilities"
+                                                                               The current protection domain of a process may change
+  called tertzplo.te$. There must be one template for each "formal
+                                                                       many times during execution of the process, corresponding to
+  parameter" of the procedure, which specifies the type and
+                                                                       calls and returns of Hydra Procedures. Each time a procedure
+• r!ghts required of the parameter. During a procedure call
+                                                                       is called, a new LN$ is created, initialized and pushed onto the
+  these templates are replaced by "actual parameter" capabilities
+                                                                       top of the LN$ stack, becoming the current LNS. When the top
+  derived from the capabilities passed as arguments. 7
+                                                                       LN$ returns, it is popped from the top of the LNS stack and
+        The Data-part of an LNS contains a variety of useful           destroyed. Control returns to LN$ below it on the stack.8
+ information which is initialized from the Data-part of the
+ procedure when the LN$ is instantiated. This information                     Holders of a capability for a process object may start
+ includes specification of the LNS's address space, software           and stop it, as well as change the process state. (Additional
+ trap and interrupt vectors (hardware traps and interrupts are         details can be found in [Lev75]), however no capability for a
+ handled by the kernel) and the location of the first instruction      process contains the generic rights necessary (LOADRT$, etc.)
+ of the procedure.                                                     to permit access to the process' C-list. A user scheduling a
+                                                                       process does not necessarily have a right to know what the
+                                                                       process is doing. This is especially true in the case that a
+                                                                       proprietary procedure has been called. If the process'
+                                                                       scheduler could access the process' C-list, it would be able to
+                                                                       access the proprietary procedure's "owns".
+
+                                                                       8. There is a facility that allows LNS's to be saved after they
+ 6. This differs from KILLRTS. A •user requires a capability           return. The LNS may then be continued, causing control to be
+ containing KILLRT$ to delete •capabilities i n the object             transfered just beyond the return point. This does not require
+ refer.enced by the given capability.                                  any changes in the LNS stack as described. The stack is used
+                                                                       only for control (call/return discipline), rather than for access.
+ 7. Hydra Procedures are very similar to a combination of what         Any object accessed is reached through a path rooted in the
+ CAL-TSS calls domains and gates [Gra72]. The former                   current LNS, not through any LNS in the stack. Actually, there
+ specifies the procedure "owns", while the latter specifies the        is a set of capabilities accessible indirectly. The creator of a
+ form of the procedure arguments. For a number of reasons,             process, in addition to specifying its initial LN$, also may
+ including efficiency, we have come to believe that the                associate a process base with a process, an object whose C-
+ separation is probably desirable.                                     list can be accessed by any LN$ executing under the process.
+
+
+
+                                                                 146
+                                                                            In the case of user defined types in Hydra, these
+2.9 Types andSubsystems                                              operations are specified as Hydra Procedures, and the C-list of
+                                                                     the TYPE object contains capabilities for these procedures. 9
+                                                                     We call this collection of procedures a S~bs:ts~ern. For
+         We have already mentioned that all objects are a three-
+                                                                     example, a File-directory subsystem would likely contain one
+tuple:
+                                                                     procedure that would store a file in a given file-directory by
+                                                                     symbolic name as well as one that would return a capability
+         < unique-name, type, representation >.
+                                                                     for a file given a file-directory and the file's symbolic name.
+      In this section, we will discuss the representation of
+                                                                            As already noted, the representation of an object,
+types and its role in defining type su.bsystemJ.
+                                                                     whatever its type, is simply the contents of its C-list and Data-
+                                                                     part.   There is no explicit declaration of how that
+      The type of an object is actually the name of some other       representation is to be interpreted; rather it is implicit in how
+object whose type is TYPE. That is, just as there objects of         the representation is used by a subsystem's procedures. For
+type PROCESS, PROCEDURE and perhaps FILE-DIRECTORY,                  example, the procedures in a File-directory subsystem might
+there are objects of type TYPE, each one of which                    interpret the Data-part of a file-directory object as containing
+"represents" the class of objects of that type. For example,         a map from the symbolic name of a file to the index in the file-
+the object whose name is SEMAPHOREand whose type is TYPE             directory's C-list where the capability for the file might be
+"represents" all objects whose type is SEMAPHORE                     found.
+
+       Of course, all those objects of type TYPE must be                    Hydra must somehow guarantee that ordinary users
+represented by a TYPE object whose name is also TYPE. This           cannot access or manipulate an object's representation except
+all can be depicted by a three level tree with the TYPE-TYPE         by calling subsystem procedures, especially since outside
+object at the root. Figure 2.2 shows part of the tree                access might threaten the integrity of the assumptions made
+containing objects of type TYPE, PAG~ FILE and SEMAPHORE.            by the subsystem regarding the format of the representation.
+                                                                     This implies that ordinary users do not have capabilities
+                                                                     containing the various generic rights (LOADRTS, PUTRTS, etc.)
+                                                                     that permit access to an object's representation. Yet, a
+                                                                     subsystem procedure must be able to gain these rights when a
+                                                                     capability for an object of the type it supports is passed to it
+                                                                     as an argument. In other systems, objects are "sealed"
+                                                                     [Mor73,Red74a] by a subsystem when presented to a user.
+                                                                     The subsystem procedures must then be able to "unseal" them
+                                                                     in order to manipulate them directly. In Hydra, sealing simply
+                                                                     means the restriction of the appropriate generic rights.
+                                                                     Unsealing is accomplished by Ri~ght~ A~pb~[~o.ci.on [Jon73].
+                                                                     The exact mechanism which supports amplification is discussed
+                                                                     in section 2.11.
+
+                                                                            As we noted in section 2.6, the auxiliary rights of user
+                                                                     defined types are not specially interpreted by the kernel. Like
+                             Figure 2.2                              the generic rights, they may be restricted via the generic
+                                                                     operations already discussed (section 2.4) and may not be
+                                                                     gained except through rights amplification. It is possible to
+       Given a capability for some TYPE object, a new object of      check whether a capability contains a particular right (section
+that type may be created (the details may be found in section        2.11), and thus a subsystem may use auxiliary rights to
+2.11).   In particular, new types may be defined by                  allow or disallow calls on various procedures in much the same
+starting with the TYPE-TYPE object.                                  way that the kernel uses generic rights to allow or disallow
+                                                                     the application of various generic operations.
+       The Data-part of a TYPE object contains a variety of
+useful information, such as the maximum permissible sizes of                For example, a File-write procedure might require a
+the C-list and Data-parts of objects of that type (enforced by       capability for a file containing auxiliary right #2, while a File-
+the kernel). As we shall see shortly, the C-list is more             read procedure might require a capability for a file containing
+interesting.                                                         auxiliary right #5. If the "owner" of a file holds a capability
+                                                                     with both rights, but shares only a capability with auxiliary
+       The concept of "type" in Hydra is closely related to the      right e5 with other users, then while other users will be able
+concept of "data type" in a number of programming languages          to read the file, only the "owner!' will be able to write it.
+designed for "structured programming", i.e. "class" in Simula
+[Dah66], "cluster" in CLU [Lis74] and "form" in Alphard
+[Wu174b] (this relationship is discussed more thoroughly in
+[WLP75]). The central notion is that a type is an abstraction
+of a class of objects, and that the abstraction specifies not
+only the representation of the objects, but the operations that
+apply to the objects as well. A key feature of type
+abstraction is that the representation of an object should not       9. One does not need a capability for the Type object in order
+generally be known to users of the object. Manipulation of the       to call one of these procedures. Using the TCALL operation
+object should only be possible by invoking those operation           supplied by the kernel, they may be called through any object
+specific to its type.                                                of the specified type. A similar mechanism may be found in
+                                                                     the Plessey system [Cos74].
+
+
+                                                               147
+                                                                                DoJa - The kernel provides data objects as a
+2.10 Kernel Types                                                               convenience to users who wish to seal data in
+                                                                                protected objects without going to the trouble
+       While all types may be though of as defining                             of defining a formal subsystem. Data objects
+subsystems, certain types, such as PROCEDURE, LNS and                           have Data-parts, but no C-list. Their only use
+PROCESS, are crucial to the operation of Hydra. These types,                    is as simple data carriers.
+plus certain others useful as building blocks for user-defined
+types, are defined and implemented directly by the Hydra                        Urd.uersoJ  - Universal objects are similar in
+kernel. Operations on these kernel-supported types are                          concept to data objects except that universal
+implemented as k-calls instead of procedure calls.                              objects do have C-lists, and thus can act as
+                                                                                carriers of capabilities as well as data.
+      The following is a list of the kernel-defined subsystems.
+In some cases operations specific to the type are mentioned.                    Type        Type objects represent entire
+Each such operation is protected by an auxiliary right.                         subsystems. The C-lists of type objects contain
+                                                                                capabilities for all of the operations in the
+         LNS - An LNS serves as a protection domain                             subsystem (if the system is not one of these
+         and as a dynamic activation of a procedure. It                         kernel defined subsystems). One auxiliary right
+         is the root of the tree (graph) of objects                             defined is TIVlPLRT$, which permits a template
+         accessible to a program and provides a                                 to be made from a Type object (section
+         framework for naming them.                                             2.1t).
+         Procedu.re - Procedures are the Hydra analogue
+         of   ordinary programming of procedure.                    2.11 Templates
+         However, a procedure call in Hydra causes a
+         change in protection domain.           The CoJJ                  We have delayed discussing until now three mechanisms
+         operation requires the auxiliary right CALLRTS.            that Hydra must provide in oder to support Type Subsystems:
+
+         Process  - A process object represents an                         1)     Creation - A user wishes to create a new
+         independently schedulable activity, the unit of                          object of a specific type.
+         parallel decomposition. Processes consist of
+         some scheduling data and a stack of LNSes.                        2)     Type and Rights Checking- A user wishes to
+         The primary operations on them are sto.rt and                            guarantee that a capability references an
+         stop.                                                                    object of a specific type and contains
+                                                                                  required    rights.   This is particularly
+        P~ge - A page object is an image of one of the                            important in specifying procedure "formals".
+         4k word defined by the hardware. One can
+        think of the address space of an LNS as defined                   3)      Rights Amplification - Given a capability for
+         by a table found in the Data-part of the LNS;                            an object of a particular type, the subsystem
+        each entry containing an index into the LNS's                             for objects of that type wishes to gain the
+        C-list    where    the   capability    for   the                          rights necessary to manipulate the object's
+        corresponding page can be found. A more                                   representation.
+         accurate and complete description is included in
+        [Lev75].                                                          Hydra provides a single mechanism, tentp~tes, which
+                                                                    serves all three purposes.
+        Sem.aphore    -    These are Dijkstra-style
+        semaphores with P, V and conditionaI-P                             Templates, like capabilities, may appear in the C-list of
+        operations defined.                                         an object, and through the use of the generic operations
+                                                                    already discussed, may be moved from the C-list of one object
+        Port - Ports are the basic objects of the Hydra             to another. Unlike capabilities they do not contain a reference
+        interprocess message communication system.                  to an object. Rather they can be thought of as prototype
+        They   act as message switching centers and                 capabilities for all objects of a given type. Through the use of
+        synchronization structures.    Operations on                the generic operation Tentp~te, a template of a particular type
+        ports include connect and cJ.sconnect (to form              may be created by a user already holding a capability for the
+        and break channel connections between ports)                TYPE object of the same type. Thus, a File-directory Template
+        and other primitives for sending and receiving              could only be created by someone having a capability for the
+        messages.                                                   File-directory TYPE Object.
+
+        Oeuice     A device object is the software                         There are three kinds of templates, Creation Templates,
+        representative of a physical i/o device. In                 Parameter      Templates      and     Amplification Templates,
+        Hydra it is treated as a variety of port. The               corresponding to the three functions described above. Each
+        only operations currently defined on devices                template contains a field designating its type, and depending
+        are connect and ~sco~mect: to ports.                        upon which kind of template it is, contains one or both of the
+                                                                    two fields required-ri.ght$ and new-rights.
+        Poll~y - Policy objects are mailboxes used by
+        the kernel to communicate with policy systernJ
+        responsible for scheduling processes.     Details
+        can be found in [Lev75].
+
+
+
+
+                                                              148
+      1)   Creation Templates.       Creation templates             2,12 The Hydra Procedure Call Mechanism
+           contain a type field and a new-rights field.
+           Through the use of the generic operation                         We have discussed in a general way the effects of a
+           CreoJ'e, the holder of a creation template can           procedure call. Now that we have explained templates, we can
+           create a new object whose type will be the               discuss in more detail the heart of the Call Mechanism, the
+           same as that of the template. A capability               initialization of the LNS's C-list. The CoJ/. operation is a k-call
+           for the new object will be placed in the                 having the following form:
+           creator's LN$ with the same rights as as
+           those specified in the new-rights field of the                  Col.l. ( cproc, retcu'n.-$Lot, p J, rn.oJkl, ... pn., rn.oJkn )
+           template.
+                                                                           The first parameter, cproc, must be (a path to) a
+            When a template is initially created, its new-          capability for a Hydra procedure object. The second
+           rights field contains al_l. rights. Through the          parameter, retu.rrL-s~t, is an index into the current LNS (the
+           use of generic operations, these rights may              calling LN$) indicating where the called procedure should store
+           be selectively removed. A subsystem may                  the capability it returns. The rest of the parameters to Co../.l
+           choose to make creation templates generally              are grouped in pairs. Each pair consists of a path to a
+           available after first removing those rights              capability and a mask used to restrict the rights in the
+           from new-rights that would permit direct                 capability passed.
+           access of the object (e.g. STORTS, PUTRTS,
+           etc.). Thus, while a user could create a new                    Each capability (and creation template) in the
+           object, he still would be unable to manipulate           procedure's C-list is then copied into the corresponding slot of
+           its representation without calling subsystem             the LNS's C-list. These are the procedure "owns" and are said
+           procedures.                                              to be inherited from the procedure.
+
+            Often, when an object is newly created, a                      A number of slots in the procedure's C-list will contain
+           subsystem wishes to initialize it in some way.           amplification and parameter templates. The capabilities passed
+           In that case, the subsystem might not choose             as arguments to the procedure are bound to these templates
+           to make creation templates generally                     in left to right order. Each LNS slot corresponding to an
+           available. It might simply retain a creation             amplification or parameter template is filled by the matching
+           template itself and make a procedure                     capability passed as an argument.
+           available to users, which when called, would
+           both create and initialize the object,                          If a parameter template is encountered in the parameter
+           returning a capability with appropriately                binding process, the matching argument capability (with rights
+           restricted rights to the caller. (Also see               restricted as specified by its associated mask) is compared
+           section 3.6).                                            against the template. If both type and rights match as
+                                                                    required, the capability, with rights restricted according to the
+      2)   Parameter Templates. Parameter templates                 associated mask, is placed in the appropriate C-list slot. In the
+           contain a type field and a required-rights               case of an amplification template, the same algorithm is used,
+           field. They can be compared against a                    except that the capability placed in the LNS will have the
+           capability to determine whether or not that              rights specified by the new-rights field of the template. If the
+           capability is of the same type and has at                type or rights of any argument fails to meet the requirements
+            east those rights listed in the required-               of the template, the LNS is destroyed and control returns to
+           rights field of the template. (Here, Hydra               the caller with an indication that the Call failed.
+           goes beyond type checking generally found
+           in programming languages in that it checks
+           rights as well as type.) It is expected that a           2.13 An Example
+           SUbSystem will m a k e these templates
+           generally available to users. 10
+                                                                           We have noted that files are not a kernel supported
+      3)   Amplification     Templates.       Amplification         type. Instead they must be provided through a user defined
+           templates contain a type field, a required-              File subsystem. In one possible implementation, a sbbsystem
+           rights field and a new-rights field. Given a             might have sole access to a disk (of type Device). It could
+           capability of the same type as the template,             make file objects available whose Data-part would contain the
+           with all the rights specified in the template's          location on the disk where the file could be found. Of course,
+           required-rights list, a new capability can be            the Data-part could only be accessed by the File subsystem
+           produced, referencing the same object as the             procedures. This is similar, in fact, to Hydra's implementation
+           original capability, but containing the rights           of kernel-supported Page objects.
+           specified in the new-rights field of the
+           template. It is expected that amplification                     Alternately, files could be constructed directly from
+           templates will never be made generally                   kernel-supported objects. The C-list of a file object might
+           available by a subsystem. In particular,                 then contain capabilities for Page or Data objects. We will
+           amplification templates for kernel-supported             briefly explore the latter alternative by examining the
+           types (Process, LNS, etc.) are never made                construction and instantiation of Datafile-Append, a procedure
+           available.                                               supplied by a Datafile subsystem.
+
+                                                                           Datafile-Append takes two arguments, a Datafile and a
+10. A special kind of parameter template, a Null                    Data object, and appends the data encapsulated in the Data
+Template, is made available by the kernel. It matches               object onto the end of the Datafile. The creator of the Datafile
+~nY type and only checks rights.                                    subsystem must store three things in in the C-list of the
+                                                                    Datafile-Append procedure when he creates it.
+
+
+                                                              149
+          3)          A Datafile amplification template. The new-
+                                                                                        2)    Procedural Embedding.          The mechanism
+                      rights field of the template contains those
+                                                                                              merely provides an appropriate protected
+                      rights necessary so that the procedure can
+                                                                                              environment for code which implements the
+                      manipulate the representation of the Datafile
+                                                                                              solution to the problem. Procedures in Hydra
+                      passed to it. In addition, the template
+                                                                                              provide just such an environment. Imagine a
+                      requires the Datafile passed to it have the                             procedure to which a user could pass a file
+                      second auxiliary right set. In essence, this
+                                                                                              and a set of "keys" (capabilities for type key
+                      means that the second auxiliary right is
+                                                                                              objects) as arguments, which the procedure
+                      interpreted as an "append-right" for Datafile
+                                                                                              would store in its "own" area. Subsequent
+                      objects; it permits a Datafile capability to be                         callers of this procedure would be permitted
+                      used as an argument to Datafile-Append.                                 access to the file only if they presented one
+                                                                                              of the designated keys. This kind of
+          ~Jser   (Lt~S)
+                                                                                              arrangement could be used to implement lock
+                                                                                              and key protection [Lain69] or the Military
+                                                                                              Clearance          Classification       system
+                                                                                              [Wei69,Wa174~
+
+                                                                                         Procedural embedding has other possibilities as well.
+                                                                                  Imagine almost any common protection problem relating to
+                                                                                  usage of another user's program. (For example, consider a
+                                                                                  user who requires a guarantee that a procedure given access
+                                                                                  to a file will not destroy the file - especially important on a
+                                                                                  system that, unlike Hydra, does not provide separate rights f o r
+                                                                                  read and write access.) Let us suppose that some very
+                                                                                  trustworthy (and very bright) programmer constructs a
+                                                                                  procedure which accepts source programs written in a special
+                                                                                  language that makes it easy (well.. generally possible) to
+                                                                                  decide whether the program exhibits certain repugnant
+                                                                                  behavior (e.g. would it destroy a file passed to it as an
+                                                                                  argument?). This very trustworthy procedure would compile
+                                                                                  the programs (into Hydra Procedures) and would store them
+                                          t - LOADRTS
+
+                              - GETRTS
+                                          s - STORYS
+                                                        r   -   PR.EADRTS
+                                                                                  away with their repugnance ratings.
+   x~   - APPe~td~tsrzg    p- - pL~£RTS   k - KILLRTS
+
+
+                                                                                         Subsequent callers of this very trustworthy procedure
+                                          Figure 2.3                              could retrieve procedures along with their repugnance ratings.
+                                                                                  Using the repugnance information~ users could deduce
+                                                                                  specifications of the program's behavior.
+       Figure 2.3 illustrates what happens when Datafile-                                Both the "direct" solutions and the "procedural
+Append is called by User (of type LNS) with arguments Arg (of                     embedding" solutions that we have described are d:ynx~rn./.cin
+type DATA) and D (of type DATAF]LE) instantiating the LNS,
+                                                                                  the sense that they require overhead during the execution of
+Datafile-Append'. The C-list slots in the procedure specifying
+                                                                                  programs. We could consider, however, going one step further
+the Data and Datafile templates have been replaced in the LNS                     to statically determined protection by complete certification of
+by the corresponding arguments, while the capability for the                      programs. If users can verify, in advance, that procedures
+code page in the procedure has been inherited by the LNS.
+                                                                                  they interact with exhibit only unobjectionable behaviors
+                                                                                  presumably there would be no need to supply any dynamic
+                                                                                  protection mechanisms. (Although it is not clear, of course,
+2.14 Protection Mechanismsand Protection Problems                                 how a user could know, in advance, of all procedures with
+                                                                                  which it might interact.) Certification is still an art, and one
+       The mechanisms of procedure invocation and rights                          would not want to rely upon it as the answer to protection in
+amplification combine to form a powerful tool for the                             a current system. Further, certification requires a language
+construction of arbitrary protection policies. If direct access                   (or set of languages) in which protection questions are
+to an object can be prevented except through a procedure                          decidable. We did not want to restrict ourselves to such a
+call, then the procedure can decide when access should be                         language, especially since no such language is presently
+permitted. In general, where mechanisms do not exist to                           available.
+directly solve a protection problem, procedures can be used in
+constructing a solution. Thus, there are two ways that                                   Certification, as a static process, ideally need only be
+protection problems can be solved:                                                performed      once, whereas Hydra's dynamic protection
+                                                                                  necessitates a continuing overhead. But programs are not
+           1)          Direct Solution. The mechanism directly                    always correct or complete, even when their protection
+                       solves the problem.         For example, a                 properties have been certified, and thus, the tradeoff between
+                       mechanism that provides separate rights for                recertification and dynamic protection is by no means obvious.
+                       read and write access to a file, on a user by              In the case of the ideal machine (though unfortunately not the
+                       user basis, directly solves the problem of                 one upon which Hydra runs), dynamic protection of the sort
+                       finding a way to allow some users to read a                available in Hydra should cause very little overhead at all.
+                       file while permitting others to both read and
+                       write it.
+
+
+
+
+                                                                            150
+       In Hydra, procedural embedding of protection is
+                                                                          The Hydra procedure call mechanism described in
+expensive because of the cost involved in calling a Hydra          section 2.12 was designed as a direct solution to the Mutual
+Procedure.     Even supposing a suitable architecture, a           Suspicion problem.
+procedure would generally have to make many of the same
+dynamic protection decisions interpretively that are already              A procedure's execution environment is not determined
+available directly from Hydra.                                     solely by its caller; procedures may have "own" capabilities,
+                                                                   inherited by the LNS incarnated by the procedure and
+       There are a set of protection problems (such as Mutual
+                                                                   unavailable to the caller. Thus, sensitive or private data
+Suspicion, Confinement and Revocation) which are reasonably        structures need never be made available to the caller of the
+well understood, and for which users frequently need               procedure. Furthermore, there is no way that the caller can
+solutions. It is desirable that Hydra make mechanisms directly
+                                                                   automatically inherit any capabilit!es from the called LNS,
+available that can be used to provide solutions to these           unless a capability is explicitly returned.
+problems, especially if the mechanisms are useful in building
+other general protection policies (via embedding) and do not              Because an LNS does not inherit access to the
+"clutter up" the basic system design.
+                                                                   capabilities in LNSes deeper in the process's stack, the only
+                                                                   capabilities from the caller that are available are those
+       It is not especially difficult for a clever designer to     acquired through the parameter binding process of the call
+generate such mechanisms. Rotenberg [Rot73], in his thesis,
+                                                                   mechanism. Thus, even the most malicious procedure could, at
+described a large number of interesting protection problems
+                                                                   worst, access or damage only those objects reachable through
+(many for the first time), but he attempted to forge solutions     the parameters. All files and directories and other sensitive
+to some of them by positing somewhat awkward or complex
+                                                                   objects that are not passed as parameters are absolutely safe.
+additions to the Multics File System.                              Of course the procedure might make copies of the capabilities
+                                                                   passed to it and store the copies away someplace where they
+       The basic protection mechanisms already described
+                                                                   could be used for mischief later. (Section 3.4 indicates
+above go a long way towards providing an ideal environment         how this may be prevented.) But even so, the later damage
+in which protection problems can be solved. In section
+                                                                   would still be confined to only those objects passed as
+3, we will see that by some simple extensions~                     parameters. (It should, of course, be clear that the caller's
+primarily through extending the concept of access rights, we       guarantee is still preserved even if the procedure should call
+have produced what we believe are some elegant direct              another procedure.)
+solutions to some difficult problems.
+                                                                          So the Hydra call mechanism solves the Mutual Suspicion
+                                                                   problem. It actually does a little more. Not only can the caller
+                                                                   control the set of objects that he must allow the callee to
+3. Protection Problems                                             access, but by restricting the rights lists of the capabilities he
+                                                                   passes, he can actually control the kinds of accesses he risks.
+                                                                   lie thus has extremely tight access control of his objects.
+3.1 Mutual Suspicion
+                                                                          There is one technical exception to the tight access
+       In most operating systems, whenever one user calls a        control: if the procedure in question has an amplification
+program belonging to another user, or even a utility belonging     template for some type, then it may be able to acquire more
+to the operating system, he takes a risk. He has no way of         rights to an object than the caller passed (or even hadD This
+being sure that the program he calls will not, through             phenomenon, however, should not be viewed as a genuine
+maliciousness or error, do something disastrous (such as           breach of security. For one thing, it does not affect the class
+request that the operating system delete all his files.) Most      of obiects which can be accessed by the procedure. An
+users simply take such risks for granted and rely on backup        amplification template does not allow acquisition of new
+systems to aid recovery in the unlikely event that disaster        capabilities -- only new rights to objects that were passed as
+should occur. But in a system in which security is important       parameters anyway. Thus, the amount of damage that can be
+such faith is not enough. The user needs some way to limit or      done is still limited to the objects actually passed as
+circumscribe the amount of damage a procedure that he calls        parameters.
+can do.
+                                                                          But there is another reason, as well, why the existence
+        A similar problem is faced by the author of a utility      of amplification templates does not constitute a security
+program intended to be called by many different users. The         breach. Any procedure having an amplification template must
+utility presumably has to manipulate certain private files or      be considered to be part of the defining subsystem for that
+data structures which it cannot allow its callers to manipulate    type. Thus, one generally presumes that it is reliable and does
+directly. The author of the utility program needs some             only "correct" things with objects of that type. If a user is
+guarantee that, except during execution of the program, users      unwilling to trust the defining subsystem for a type, he
+cannot access these sensitive data structures.                     probably should not be using it. If he does use a subsystem
+                                                                   that he doesn't completely trust, there are other protection
+        These two problems together are known as the Mutual        tools available that help guarantee certain aspects of the
+ Suspicion Problem [Sch72]. Restated in the language of Hydra      behavior of ~       procedure, whether or not it contains
+ the problem is this: The caller of a Hydra procedure needs a      amplification templates. The details are discussed in the
+guarantee that the callee is not granted access to any of his      following sections.
+ objects except those for which capabilities are explicitly
+ passed as parameters. The callee (i.e. the owner or maintainer
+of the procedure) needs a guarantee that the caller cannot
+gain access to any objects private to that procedure except
+when the procedure explicitly allows it. Note that, in our
+earlier terminology, mutual suspicion is not a problem of
+negotiation, but a pair of mutually unilateral problems.
+
+                                                             151
+3.2 Modification                                                                                         in fact, MDFYRTS is more potent. [t prevents
+                                                                                                  modification of the representation of an object as well. As
+       Users often want guarantees that an object passed as                                       figure 3.1 shows, loading a capability into one's LNS through a
+an argument to a procedure will not be modified as a result of                                    capability without MDFYRTS masks out MDFYRTS in the loaded
+the call. Ordinarily, it is sufficient to restrict those rights that                              capability, if a user calls Datafile-List passing a Datafile
+allow modification (PUTRTS,STORTS,etc.) before passing the                                        capability that does not contain MDFYRTS, she is assured that
+Capability for the object as an argument. However,in the case                                     the Datafile (including the Data objects which, possibly
+that a subsystem procedure is called, rights amplification may                                    unbeknownst to her, comprise its representation) will not be
+reinstate those rights.                                                                           modified. 12 (This assumes that Datafile-List does not already
+                                                                                                  have "own" access to the Datafile via a different capability
+       In general, of course, users must trust that a procedure                                   which does ~ontain MDFYRTS.13)
+supplied by a subsystem fulfills its specifications, else there is
+no reason to use the subsystem. Just as one expects that a                                               We have stated the Modification problem only in the
+subsystem will not promiscuously make amplification templates                                     context of calling a subsystem procedure that might misbehave.
+available, one expects that a subsystem procedure will not                                        Restricting MDFYRTS is of course necessary in calling any
+modify an object passed as an argument if its specifications                                      procedure that could potentially misbehave, since the called
+declare that it will not.                                                                         procedure could itself call the subsystem procedure.
+
+       Unfortunately, this ideal is not always realized in                                               This kind of guarantee against modification may force
+practice. Subsystems believed to be trustworthy may not be,                                       some undesirable constraints on a subsystem. For example, if
+due either to maliciousness or to hardware or software error.                                     the Datafile-List procedure wanted to compact or reconfigure
+                                                                                                  the Datafile before listing it, it would not be able to do so if
+        imagine a user who wishes to list a tediously                                             called with a Datafile lacking MDFYRTS. The subsystem could
+constructed Datafile. in the nick of time, she is warned that a                                   copy the Datafile and modify the copy. The issue here is that
+curious bug has mysteriously appeared, and that the Datafile-                                     the subsystem is prevented from performing internal
+List procedure might zero out the Datafile passed to it as an                                     housekeeping in the original object that could expedite
+argument. Now, our heroine desperately needs a listing of the                                     subsequent calls.
+Datafile and can't afford to wait until the bug is excised. She
+can't first make a copy of the Datafile, since that would entail                                         We have traded subsystem generality for protection. Of
+calling the Datafile-Copy procedure, and there is no guarantee                                    course, a subsystem need not give up such generality. The
+that it has not been afflicted with the same ailment troubling                                    amplification template in the Datafile-List procedure could
+Data file-List.                                                                                   require MDFYRTS. Callers of the procedure would then be
+                                                                                                  required to pass a capability with MDFYRTS ( else the Call
+       Hydra solves this problem through the use of MDFYRTS.                                      would fail) and could make their own decisions about whether
+Each Hydra k-call that modifies an object i_n ~ way requires                                      they trusted the Subsystem enough to use it under those
+a capability with not only the right that allows the specific                                     circumstances.
+modification but MDFYRT$ as well. Thus, to store a capability
+in an object, one must have a capability for the object with
+both STORTS and MDFYRTS. To put data in the Data-part of                                          3 . 3 L i m i t i n g Propogation of Capabilities
+an object, one needs a capability for the object with both
+PUTRTS and MDFYRTS.11 To solve the Modification Problem                                                 Occasionally, a user wishes to allow another user to
+though, we must demand that MDFYRTS can never be gained                                           access an object but wants to guarantee that the other user
+through amplification as other rights are, since a capability                                     cannot share access with yet a third user.
+lacking MDFYRTS represents an intention that the object it
+references can never be modified by using that capability.
+Thus, a capability produced by amplification will only contain
+MDFYRTS if both the amplification template and the original                                       11. A k-call that modifies the internal structure of a kernel
+capability have MDFYRTS. If the caller of the Datafile-List                                       supported object requires MDFYRTS as well. Thus, P and V (k-
+procedure passes a capability for the Datafile restricting                                        Calls that operate on type Semaphore objects) require a
+MDFYRTS, there is no way that the procedure can modify the                                        capability for the Semaphore with MDFYRTS.
+Datafile.
+                                                                                                  12. [n fact, this is actually accomplished in Hydra by a
+     Daua f i l e - L i s t                                                                       separate right, UCNFRTS. MDFYRTS does not actually cause
+          (LSSS)
+                                                                                                  masking as described, instead, UCNFRTS masks out both
+                                                                                                  UCNFRTS and MDFYRTS during loads. This division is
+                                                                                                  especially useful when copying an object using a capability in
+                                                                                                  which both MDFYRTS and UCNFRTS are missing. Capabilities
+                                                                                                  for copied objects gain MDFYRT$ but not UCNFRTS. This
+                                                                                                  permits a user to modify a copied object (including storing or
+                                                                                                  deleting of capabilities) but prevents objects in the
+                                                                                                  representation of the copied object from being modified where
+                                                                                                  that modification would not have been possible using the
+                                                                                                  original object (due to masking of MDFYRTS in capabilities
+                                                                                                  loaded from the object). For purposes of clarity, we have
+                              before           I   .
+
+                                                   -
+                                                       LOADRTS
+
+                                                       C~RTS
+                                                                          m   -   MD~tRTS
+                                                                                                  described MDFYRTS in this paper as including both the
+     --    --    --   ~       sttter          p        PUTRTS
+                                                                                                  functions of MDFYRTS and UCNFRTS as they are used in Hydra.
+                                       of   restrlettng          rights
+                                                                                                  13. We will discuss how this may be avoided in the section on
+                                                                                                  the initialization problem.
+                                             Figure 3.1
+
+
+                                                                                            152
+    ..... c~,                                                                    3 . 4 Conservation
+
+                                                                                        In a later section, we will discuss the general Revocation
+                                                                                 Problem. Fk)wever, here we will show how ENVRTS provides a
+                                                                                 solution to a particular revocation problem, the Conservation
+                                                                                 problem, Often, a user wishes to pass a capability for an
+                                                                                 object to a procedure. After the procedure returns however,
+                                                                                 he wants to revoke any accesses retained or propagated by
+                                                                                 the procedure. There are a number of reasons why he may
+                                                                                 want to revoke access. Though he expects the procedure to
+                                                                  (DATA)         modify the Object, he may also want to guarantee that no one
+                                           "EZ]                                  will continue to modify the object after the procedure returns.
+                                                                                 In particular, he wants to guarantee that the executing
+                                                                                 procedure cannot share the capability with a demonic user
+     ......
+                                                                                 who will arbitrarily scribble on the object at unexpected times
+                                                                                 in the future.
+                                           s    -     STOK'rS
+                                                                                       From the previous discussion, we know that without
+     !              • '   I   "'"   I      . . . .-. . M
+                                                       . .D I ~ / R T $
+     I•       """     |
+                                           m
+                                           • - Em'RTS                            ENVRTS, a Capability may not escape from its executing
+                                                                                 environment. $o, if the capability for an object is passed to a
+                                                                                 procedure with ENVRTS restricted, the LNS incarnated from the
+                              Figure 3.2                                         procedure cannot store the capability in any object that
+                                                                                 another user can access. When the LNS returns execution to
+                                                                                 the caller, the capability passed as an argument is erased
+      Hydra provides ENVRTS in order to sQIve this problem.                      along with the called LN$. Lack of ENVRTS does not prevent a
+Without ENVRTS, a capability may not escape outside of an                        capability from being passed as an argument to another
+executing ENVironment (LN$). A capability may. only be stored                    procedure. When execution returns to the original caller, the
+in an object if the capability contains ENVRTS.t4 As figure 3.2                  Call/Return discipline guarantee's that al...I,called LNS's are
+shows, if User-1 stores the capability for the Data object in                    erased and that the capability escaped from none of them. t6
+Comm-1 without ENVRTS, User-2 will be able to load the
+capability but will not be able to store it into Comm-2. (User-                         if the procedure did not need to modify the object
+1 must also know that User-2's capability for Comm-1 lacks                       passed as an argument, we might at first think that restricting
+ENVRT$ or else User-2 could simply store a capability for                        ENVRTS would not strictly be necessary. For if the object
+Comm-1 into Comm-2.)                                                             were passed to the procedure simply without MDFYRTS, even
+                                                                                 though capabilities for the object could be propagated beyond
+       Let us briefly pause here and determine whether there                     the incarnated LNS's environment, absence of MDFYRTS would
+really is a problem. For if User-1 trusts User-2 enough to let                   guarantee that the object could never be modified by the
+her use the Data object, she may as well trust that User-2 not                   demonic user.
+share it with other users. There are a number of answers.
+Like the use of MDFYRTS in the Modification Problem, ENVRT$                              Unlimited propogation has other effects that will be
+is simply an additional small safeguard against error that Hydra                  explored in more detail in a discussion of the Lost Object
+can provide. A more important issue though, is o n e of                           Problem. But, in addition, there is another reason for
+accountability. If User-} notices bizarre happenings in the                      Conservation that only the ENVRTS solution addresses. A
+Data object, she knows that User-2 is directly responsible. 15                    object passed as an argument to a procedure may, at times,
+                                                                                 contain certain sensitive information. When a user calls the
+        it should be clear that, like MDFYRTS, we cannot allow                    procedure, he may know that there is no sensitive information
+ENVRT$ to be gained through amplification, for the absence of                     in the object. But, after the procedure returns, he may once
+ENVRTS also represents a permanent restriction on the use of                      again: wish to stare sensitive information in it. Thus he:wants
+the capability. And, much like MDFYRTS, ENVRT$ masks out                         t o guarantee that no capability to the object' can be retained
+ENVRTS in loading a capability. If User-} had shared with                         bY a spy.
+User-2 a list structure, she would want to guarantee that
+User-2 would be prevented from sharing any sublist of the
+structure with User-3 as well as a capability for the entire list                3 . 5 Confinement
+structure. Thus ENVRTS prevents the storing not only of the
+given capability but of all capabilities reachable through the C-                      While ENVRTS is useful in preventing propogation of
+list of the object referenced by the given capability.                           capabilities, it is of limited usefulness in preventing
+                                                                                 propagation (disclosure) of information. Even though a
+                                                                                 capability lacking ENVRTS may not escape outside of its
+                                                                                 execution environment, nothing prevents a user from creating
+                                                                                 a new object (which wil___[have ENVRTS and MDFYRTS), copying
+                                                                                 data from the old object to the new one, and sharing a
+14. Of course, the executing LNS must also contain a capability                  capability for the newly created object.
+with STORT$ for the object in which the above-mentioned
+capability is to be stored.
+
+15. This is orthogonal to the issue of revocation, in this case,                 16. Hydra does provide a mechanism by which LNS% may be
+we could imagine a report to a higher authority instituting                      retained and subsequently continued, even by another process,
+some action taken against what/whoever is responsible for                        after they return. Capabilities lacking ENVRTS may not be
+User-2's behavior.                                                               used in incarnating these LNSes.
+
+
+
+                                                                           153
+       The problem of guaranteeing that no information initially                                              Nelson guarantees confinement by calling the Tax
+contained in some selected subset of objects can escape                                                procedure through a capability from which Nelson has removed
+outside of its execution environment is called the Selective                                           MDFYRTS. 18 Just as MDFYRTS masks MDFYRTS on loads, it
+Confinement problem. 17 HYDRA makes no attempt to solve the                                            masks MDFYRTS in all capabilities in the incarnated LNS
+Selective Confinement problem but concentrates instead on the                                          inherited from the procedure (but not those passed as
+less general, but still important Confinement problem, which                                           arguments). This guarantees that information cannot be leaked
+requires a guarantee that no information at all may escape                                             to a spy, as figure 3.3 shows, since such leakage would require
+from a suitably called procedure (incarnating a confined LNS)                                          modification of some object (such as Comm in the figure)
+except to objects designated by the caller.                                                            inherited from the procedure. 19
+
+        The best example illustrating the use of selective                                                   The use of MDFYRTS to confine LNSes is a little different
+confinement is the problem faced by a confined LNS producing                                           than its usage as explained under the Modification section.
+a bill for services rendered. Either the system must provide a                                         However, there are some interesting effects of this marriage of
+facility for producing prix fixe bills under such circumstances                                        usage. First, we must guarantee (in general) that any
+(with minor variations as described by [Rot73]) or the caller                                          procedure called from a confined LNS incarnates a confined
+runs the risk that the bill can be used to encode information                                          LNS as well, else a confined LNS could leak information through
+that should remain confined. With selective confinement, the                                           a procedure it calls. However, as figure 3.4 illustrates,
+caller can allow the confined LNS to produce a bill that may                                           all inherited procedure capabilities in a confined LNS
+vary depending upon the non-sensitive arguments only.                                                  automatically have MDFYRTS removed and thus, when called
+                                                                                                       must produce confined LNSes. Lampson calls this property
+       Figure 3.3 illustrates a well known example of the                                              Transitivity [Lain73].
+need for confinement and shows how Hydra solves it.
+Consider a user (Nelson) who wants to execute a Tax                                                         User    (L':S)                    P (PPROCEDLrKE)
+
+
+Procedure. He passes in a capability for an object containing
+all relevant data concerning his income, expecting that when
+the procedure returns, the same object will contain a
+completed tax form. Unfortunately, the tax program potentially
+could communicate with a spy and Nelson wants to prevent
+that communication. Even a single bit of leakage might be
+harmful (it might, for example, encode whether or not Nelson
+has controlling interests in more than 10 major banks).                                                                                                         ,""
+   Nelson    (LNS)
+                                                                                                                                 •        |           c m | %           m   -   MDFYRT$
+                                             Tax    (PROCEDURE)
+
+
+                                                                                                        I          "'"       I       "~   LLV--J
+                                                                           Co=~   (tr~rlv)
+
+
+
+
+        (DATA)
+                                     '<..., : ,-..,\                                                                                                       Figure 3.4
+
+
+   V--                                                   (LNS)         ,                                      Note though, that only the inherited capabilities and not
+                                                           ~ ,;                                        those passed as arguments have MDFYRTS removed. The
+    I - LOADRTS
+    s - STORT$
+                     "l                                                                                objects passed as parameters represent safe channels through
+    k - KILLRT S                                                                                       which data and capabilities may be returned to the caller. In
+    g - GETTRTS
+    p - PUTRTS
+                          ,
+                              ,
+                               ',
+                                         L . . . g.p m l ~ 'I x,
+                                         I                        ,        L_..__J
+                                                                           I I ~ ~/                    particular, the caller may provide as a parameter, a capability
+    m   - MDFYRTS
+                                                                                                       for a procedure with MDFYRTS. In such a case, the procedure
+    ¢ - CALLRTS
+                                \
+                                    ,,
+                                                   ..-
+                                         t. . . . . .
+                                                            ,
+                                                                  ,i
+                                                                           I                 I
+                                                                                                       when called, will no._[ be confined. This is acceptable because
+                                                                                                       the original caller, in passing such a capability, has effectively
+                                                                                                       vouched for its safety. Thus, transitivit~Df confinement need
+                                                                                                       not be absolute as required by Lampson.cu
+                                                         Figure 3.3
+
+
+
+
+                                                                                                       18. UCNFRTS in the actual implementation.
+
+                                                                                                       19. This solution does not prevent (nor need to prevent) the
+17. Jones and Lipton [Jt75] produce a solution to a version of                                         confined LNS from copying information which is to be confined
+this problem that corresponds to a situation in which objects in                                       into a new object created by the LNS (which wil_.J, have
+general contain only data but not capabilities. Their formulation                                      MDFYRTS) since no capability for the new object can escape
+can be extended, although one must be careful to avoid the                                             the confined LNS. But, it must be noted that Hydra's solution
+"sneaky signalling" problems detailed by Rotenberg [Rot73].                                            does not solve the confinement problem completely. Covert
+The reader is invited to construct a solution to the Selective                                         channels may still be used to leak information [Lain73], though
+Confinement problem by positing additional rights and                                                  at a low bandwidth. For example, the pattern of memory
+combining the solution to the Confinement problem given here                                           access of a confined LNS may cause certain memory
+wi.th the results of Jones and Lipton.                                                                 interference patterns that could be detected by a spy.
+
+
+
+                                                                                                 154
+                                                                                                   As illustrated in figure 3.5, when a procedure is called
+3.6 Initialization                                                                           through a capability lacking ENVRTS, all capabilities in the
+                                                                                             incarnated LNS inherited from the procedure have ENVRTS
+      In our earlier discussion of the Conservation problem we
+                                                                                             removed. In the example above, no object already available to
+showed how a procedure could be prevented from storing
+                                                                                             the Datafile-lnit procedure could be stored in the Datafile, only
+away or sharing a capability for an object (or objects in its
+                                                                                             newly created objects (or capabilities passed to Datafile-Init
+representation) passed to it. This solution depended upon an
+assurance that the procedure did not already have "own"                                      with ENVRTS) may be stored in it.
+access to the object or some object in its representation. This
+expectation may especially be violated in the initialization of                                     To safely initialize an object (or to completely solve the
+the object.                                                                                  Modification Problem whenever we pass a capability for an
+                                                                                             object containing MDFYRTS to a procedure), it is necessary to
+         Initializing a newly created object entails the generation                          call the procedure via a capability containing neither ENVRTS
+ of its representation. Suppose that Datafile-lnit initialized a                             nor MDFYRT$. In that way, we guarantee that any new
+ Datafile passed to it by creating a Data object and storing it in                           capabilities placed in the object will be for newly created
+ the Datafile. We want to prevent Datafile-lnit from either                                  objects and that the entire representation of the object will be
+ making the Datafile or the newly created Data object available                              unavailable to the demonic user.
+ to a demonic user, else that demonic user might scribble on it
+ at unexpected times in the future. Restricting ENVRTS when
+ passing the Datafile to Datafile-Init will not suffice, since a                             3.7 Revocation and Guarantees
+ capability for the newly created Data object could be made
+ available to the demonic user at the same time i t is used to                                      Users do not always correctly predict what rights should
+ initialize the Datafile. This can be prevented by confining                                 be extended to other users. Forgetful book borrowers, drunk
+ Datafile-Init (calling it without MDFYRTS). In that way, no                                 drivers and unscrupulous business partners are but a few of
+ capability for either the Datafile or the newly created Data                                the real world instances where some kind of revocation is
+•object can be propagated beyond Datafile-lnit's environment.                                desirable.
+
+       Unfortunately, confinement alone is not enough. Instead                                      Protection systems have an edge over the rear world.
+of initializing the Datafile with a newly created Data object,                               We can provide mechanisms to support revocation more
+Datafile-lnit might use a Data object that it already shares with                            efficient than the courts, yet less bloody than police states or
+the demonic user. Hydra solves this problem by restricting the                               organized crime. However, revocation without recourse
+inheritance of ENVRTS across amplification in the same manner                                evokes an additional set of problems. A protection system that
+as for MDFYRTS. A capability produced by amplification will                                  provides revocation has a responsibility to provide mechanisms
+contain ENVRTS only if both the given capability as well as the                              that can prevent revocation as well.
+amplifying template contain ENVRTS.
+                                                                                                   We again note how this conflict supports the validity of
+                                  Dater    [[e-lnlt
+                                                                                             the Hydra philosophy of policy/mechanism separation. Hydra
+    User     (L.NS)                       (PROCEIXI RE )                                     provides mechanisms that support both revocation and its
+                                                                                             prevention. The matter of providing policies that determine
+                                                                                             whether ei~.her mechanism can be used in a specific instance is
+                                                                                             not provided. Rather, that is left to user subsystems which
+                                                                                             can be used to legislate arbitrarily complex sets of rules.
+
+                        K2=.:o                                  ./                           3.7.!   Revocation
+
+                                                                                                    Users may want the ability to revoke access to objects
+                                                                                             they have shared with others. There are a number of
+                                                                                             different kinds of revocation. Any system (in particular Hydra)
+                                                                                             will probably attempt to solve only some of them. Some issues
+                                                                                             are:
+     p   -   ~'rRTS                                         I
+                       ".                                            e - E~VRTS
+     1 - tOADRI'S                                      //
+     •   -   STORTS         ~ ~    ~             ~ ~                     -   ~FYRTS
+
+     k   -   KILLRTS
+                                                                                                          Immediate Revocation. Does revocation occur
+                                                                     e   -   CALLRT$
+                                                                                                          immediately? if not, is there a way to know
+                                                                                                          when it has taken place?
+                                                       Figure 3.5
+                                                                                                          Permanent Revocation.       Can access be
+                                                                                                          permanently revoked - can it be guaranteed
+                                                                                                          that some class of users/programs will never
+                                                                                                          be able to gain access to an object?
+
+                                                                                                          Selective Revocation. Must we revoke
+20. This overly strict requirement of Lampson's is an instance                                            everyone's access to an object or can we be
+of a more general issue - one of Sufficiency. How are we to                                               more selective?
+insure that a solution to a protection problem does not
+unnecessarily exclude perfectly acceptable behaviors (such as                                            Partial Revocation. Can some subset of
+un.__confined calls to safe procedures by confined LNS's)? A                                             access privileges (e.g. MDFYRTS but not
+complete discussion of this issue is beyond the scope of this                                            LOADRTS) be revoked?
+paper but may be found in [Coh75]. There it is shown that
+even the Hydra solution is insufficient (though only slightly).
+
+
+
+                                                                                       155
+            Temporal Revocation. Can access be revoked
+            and then granted again?                                           Uaer-1
+                                                                                 (Z/rS)             User-2
+                                                                                                       (LNS)
+            Sharing and Revoking the right to revoke. If
+            a user has the right to revoke some access,
+           can that right be shared, and if so, can that
+           right itself be revoked?
+                                                                                                          ~ i!I-
+       Redell [Red74a] has described a system in which users
+could share capabilities indirectly in such a way that the
+original holder of the capability could at any time revoke one
+or more rights from any capabilities propagated from the
+original. His solution provides for immediate, selective and
+partial revocation, and can be extended readily to provide the
+ability to share and revoke the right to revoke [Red74b], and                                        Figure 3.7
+provide temporal revocation.
+
+      We believed that immediate, selective and temporal                         Figure 3.7 illustrates how Aliases may be nested. In the
+revocation were the most necessary and implemented a variant              diagram, User-1 has shared an Alias capability with User-2.
+of Redell's scheme using a mechanism of "Aliases". 21                     But User-2 (perhaps not even aware that his capability is for
+                                                                          an Alias) has interposed yet another Alias so that he may
+               L's~:~- 1 0 . N s )                                        additionally revoke access from anyone with whom he shares
+                                                                          the capability. User-2's ALLYRTS will allow him to break or
+                                                                          re-ally the link between the old Alias and the new Alias, but
+                                                                          not between the old Alias and the actual object.
+
+                                                                                 We promised early in this paper that our solution to
+                                                                          various protection problems would not introduce additional
+                                                                          mechanisms other than additional interpretation of Kernel
+                                                                          rights. We admit that Aliases are an exception to that
+                                                                          statement. However, we don't believe that they contradict the
+                                                                          more important criterion that additional mechanism not "clutter
+                                                                          up" the system design. With additional effort we could have
+                 I                   I                                    implemented partial revocation as well. We were not
+                                                                          completely convinced that partial revocation was necessary,
+                                         Figure 3.6                       and the additional mechanism that would have been required to
+                                                                          implement it would have caused what we felt was unnecessary
+                                                                          clutter.
+           The important issue in selective revocation is how to
+selectively specify the class of users that have their accesses                  On the other hand, we could envisage a number of uses
+revoked. The solution adopted by Hydra was to allow an Alias              for temporal revocation. Access to sensitive data might be
+(a new kind of entity) to be interposed between a capability              revoked except from 9 a.m. to 5 p.m. on weekdays. Or,
+and the object it referenced. Figure 3.6 shows how an Alias               access to a generally available list structured library might be
+may be created for an object and a capability for the Alias               temporarily revoked while the structure was being garbage
+shared with another user. A new capability references the                 collected or reorganized.
+Alias which contains a pointer to the original object. The Alias
+is ordinarily completely transparent and all accesses proceed                    We were skeptical about partial revocation because we
+as if the Alias were not there at all. The capability created for         believed that it would be most useful in Hydra when a user
+the Alias contains a new right, ALLYRTS, which may be                     erroneously made an object available to an untrustworthy user
+exercised to break the link between the Alias and the object it           with r ~ h t s allowing modification rather than read access
+p oi n t s to, thus effecting revocation.22                               alone.z ~ Unf ortunately, 'm Hydra, aliases involve a certain
+                                                                          overhead and in the situation above it seemed equally likely
+       The Temporal Revocation problem is solved since, with              that the user would have neglected to use Aliases in the first
+ALLYRTS, the link between an Alias and an object may be re-               place.
+established. Re-allying requires a capability both for the alias
+(with ALLYRTS) and a capability for the object originally                       Even if such an error were made, the original holder of
+referenced by the alias before revocation took place.                     the capability could simply make a copy of the object and then
+                                                                          destroy the original, effectively causing revocation. The only
+                                                                          question that remains is how to disperse the new copy to
+                                                                          those who legitimately could read the original.
+
+21. The implementation of aliases is not yet complete.
+Unfortunately, neither is Destroy, the k-call which would effect
+non-selective revocation.
+
+22. Since breaking or not breaking a link can be used to                  23. Partial revocation is useful in implementing revocation of
+encode information, an absence of MDFYRTS (actually                       the right to revoke. However, we felt that there would be
+UCNFRTS) masks ALLYRTS as well as MDFYRTS.                                little need for such a feature.
+
+
+
+                                                                    156
+       Fortunately, early experience with Hydra indicates that                                   The error in the argument is that User-l's reading of
+users will not hold tightly onto capabilities for shared objects.                          the file will be effected by a call on a File subsystem
+Rather, we expect that some kind of Directory subsystem will                               procedure as well, and that procedure can be constructed so
+be made generally available (a primitive version currently                                 as to wait until a write of the same file is completed.
+available is used very heavily) and that the Directory                                     Admittedly this is not a completely adequate answer for a
+subsystem will supply procedures to store, retrieve and                                    system specified in a way that allows multiple simultaneous
+control the access to various objects. Users will likely only                              updates of a file.
+retrieve a capability from the Directory subsystem when
+needed, retaining the capability only as long as it is useful.                                     Allowing amplification to circumvent revocation has
+Thus, a copy of a destroyed object can be dispersed simply by                              another interesting side-effect              it allows an unsavory
+having a capability for it replace one for the destroyed object                            subsystem to subvert revocation. If the unsavory subsystem
+in the appropriate directory. Users still holding onto a                                   makes an amplifying template generally available, a user given
+capability for the destroyed object will eventually find they                              an Aliased capability can acquire a capability for the actual
+can no longer use it and can retrieve its replacement from the                             object and thus revocation will have no effect. Clearly, w e
+directory.                                                                                 don't expect this kind of behavior on behalf of a subsystem.
+                                                                                           This problem points up yet again the delicate balance between
+       The introduction of Aliases was not Without difficulties.                           trusting a subsystem and trying to find mechanisms that force
+It raised an interesting issue (also discussed by Redell) that                             it to fulfill certain of its specifications.
+clearly points out the tradeoff between permitting and
+preventing revocation.                                                                            Finally, we emphasize that Hydra revocation only
+                                                                                           revokes access, not information. Users may realize too late
+              Operations that manipulate the representation of non-                        that they have made read access available to information that
+kernel-supported objects generally take place in procedures                                they considered confidential. Revocation as described here
+(like Datafile-Init) that comprise the protected subsystem for                             does not solve that problem. Another user may have already
+that object's type. During execution of such.procedures, it is                             copied that information onto a listing device and no mechanism
+likely that for some amount of time the object may be in an                                residing purely within the computer system can bring it back.
+inconsistent state. If access to the object is revoked during
+t h a t - t i m e , subsequent calls on the protected subsystem,
+especially with that object as an argument, may produce                                    3.7.2   Guaranteeing Access - Freezing
+undefined results.
+                                                                                                  Users will often want assurance that access to an object
+                                                     Daca f t l e . . ~ u n 8
+                                                                                           will not be revoked at awkward times. At first there may
+                   (L,IS)                                (PROCEDLrPJ~)
+           User
+                                                                                           appear to be a large class of such problems, but some analysis
+                                                                                           indicates otherwise. First, the case of guaranteed access
+                                                                                           during execution of a subsystem was discussed in the previous
+                                                                                           section, so we need only concentrate on revocation that
+                                                                                           affects "users". There are two instances - a user wants
+                                                                                           guaranteed access to an object he simply "uses" - reads or
+                                                                                           executes - or he wants guaranteed access to an object he
+                                                                                           modifies as well.
+
+                                                                                                 When two users share the right to modify an object,
+                            ~-,,                         L===J                             either they are cooperating or they are not. If they are
+                                                                                           cooperating, why are they doing something as bizarre as
+                                                                                           unexpected revocation? There are better ways to reach
+        ~1-----]                     "-.                 . - -       :~ ",",               agreements about usage of the object.
+          /=====.-I~,~                     "..               ...                /,
+
+                                                                                                  If they are not cooperating, we must wonder why they
+                       1 - LOADRTS               c   .   CALLRTS
+                                                                                           are sharing modify access. It seems that the only reasonable
+                       s - STORTTS
+                       k - KILLRT$               m - FtDFVRTS                              answer is that one user has contracted with a second user to
+                                                                                           perform some function on the shared object. Revoking access
+                                                                                           indicates that the first user is revoking the contract. The only
+                                           Figure 3.8                                      issue facing the second user is - how can the first user be
+                                                                                           forced to pay for resources expended by the second user
+                                                                                           (perhaps plus punitive costs) before revocation took place.
+       Hydra's solution to this problem is illustrated in figure                           Such problems can be dealt with by user subsystems in ways
+3.8. When amplification takes place, the new capability                                    similar to that described in the following section.
+references the actual object rather than the Alias. Thus,
+revocation will not actually take effect while the protected                                       The cases left to consider involve guarantees during
+subsystem is accessing the object. Since it is not possible in                             reading and execution. Once a procedure has been called, a
+Hydra to tell the revoker when effective revocation has                                    separate LN$ is incarnated, so revocation of the procedure is
+occurred (when the subsystem procedure has returned), it                                   not a problem. However, a user may have expended resources
+seems possible that the following situation might occur: User-I                            predicated on his continuing ability to read a file or execute a
+revokes User-2's access to a file, while User-2 is writing via a                           procedure. But a guarantee against revocation is in fact not
+call to a File subsystem procedure. User-1 then reads the file                             sufficient. Another user may simply zero the file or change
+while it is still being written on behalf of User-2, producing an                          the procedure. Thus a guarantee against revocation is only
+inconsistent result.                                                                       useful coupled with a guarantee that no other user may modify
+                                                                                           or destroy the object.
+
+
+
+
+                                                                                     157
+       All of this is accomplished in Hydra by freezinR. 24 Once                Unfortunately, neither this (nor the SR! system) solves
+the creator of an object has placed within it those capabilities         the Lost Object Problem. Suppose that even though a user has
+and data that it will permanently contain, she may freeze it.            committed herself to paying for a track, she deletes all of her
+The capability for the object will have FRZRT$ set and                   capabilities for the track without notifying the Track
+MDFYRTS removed. The object can be frozen only if all                    subsystem. Billing is not the issue - the problem is that the
+capabilities in the object's C-list are already frozen (have             track has been lost. If the disk is oversubscribed, it should not
+FRZRTS set), thus FRZRTS guarantees not only that the                    be necessary to revoke some other user's track if the
+contents of the object remain permanently fixed, but those of            subsystem has discovered that some lost (unwanted) track is
+all objects in its representation as well. Like MDFYRTS and              available.
+ENVRTS, FRZRTS cannot be gained through amplification.
+                                                                                Of course, the fact that a user has deleted all of her
+      Furthermore, aliases cannot be frozen, and while an alias          capabilities for the track does not necessarily indicate that the
+can be made from a frozen capability, the capability created             track was unwanted. In many systems, users often bemoan the
+for the alias will not contain FRZRTS. Thus a capability                 fact that they have mistakenly deleted an irreplaceable file. In
+containing FRZRTS acts as a guarantee against revocation as              either case, it is clear that the ability to retrieve some types
+well.                                                                    of objects when all capabilities for them have been deleted is
+                                                                         quite useful.
+       It is worth noting once again just how useful such
+guarantees are for publicly available procedures. Users of a                     In such a situation, Conservation or limiting propogation
+computer system cringe so often when a compiler has been                 of capabilities is extremely important. If a user mistakenly
+erroneously modified and no backup version has been made                 deletes all of her capabilities for an object while a capability is
+available. If users would demand frozen versions, new                    still retained by the "demonic user", the object will not be
+versions would necessarily have to be made available in a                retrieved.
+different (and hopefully more humane) way. 25
+                                                                                In Hydra, a decision about retrievability may be made on
+                                                                         a type by type basis when a new type is first created. A
+3.8 The Accounting and Lost Object Problems                              mechanism is provided which will retrieve a capability for an
+                                                                         object of that type whose capabilities have all been deleted.27
+      Let us consider a Track subsystem responsible for                  A subsystem can use this mechanism to provide a wide range
+managing a disk and which makes available objects of type                of policies with respect to lost objects.
+Track. Users having a Track capability may read or write the
+disk track it represents by making calls on procedures                          Through the construction of subsystems, procedures
+supplied by the Track subsystem.                                         provide the mechanism necessary for the 'implementation of
+                                                                         general policies involving future negotiated decisions.
+       The Hydra philosophy asserts that objects do not                  Subsystem procedures can contain the code that can decide, as
+inherently have owners. All holders of a capability share                situations arise, whether a user can be given access to a
+responsibility for it - although there may be de-facto                   scarce resource like a track, an object previously lost, or some
+ownership in the sense that one user has rights to access the            other object for which a prior unilateral access decision is
+object more powerful than other users. In the case of a                  inappropriate. ]t is subsystem procedures that can allow users
+limited resource, such as a track, it does become relevant to            to negotiate and make and break rules permitting access to
+ask who pays for it? This is important not only as a billing             information.
+issue, but also in the sense of guaranteeing that some user will
+not hog the resource. Other systems, such as one developed
+at $RI [Neu74], force such objects to be held in accounting
+directories. Even though Hydra itself does not enforce such a            4. Conclusion
+policy, it is easy to construct a subsystem which does.
+
+       Let us suppose that whenever a user logs in, the Login                   We have described how Hydra has solved a number of
+routine places in the user's initial LNS a capability for an             interesting protection problems by simply extending the
+object uniquely identifying the user. 26 Before supplying a new          interpretation of rights rather than providing a pastiche of
+track, the Track subsystem demands a capability for the User
+                                                                         unrelated mechanisms (except for Aliases and Retrievability).
+object and uses that to determine who will pay for the track.
+If the user has overused her disk allocation, then the Track
+subsystem could simply refuse to provide a new track. If
+mistakes are made, revocation or destruction of the Track
+object c a n allow the Track subsystem to reallocate the
+physical track.
+                                                                         26. The details are beyond the scope of this section - but it is
+24. Like the alias mechanism, freezing also is not yet                   important to note that the notion of a "user" is not required by
+implemented.                                                             Hydra and can be provided by a User subsystem which has a
+                                                                         capability for the device On which the user logs in.
+25. FRZRTS also can be used to solve a problem described by
+Rotenberg [Rot73] as the Blind Service Problem. Even frozen              27. It is interesting ~o note that retrieving a lost object can
+procedures can get hold of system information, such as time of           be used to provide a channel of fairly high bandwidth. In
+day, which varies from call to call. Rotenberg describes                 order to prevent gross covert leakage out of confined LNSes,
+situations where this information may be used to sabotage the            we do not allow objects of retrievable types to be created by
+execution of a particular caller. We expect to solve this                confined LNSes. If we did, a confined LN$ could leak the
+problem in Hydra by preventing procedures called through                 integer n by creating and deleting n objects of a retrievable
+capabilities containing FRZRTS from obtaining such system                type.
+information.
+
+
+                                                                   158
+       As noted by Peuto [Peu74] in his comparative study of               Cos74    Cosserat, D. C., "A Data Model Based on the Capability
+Real Estate Law and Protection Systems, sophisticated                               Protection Mechanism", International Workshop on
+protection desired by users of a protection system is, in                           Protection in Operating Systemsj ]RiA, 1974.
+principle, no different than that desired by parties to a legal
+contract. There are the attendant issues of remedies and                   Dab66    Dahl, O.-J., and Nygaard, K., "Simula - An Algol-Based
+adjudication to be considered if the contract is broken, either                     Simulation Language", Communications of the ACM 9, 9
+purposefully by one of the parties, or accidentally due to                          (September 1966).
+machine or program error.
+                                                                           Din73    Dingwall, T. J., Communication within Structured
+       ]t is certainly possible that mechanisms more                                Operating Systems, Cornell University Computer Science
+sophisticated than that provided directly may be desirable, but                     Dept., TR 73-167, May 1973.
+we hope that the Track example has convinced the reader that
+subsystems can fill this need. More complex protection needs               Fab74    Fabry,     R.,     "Capability-Based      Addressing",
+lead inevitably to tradeoffs between the desire to restrict or                      Communications of the ACM 1.7, 7 (July 1974).
+revoke access and the desire to guarantee certain kinds of
+behavior (not only guarantees against revocation). Our                     Gra72    Gray, J., Lampson, B., Lindsay, B., Sturgis, H., The
+difficulty with revocation during subsystem calls was a simple                      Control Structure of an Operating System, IBM Research
+example of this tradeoff and leads us to conclude in general                        RC 3949, July 1972.
+that such decisions should be made by users (through
+subsystems constructed by them) rather than by the                         Jon73    Jones, A., Protection in Programmed Systems, Ph.D.
+protection system directly.                                                         thesis, Carnegie-Mellon University, June 1973.
+
+       We can make no promise that our list of protection                  JL75     Jones, A. and Lipton, R., "The Enforcement of Security
+problems is complete. [t is a list of those that we have tried                      Policies for Computation", Proceedings of the 5th
+to solve in our design of Hydra and those discovered by other                       Symposium on Operating System Principles, Austin,
+operating system builders. From that perspective, and from                          Texas, Nov. 1975.
+the limited experience of those already using HYDRA, we
+believe that the protection mechanisms we have provided                    Lain69   Lampson, B. W., "Dynamic Protection Structures",
+adequately and reasonably meet the needs of Hydra users.                            AFIPS Conference Proceedings, FJCC 1969.
+
+      Of course, the approach taken by Hydra is based in the               Lam73    Lampson, B., "A Note on the Confinement Problem",
+world of programming languages and file systems. The large                          Communications of the ACM 1.6, 10 (October 1973).
+Data Base systems of the future will likely have different
+protection needs. Access to information may be intimately tied             Lau74    Lauer, H. C., "Protection and Hierarchical Addressing
+to the values of the information itself as well as the history of                   Structures", International Workshop on Protection in
+previous access and the expectations of future access.                              Operating Systems, JR[A, 1974.
+
+       Nonetheless, the problems we have discussed here will               Lev75    Levin, R, Cohen, E., Corwin, W., Pollack, ~'., Wulf, W.,
+remain. [t is our hope that the essentially simple mechanisms                       "Policy/k4echanism Separation in HYDRA", Proceedings
+we have provided will encourage builders of future systems to                       of the 5t!'~.Symposium on Operating System Principles,
+realize that they can do the same. Sadly, it seems that is the                      Austin, Texas, Nov. 1975.
+only hope for insuring the privacy of private information so
+madly collected and compulsively stored by this information                Lis74    Liskov, B,, A Note on CLU, Computation Structures
+hungry society.                                                                     Group Memo 112, M[T Project MAC, Nov. 1974.
+
+                                                                           Mor73    Morris, J., "Protection in Programming Languages",
+                                                                                    Communications of the ACM 16, I (January 1973).
+5. Acknowled[ement=
+                                                                           Neu74    Neumann, P. et. al., "On the Des|gn of a Provably
+                                                                                    Secure Operating System", International Workshop on
+      The authors wish to express their appreciation to those                       Protection in Operating Systems, [R]A, August 1974.
+who were active in the implementation and design of the Hydra
+system, notably Bill Wulf and Anita Jones. We also wish to                 Org73    Organick, E., Computer System Organization: The
+thank numerous members of the MIT community whose                                   B5700/B6700 Series, ACM Monograph Series,
+comments on an early presentation of this material helped                           Academic Press, 1973.
+considerably in improving the contents of this paper.
+                                                                           Peu74    Peuto, B., Comparative Study of Real Estate Law and
+                                                                                    Protection Systems, Ph. O. thesis, University of
+                                                                                    California at Berkeley, ERL-k/A39, May 1974.
+6. Reference=                                                              Red74a Redell, D., Naming and Protection in Extendible
+                                                                                  Operating Systems, Massachusetts Institute of
+                                                                                  Technology, MAC TR-140,.November, 1974.
+
+                                                                           Red74b Redell, D. and Fabry, R., "Selective Revocation of
+Coh75    Cohen, E., Modelling Protection, Ph. D. thesis, Carnegie-                Capabilities", International Workshop on Protection in
+         Mellon University (to appear).                                           Operating Systems, [RIA, 1974.
+
+
+
+
+                                                                     159
+Rot73   Rotenberg, L., Making Computers Keep Secrets, Ph. D.
+        thesis, Massachusetts Institute of Technology, MAC
+        TR-116, September 1973.
+
+Sch72   Schroeder, M., Cooperation ofMutually Suspicious
+        Subsystems in a Computer Utility, Ph. D. thesis,
+        Massachusetts Institute of Technology, MAC TR-104,
+        Sept. 1972.
+
+Wa174   Walter, K., et. al., Primitive Models for Computer
+        Security, Case Western.Reserve University Technical
+        Report ESD-TR-74-117, January [974.
+
+Wei69   Weissman, C., "Security Controls in the ADEPT-50
+        Time-Sharing System", AFIPS Conference Proceedings
+        35, FJCC 1969.
+
+Wu174b Wulf, W., Alphard: Toward a Language to Support
+       Structured Programs, Carnegie-Mellon University
+       Technical Report, 1974.
+
+WLP75 Wulf, W., Levin, R., Pierson, C., "An Overview of the
+      HYDRA Operating System Development', Proceedings
+      of the. 5th Symposium on Operating System Principles,
+      Austin, Texas, Nov. 1975.
+
+
+
+
+                                                               160
+

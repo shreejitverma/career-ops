@@ -1,0 +1,465 @@
+     Spotlight
+
+
+                                           Unraveling the
+                                           Web Services Web
+                                           An Introduction to SOAP,
+                                           WSDL, and UDDI
+                                          Francisco Curbera, Matthew Duftler, Rania Khalaf,William Nagy,
+                                          Nirmal Mukhi, and Sanjiva Weerawarana • IBM T.J.Watson Research Center
+
+
+
+
+                      O
+                               ver the past few years, businesses have                    ■     the Web Services Description Language (WSDL,
+                               interacted using ad hoc approaches that                          www.w3.org/TR/wsdl.html), which provides a
+                               take advantage of the basic Internet infra-                      formal, computer-readable description of Web
+                      structure. Now, however, Web services are emerg-                          services; and
+                      ing to provide a systematic and extensible frame-                   ■     the Universal Description, Discovery, and Inte-
+                      work for application-to-application interaction,                          gration (UDDI, www.uddi.org) directory, which
+                      built on top of existing Web protocols and based                          is a registry of Web services descriptions.
+                      on open XML standards.
+                         Say, for example, that you want to purchase a                    At this point, Web services technology is still
+                      vacation package using an online travel agent. To                   emerging, and researchers are still developing
+                      locate the best prices on airline tickets, hotels, and              important pieces, including quality of service
+                      rental cars, the agency will have to poll multiple                  descriptions and interaction models. Because the
+                      companies, each of which likely uses different,                     Web services framework is modular, however, you
+                      incompatible applications for pricing and reserva-                  can use just the parts of the stack you need. There-
+                      tions. Web services aim to simplify this process by                 fore, developers can take advantage of the avail-
+                      defining a standardized mechanism to describe,                      able specifications and tooling now and incorpo-
+                      locate, and communicate with online applications.                   rate more modules as the technology matures.
+                      Essentially, each application becomes an accessible
+                      Web service component that is described using open                  Communication: SOAP
+                      standards. An online travel service could thus use                  Given the Web’s intrinsically distributed and het-
+                      the same Web services framework to locate and                       erogeneous nature, communication mechanisms
+                      reserve your package elements, as well as to lease                  must be platform-independent, international, secure,
+                      Internet-based credit check and bank payment ser-                   and as lightweight as possible. XML is now firmly
+                      vices on a pay-per-use basis to expedite fund trans-                established as the lingua franca for information and
+                      fers between you, the travel agency, and the vendors.               data encoding for platform independence and inter-
+                         The Web services framework is divided into                       nationalization. Building a communication protocol
+                      three areas — communication protocols, service                      using XML is thus a natural answer for Web services.
+                      descriptions, and service discovery — and specifi-                     Enter SOAP, which was initially created by
+                      cations are being developed for each. In this arti-                 Microsoft and later developed in collaboration with
+                      cle, we look at the specifications that are current-                Developmentor, IBM, Lotus, and UserLand. SOAP
+                      ly the most salient and stable in each area:                        is an XML-based protocol for messaging and
+                                                                                          remote procedure calls (RPCs). Rather than define
+                      ■    the simple object access protocol (SOAP,                       a new transport protocol, SOAP works on existing
+                           www.w3.org/2000/xp) which enables commu-                       transports, such as HTTP, SMTP, and MQSeries.
+                           nication among Web services;                                      At its core, a SOAP message has a very simple
+
+86    MARCH • APRIL 2002          http://computer.org/internet/   1089 -7801/ 02/$17.00 ©2002 IEEE                           IEEE INTERNET COMPUTING
+                                                                                                              Web Services
+
+                                                             <SOAP:Envelope xmlns:SOAP=
+structure: an XML element with two child ele-                      “http://schemas.xmlsoap.org/soap/envelope/”>
+ments, one of which contains the header and the                 <SOAP:Header>
+other the body. The header contents and body ele-                  <!— content of header goes here —>
+ments are themselves arbitrary XML. Figure 1                    </SOAP:Header>
+shows a SOAP envelope’s structure.                              <SOAP:Body>
+   In addition to the basic message structure, the                 <!— content of body goes here —>
+SOAP specification defines a model that dictates                </SOAP:Body>
+how recipients should process SOAP messages. The             </SOAP:Envelope>
+message model also includes actors, which indi-
+cate who should process the message. A message           Figure 1. Structure of a SOAP message.The envelope features child
+can identify actors that indicate a series of inter-     elements that contain the message header and body elements.
+mediaries that process the message parts meant for
+them and pass on the rest.
+                                                             POST /travelservice
+Messaging Using SOAP                                         SOAPAction: “http://www.acme-travel.com/checkin”
+At the basic functionality level, you can use SOAP           Content-Type: text/xml; charset=“utf-8”
+as a simple messaging protocol. Throughout this              Content-Length: nnnn
+article, we’ll illustrate the Web services specifica-
+tions using a simple example drawn again from the            <SOAP:Envelope xmlns:SOAP=
+travel services industry. Our traveler, Joe, is sched-             “http://schemas.xmlsoap.org/soap/envelope/”>
+uled for an afternoon flight and wants to checkin               <SOAP:Body>
+electronically. We’ll assume that Joe knows of a                   <et:eTicket xmlns:et=
+service with an electronic CheckIn method and that                    “http://www.acme-travel.com/eticket/schema”>
+he knows the format for encoding the ticket. Given                    <et:passengerName first=“Joe” last=“Smith”/>
+this, he could simply create and send a SOAP mes-                     <et:flightInfo airlineName=“AA”
+sage to that service for processing.                                                flightNumber=“1111”
+   Figure 2 shows such a SOAP message, carried by                                   departureDate=“2002-01-01”
+HTTP. The HTTP headers are above the SOAP:Enve-                                     departureTime=“1905”/>
+lope element. The POST header shows that the mes-                  </et:eTicket>
+sage uses HTTP POST, which browsers also use to                 </SOAP:Body>
+submit forms. Following the POST header is an                </SOAP:Envelope>
+optional SOAPAction header that indicates the mes-
+sage’s intended purpose. If there were a response,       Figure 2. SOAP message containing an e-ticket.The SOAPAction
+the HTTP response would be of type text/xml, as          header indicates the message’s purpose. In a real-world scenario,
+declared in the Content-Type header, and could           the message would contain additional information, including the
+contain a SOAP message with the response data.           sender’s credentials.
+Alternatively, the recipient could deliver the
+response message later (asynchronously).
+   Note that the message in Figure 2 has no SOAP         ■   where the various RPC parts are carried (object
+headers; the body simply contains an XML repre-              identity, operation name, and parameters).
+sentation of an e-ticket with the person’s name
+and flight details. Any realistic B2B scenario           The W3C’s XML schema specification (www.
+would, of course, have many headers indicating           w3.org/XML/Schema) provides a standard lan-
+further information, including the sender’s cre-         guage for defining the document structure and the
+dentials and correlation information.                    XML structures’ data types. That is, given a type
+                                                         like integer or a complex type, such as a record
+Remote Procedure Calls Using SOAP                        with two fields (say, an integer and a string), XML
+To use SOAP for RPCs, you must define an RPC             schema offers a standard way to write the type in
+protocol, including:                                     XML. To enable transmission of the typed values,
+                                                         SOAP assumes a type system based on the one in
+■   how typed values can be transported back and         XML schema and defines its canonical encoding
+    forth between the SOAP representation (XML)          in XML. Using this encoding style, you can pro-
+    and the application’s representation (such as a      duce an XML encoding for any type of structured
+    Java class for a ticket), and                        data. RPC arguments and responses are also rep-
+
+IEEE INTERNET COMPUTING                                                     http://computer.org/internet/   MARCH • APRIL 2002   87
+Spotlight
+
+     POST /travelservice
+     SOAPAction: “http://www.acme-travel.com/flightinfo”                       which automatically generate and process the
+     Content-Type: text/xml; charset=“utf-8”                                   SOAP messages. Assuming the messages conform
+     Content-Length: nnnn                                                      to SOAP specifications, they can thus be exchanged
+                                                                               by services implemented in different languages.
+     <SOAP:Envelope xmlns:SOAP=
+         “http://schemas.xmlsoap.org/soap/envelope/”>                          Description:WSDL
+       <SOAP:Body>                                                             Speaking a universal language is not very useful
+         <m:GetFlightInfo                                                      unless you can maintain the basic conversations
+           xmlns:m=“http://www.acme-travel.com/flightinfo”                     that let you achieve your goals. For Web services,
+           SOAP:encodingStyle=                                                 SOAP offers basic communication, but it does not
+             “http://schemas.xmlsoap.org/soap/encoding/”                       tell us what messages must be exchanged to suc-
+           xmlns:xsd=“http://www.w3.org/2001/XMLSchema”                        cessfully interact with a service. That role is filled
+           xmlns:xsi=                                                          by WSDL, an XML format developed by IBM and
+             “http://www.w3.org/2001/XMLSchema-instance”>                      Microsoft to describe Web services as collections
+           <airlineName xsi:type=“xsd:string”>UL                               of communication end points that can exchange
+           </airlineName>                                                      certain messages. In other words, a WSDL docu-
+             <flightNumber xsi:type=“xsd:int”>506                              ment describes a Web service’s interface and pro-
+             </flightNumber>                                                   vides users with a point of contact.
+         </m:GetFlightInfo>                                                       In this section, our examples are fragments of a
+       </SOAP:Body>                                                            WSDL document that describes a Web service that
+     </SOAP:Envelope>                                                          can process the two types of interactions in our
+                                                                               SOAP examples. The first interaction, GetFlightIn-
+Figure 3. SOAP RPC call.To find out if his flight is on time, Joe              fo, is accessed using the SOAP RPC model; it takes
+sends a string containing the airline’s name and an integer with               an airline name and a flight number and returns a
+the flight number.                                                             complex (or structured) type with flight information.
+                                                                               The second, CheckIn, uses pure SOAP messaging; it
+                       resented using this encoding.                           expects to receive an XML representation of an elec-
+                          Now, let’s say Joe wants to know whether his         tronic ticket, and returns no information.
+                       flight has been delayed. He knows that the service         A complete WSDL service description provides
+                       has a function, GetFlightInfo, which takes two          two pieces of information: an application-level
+                       arguments — a string containing the airline name        service description, or abstract interface, and the
+                       and an integer with the flight number — and returns     specific protocol-dependent details that users must
+                       a structured value (a record) with two fields — the     follow to access the service at concrete service end
+                       gate number and flight status. In this case, Joe can    points. This separation accounts for the fact that
+                       get flight status by sending the service an HTTP POST   similar application-level service functionality is
+                       carrying a SOAP envelope like the one in Figure 3.      often deployed at different end points with slight-
+                          In this SOAP envelope, the call to GetFlight-        ly different access protocol details. Separating the
+                       Info is an XML element with attributes that             description of these two aspects helps WDSL rep-
+                       include information about the encoding (note the        resent common functionality between seemingly
+                       references to XML schema). The element’s children       different end points.
+                       are the method call’s arguments: airlineName and
+                       flightNumber. Their types are defined in the type       Abstract Description
+                       attributes, where xsd refers to the XML schema          WSDL defines a service’s abstract description in
+                       definitions. When the SOAP implementation               terms of messages exchanged in a service interac-
+                       receives the message, it converts the XML text for      tion. There are three main components of this
+                       UL and 506 into the appropriate string and integer      abstract interface: the vocabulary, the message,
+                       based on the service’s implementation. It then calls    and the interaction. Agreement on a vocabulary is
+                       the GetFlightInfo method with those arguments.          the foundation of any type of communication.
+                          Figure 4 shows the response to this request. In      WSDL uses external type systems to provide data-
+                       this case, the response contains a structured value     type definitions for the information exchange.
+                       with the subvalues for gate number and flight sta-      Although WSDL can support any type system,
+                       tus. Luckily, Joe’s flight is on time.                  most services use XSD. Figure 5 shows two data
+                          SOAP implementations exist for several pro-          types defined in XSD (string and int), and two
+                       gramming languages, including C, Java, and Perl,        data types defined in external schema (Flight
+
+88     MARCH • APRIL 2002          http://computer.org/internet/                                                 IEEE INTERNET COMPUTING
+                                                                                                              Web Services
+
+                                                            HTTP/1.1 200 OK
+InfoType and Ticket). WSDL can import such                  Content-Type: text/xml; charset=“utf-8”
+external XSD definitions using an “import” ele-             Content-Length: nnnn
+ment specifying their location.
+   WSDL defines message elements as aggrega-                <SOAP:Envelope xmlns:SOAP=
+tions of parts, each of which is described by XSD               “http://schemas.xmlsoap.org/soap/envelope/”>
+types or elements from a predefined vocabulary.               <SOAP:Body>
+Messages provide an abstract, typed data defini-                <m:GetFlightInfoResponse
+tion sent to and from the services. The example in                  xmlns:m=“http://www.acme-travel.com/flightinfo”
+Figure 5 shows the three messages that might                        SOAP:encodingStyle=
+appear during a Web services interaction. The mes-                    “http://schemas.xmlsoap.org/soap/encoding/”
+sage, GetFlightInfoInput, has two parts: airli-                     xmlns:xsd=“http://www.w3.org/2001/XMLSchema”
+neName, which is an XSD string, and flightNum-                      xmlns:xsi=
+ber, which is an XSD integer. The other two                           “http://www.w3.org/2001/XMLSchema-instance”>
+messages, GetFlightInfoOutput and CheckInIn-                      <flightInfo>
+put have only one part each. The operation and                      <gate xsi:type=“xsd:int”>10</gate>
+portType elements combine messages to define                        <status xsi:type=“xsd:string”>ON TIME</status>
+interactions. Each operation represents a message                 </flightInfo>
+exchange pattern that the Web service supports,                 </m:GetFlightInfoResponse>
+giving users access to a certain basic piece of ser-          </SOAP:Body>
+vice functionality. An operation is simply a com-           </SOAP:Envelope>
+bination of messages labeled as input, output, or
+fault to indicate what part a particular message          Figure 4. SOAP RPC response.The travel service responds to Joe’s
+plays in the interaction.                                 request with a structured value containing subvalues for gate number
+   A portType is a collection of operations that are      and flight status.
+collectively supported by an end point. In our
+example, AirportServicePortType describes two
+operations: a single request-response operation,
+GetFlightInfo, which expects the GetFlight                  <message name=“GetFlightInfoInput”>
+InfoInput message as input and returns a Get-                 <part name=“airlineName” type=“xsd:string”/>
+FlightInfoOutput message as the response; and                 <part name=“flightNumber” type=“xsd:int”/>
+a one-way operation, CheckIn, which just takes              </message>
+the CheckInInput message as input.
+                                                            <message name=“GetFlightInfoOutput”>
+Concrete Binding Information                                  <part name=“flightInfo” type=“fixsd:FlightInfoType”/>
+So far, all of the elements that we have discussed          </message>
+describe the service’s application-level functionality.
+To complete the description of client–service inter-        <message name=“CheckInInput”>
+action, we need three more pieces of information:             <part name=“body” element=“eticketxsd:Ticket”/>
+                                                            </message>
+■   what communication protocol to use (such as
+    SOAP over HTTP),                                        <portType name=“AirportServicePortType”>
+■   how to accomplish individual service interac-             <operation name=“GetFlightInfo”>
+    tions over this protocol, and                               <input message=“tns:GetFlightInfoInput”/>
+■   where to terminate communication (the net-                  <output message=“tns:GetFlightInfoOutput”/>
+    work address).                                            </operation>
+                                                              <operation name=“CheckIn”>
+WSDL’s binding element provides the “what” and                  <input message=“tns:CheckInInput”/>
+“how” parts of this information, including the com-         </operation>
+munication protocol and data format specification           </portType>
+for a complete portType. In short, the binding ele-
+ment tells how a given interaction occurs over the        Figure 5.WSDL abstract description.This fragment shows the string
+specified protocol. Figure 6 (next page) shows a          and int data types, which are defined in XSD, and two other data
+fragment from our example. The binding describes          types defined in external schema: FlightInfoType and
+how to use SOAP to access the travelservice ser-          Ticket, which we assume were imported earlier in the WSDL file.
+
+IEEE INTERNET COMPUTING                                                     http://computer.org/internet/   MARCH • APRIL 2002   89
+Spotlight
+
+     <binding name=“AirportServiceSoapBinding”
+               type=“tns:AirportServicePortType”>                              this combination of abstract interface and proto-
+       <soap:binding transport=                                                col and data marshalling details (the binding). A
+               “http://schemas.xmlsoap.org/soap/http”/>                        port element describes a single end point as a
+       <operation name=“GetFlightInfo”>                                        combination of a binding and a network address.
+         <soap:operation style=“rpc”                                           Consequently, a service element groups a set of
+               soapAction=“http://acme-travel/flightinfo”/>                    related ports. In our travel service example, a sin-
+         <input>                                                               gle port describes an end point that processes
+           <soap:body use=“encoded”                                            SOAP requests for the travelservice service.
+               namespace=“http://acme-travel.com/flightinfo”
+               encodingStyle=                                                  Using WSDL
+               “http://schemas.xmlsoap.org/soap/encoding/”/>                   For users and developers, WSDL provides a for-
+         </input>                                                              malized description of client–service interaction.
+         <output>                                                              During development, developers use WSDL as the
+           <soap:body use=“encoded”                                            input to a proxy generator that produces client
+               namespace=“http://acme-travel.com/flightinfo”                   code according to the service requirements. WSDL
+               encodingStyle=                                                  can also be used as input to a dynamic invocation
+               “http://schemas.xmlsoap.org/soap/encoding/”/>                   proxy, which can then generate the correct service
+         </output>                                                             requests at runtime. The result in both cases is to
+       </operation>                                                            relieve the user and developer of the need to
+       <operation name=“CheckIn”>                                              remember or understand all the details of service
+         <soap:operation style=“document”                                      access. For example, travel service users need only
+               soapAction=“http://acme-travel.com/checkin”/>                   obtain the WSDL description and use it as input to
+         <input>                                                               the tooling and runtime infrastructure to exchange
+           <soap:body use=“literal”/>                                          the correct SOAP message types with the service.
+         </input>
+       </operation>                                                            Discovery: UDDI
+     </binding>                                                                The Universal Description, Discovery, and Integra-
+                                                                               tion specifications offer users a unified and system-
+     <service name=“travelservice”>                                            atic way to find service providers through a cen-
+       <port name=“travelservicePort”                                          tralized registry of services that is roughly
+               binding=“tns:AirportServiceSoapBinding”>                        equivalent to an automated online “phone directo-
+         <soap:address location=                                               ry” of Web services. The browser-accessible UDDI
+               “http://acmetravel.com/travelservice”/>                         Business Registry (UBR) became available shortly
+       </port>                                                                 after the specification went public. Several individ-
+     </service>                                                                ual companies and industry groups are also start-
+                                                                               ing to use “private” UDDI directories to integrate
+Figure 6.WSDL’s concrete binding information. As this fragment                 and streamline access to their internal services.
+shows, GetFlightInfo is a SOAP RPC interaction and                                UDDI provides two basic specifications that
+CheckIn is a pure messaging interaction that uses XSD to                       define a service registry’s structure and operation:
+describe the transmitted XML.
+                                                                               ■   a definition of the information to provide about
+                       vice. In particular, the WSDL document shows that           each service, and how to encode it; and
+                                                                               ■   a query and update API for the registry that
+                       ■    GetFlightInfo      will be a SOAP-RPC-style            describes how this information can be accessed
+                            interaction, in which all message exchanges use        and updated.
+                            standard SOAP encoding, and
+                       ■    CheckIn is a pure messaging interaction (“doc-     Registry access is accomplished using a standard
+                            ument-oriented,” in WSDL terms) in which the       SOAP API for both querying and updating. Here
+                            SOAP message’s body contains the encoded           we focus on the first aspect, which provides a good
+                            message with no additional type encoding; that     idea of how the registry operates.
+                            is, it uses XSD to literally describe the trans-
+                            mitted XML.                                        Organizing Structure
+                                                                               UDDI encodes three types of information about
+                       All that remains now is to define “where” to access     Web services:
+
+90     MARCH • APRIL 2002           http://computer.org/internet/                                                IEEE INTERNET COMPUTING
+                                                                                                              Web Services
+
+                                                           <businessEntity businessKey=
+■   “white pages” information includes name and                    “A687FG00-56NM-EFT1-3456-098765432124”>
+    contact details;                                         <name>Acme Travel Incorporated</name>
+■   “yellow pages” information provides a cate-              <description xml:lang=“en”>
+    gorization based on business and service                   Acme is a world leader in online travel services
+    types; and                                               </description>
+■   “green pages” information includes technical             <contacts>
+    data about the services.                                   <contact useType=“US general”>
+                                                                 <personName>Acme Inc.</personName>
+The UDDI registry is organized around two funda-                 <phone>1 800 CALL ACME</phone>
+mental entities that describe businesses and the                 <email useType=““>acme@acme-travel.com</email>
+services they provide. The businessEntity ele-                   <address>
+ment illustrated in Figure 7 provides standard                     <addressLine>Acme</addressLine>
+white-pages information, including identifiers (tax                <addressLine>12 Maple Avenue</addressLine>
+IDs, social security numbers, and so on), contact                  <addressLine>Springfield, CT 06785</addressLine>
+information, and a simple description. Each busi-                </address>
+ness entity might include one or more busi-                    </contact>
+nessService elements, shown in Figure 8 (next                </contacts>
+page), that represent the services it provides. Both         <businessServices> ...
+business and service entities can specify a cate-            </businessServices>
+goryBag to categorize the business or service (we            <identifierBag> ...
+discuss later how to encode this information).               </identifierBag>
+   Figures 7 and 8 (next page) show an important             <categoryBag> ...
+aspect of UDDI’s design: Unique keys identify each             <keyedReference tModelKey=
+data entity — businesses, services, and so on — that                 “UUID:DB77450D-9FA8-45D4-A7BC-04411D14E384”
+might be cross-referenced. These assigned keys are                   keyName=“Electronic check-in”
+long hexadecimal strings generated when the enti-                    keyValue=“84121801”/>
+ty (in this case, a business) is registered. The keys        </categoryBag>
+are guaranteed to be universally unique identifiers        </businessEntity>
+(UUIDs). For example, the businessKey attribute
+uniquely identifies a business entity and the ser-       Figure 7. Simplified businessEntity structure.This element
+viceKey attribute identifies a service. A service        offers standard white-pages information, including contact informa-
+also references its host by its business key. In addi-   tion and basic service descriptions.
+tion to a human-readable description, name, and
+categorization, the service entity contains a list of
+bindingTemplates that encode the technical ser-          elInstanceDetails, which provides the service’s
+vice-access information. Each binding template           technical description (the green-pages informa-
+represents an access point to the service. The           tion). The field contains a list of references to the
+assumption is that the same service can be pro-          technical specifications with which the service
+vided at different endpoints, each of which might        complies. The service provider first registers the
+have different technical characteristics.                required technical specifications in the directory,
+                                                         which assigns a corresponding unique identifier
+Technical Descriptions and tModels                       key. UDDI represents each registered technical
+A closer look at the binding template shows a            specification using a new information entity, the
+great deal about how UDDI enables business and           tModel. Service endpoints that support the speci-
+service descriptions using arbitrary external infor-     fication can then simply add the corresponding
+mation (that is, information that is not defined by      reference to their tModelInstanceDetails list.
+UDDI itself). Most of the information in a binding          As an example, let’s say we want to register a
+template is what we would naturally expect for an        WSDL document as a tModel. Assuming that the
+endpoint. Foremost is the end point address where        travel industry has defined the standard WSDL
+the service can be accessed. This address might be       interfaces and bindings for electronic check-in and
+a URL, e-mail address, or even a phone number.           retrieval of flight information, we first create a
+We also find the expected unique key (binding            tModel like the one in Figure 9 (page 93) to repre-
+Key) and a cross-reference to the service key.           sent these WSDL definitions. Service end points
+   The most interesting field, however, is tMod-         that implement those interfaces can then include
+
+IEEE INTERNET COMPUTING                                                     http://computer.org/internet/   MARCH • APRIL 2002   91
+Spotlight
+
+     <businessService serviceKey=
+           “894B5100-3AAF-11D5-80DC-002035229C64”                             service we are seeking.
+         businessKey=                                                            To identify taxonomical systems, each classifica-
+           “D2033110-3AAF-11D5-80DC-002035229C64”>                            tion system itself is registered as a tModel in the
+       <name>ElectronicTravelService</name>                                   UDDI registry. Taxonomy information is then
+       <description xml:lang=“en”>Electronic Travel                           encoded in name-value pairs, qualified by a
+     Service</description>                                                    tModel key reference that identifies which taxono-
+       <bindingTemplates>                                                     my each pair belongs to. Three standard taxonomies
+         <bindingTemplate bindingKey=                                         are cited by UDDI and preregistered in the UBR:
+               “6D665B10-3AAF-11D5-80DC-002035229C64”
+             serviceKey=                                                      ■   an industry classification complying with the
+               “89470B40-3AAF-11D5-80DC-002035229C64”>                            North American Industry Classification System
+           <description>                                                          (NAICS) taxonomy,
+             SOAP-based e-checkin and flight info                             ■   a classification of products and services com-
+           </description>                                                         plying with the Universal Standard Products and
+           <accesssPoint URLType=“http”>                                          Services Code System (UNSPSC) taxonomy, and
+             http://www.acme-travel.com/travelservice                         ■   a geographical categorization system complying
+           </accessPoint>                                                         with the International Organization for Stan-
+           <tModelInstanceDetails>                                                dardization Geographic taxonomy (ISO 3166).
+             <tModelInstanceInfo tModelKey=
+               “D2033110-3BGF-1KJH-234C-09873909802”>                         Using categorization, we can query the UDDI
+             ...                                                              directory to locate very specific types of services.
+             </tModelInstanceInfo>                                            In our case, we might search for travel services that
+           </tModelInstanceDetails>                                           provide electronic checkin and operate in Joe’s
+         </bindingTemplate>                                                   metropolitan area. Once we find the service in
+       </bindingTemplates>                                                    UDDI, we can retrieve the WSDL description it
+       <categoryBag> ...                                                      complies with to learn how to interact with it using
+       </categoryBag>                                                         SOAP messaging and SOAP RPC calls.
+     </businessService>
+                                                                              What Next ?
+Figure 8. Simplified businessService structure. A business                    In a real business situation, even our simple trav-
+might include such a structure for each service it provides.The               el scenario would require more than three pieces
+tModelInstanceDetails provides the service’s technical                        of the Web services framework to operate proper-
+description (the green-pages information).                                    ly. At the very least, we would have to ensure that
+                                                                              transactions like the electronic check-in were con-
+                                                                              ducted in a secure environment and that messages
+                       the corresponding tModels in their instance-details    were reliably delivered to their destinations.
+                       lists. To be useful, of course, users and imple-          Why must we build additional security when we
+                       menters of compliant services must be aware of the     have technologies such as Secure Multipurpose Inter-
+                       registered tModels and their keys.                     net Mail Extensions (S-MIME), HTTP Secure (HTTPS),
+                          The idea behind the tModel mechanism is sim-        and Kerberos? The answer lies in the difference
+                       ple and powerful: To adequately describe a service,    between end-to-end and single-hop usage. Business
+                       we often have to reference information whose type      messages typically originate deep inside one enter-
+                       or format cannot (and should not) be anticipated.      prise and go deep inside another. Mechanisms such
+                       Replacing the information itself with a unique key     as Secure Sockets Layer are great for securing (for
+                       provides a reference to arbitrary information types.   confidentiality) a direct connection from one
+                                                                              machine to another, but they are of no help if the
+                       Categorization                                         message has to travel over more than one connec-
+                       Effectively locating particular types of businesses    tion. That’s why we need security at the SOAP level.
+                       and services depends on our ability to qualify the        Researchers are now defining a security model as
+                       directory’s business and service entries according     a set of add-on specifications. For example, the
+                       to a categorization scheme or taxonomy. In fact,       SOAP Security Extensions: Digital Signatures pro-
+                       in any realistic situation, we typically need multi-   posal (www.w3.org/TR/SOAP-dsig/) describes how
+                       ple information bits, such as geographical location    SOAP messages can be digitally signed. Groups are
+                       or type of industry or product, to characterize the    also developing specifications for authentication,
+
+92     MARCH • APRIL 2002         http://computer.org/internet/                                                 IEEE INTERNET COMPUTING
+                                                                                                                                 Web Services
+                                                                                          Web Services Resources
+confidentiality, and authorization using SOAP.
+   A second important aspect for real business                        ■   Web services news, articles, and software information • www.
+integrations is the communication protocol’s reli-                        webservices.org
+ability. Again, we could use a reliable transport,                    ■   IBM’s developerWorks site (Web services tutorials, articles, forums,
+such as Reliable HTTP (HTTPR), but the multihop                           and tools) • www–106.ibm.com/developerworks/webservices
+scenario demands that reliability be defined at the                   ■   Microsoft’s Web services pages • www.gotdotnet.com/team/
+SOAP level. We expect researchers to add a “reli-                         XMLwebservices
+able SOAP” standard to the basic protocol soon.                       ■   W3C Web services Workshop • www.w3.org/2001/01/WSWS
+    Finally, complex business interactions require                    ■   W3C SOAP specification • www.w3.org/2000/xp
+support for higher levels of business functionali-                    ■   WSDL 1.1 specification • www.w3.org/TR/wsdl.html
+ty. In particular, we need descriptions of quality-                   ■   UDDI pages • www.uddi.org
+of-service properties that service end points offer.                  ■   SOAP Digital Signatures Proposal • www.w3.org/TR/SOAP-dsig/
+On the other hand, business interactions are typi-                    ■   Web Services Flow Language • www-4.ibm.com/software/solutions/
+cally long running and involve multiple interac-                          webservices/pdf/WSFL.pdf
+tions between partners. To deploy and effectively                     ■   X-Lang • www.gotdotnet.com/team/xml_wsspecs/xlang-c/
+use these types of services, we must be able to rep-
+resent business processes and stateful services, and
+be able to create service compositions (complex
+aggregations) in a standardized and systematic
+fashion. Several proposals for accomplishing this                     <tModel tModelKey=““>
+now exist; see, for example, Web Services Flow                          <name>http://www.travel.org/e-checkin-interface</name>
+Language (www-4.ibm.com/software/solutions/                             <description xml:lang=“en”>
+webservices/pdf/WSFL.pdf) and X-Lang (www.                                Standard service interface definition for travel
+gotdotnet.com/team/xml_wsspecs/xlang-c/                                 services
+default.htm).                                                           </description>
+                                                                        <overviewDoc>
+Francisco Curbera is a research staff member in the Component             <description xml:lang=“en”>
+    Systems group at IBM’s T.J. Watson Research Center. He                  WSDL Service Interface Document
+    received a PhD in computer science from Columbia Uni-                 </description>
+    versity. He has worked for several years on the use of              <overviewURL>
+    markup languages for application development and soft-                http://www.travel.org/services/e-checkin.wsdl
+    ware-component composition. He is also coauthor of the              </overviewURL>
+    WSDL and WSFL specifications.                                       </overviewDoc>
+                                                                        <categoryBag> ...
+Matthew Duftler is a software engineer in the Component Sys-            </categoryBag>
+   tems group at IBM T.J. Watson Research Center. He was              </tModel>
+   one of the original authors of Apache SOAP, and is the co-
+   lead of JSR110, Java APIs for WSDL.
+                                                                    Figure 9. Sample tModel definition.To register a WSDL document
+Rania Khalaf is a software engineer in the Component Systems        as a tModel, we assume standard industry definitions for elec-
+    group at the IBM T.J. Watson Research Center. She received      tronic check-in and retrieval of flight information and create a
+    her BS and MEng in computer science and electrical engi-        tModel to represent these WSDL definitions.
+    neering from MIT.
+                                                                        Web Services Invocation Framework.
+William Nagy is a software engineer at IBM’s T.J. Watson
+    Research Center. His research interests include the develop-    Sanjiva Weerawarana is a research staff member in the Com-
+    ment of wide area distributed services and the infrastructure       ponent Systems group at IBM T.J. Watson Research Cen-
+    necessary to use and support them. His current focus is on          ter. He is coauthor of the WSDL and WSFL specifications,
+    Web services and includes the development of IBM’s Web              and codeveloper of Apache SOAP, WSTK, WSDL Toolkit,
+    Services Gateway and the WS-Inspection specification.               WSIF, and WSGW. He received a PhD in computer science
+                                                                        from Purdue University.
+Nirmal Mukhi is a research associate in the Component Sys-
+   tems group at the IBM T. J. Watson Research Center, where        Readers can contact the authors at {rkhalaf, sanjiva, curbera,
+   he does Web services research. He is codeveloper of the          duftler, nmukhi}@us.ibm.com.
+
+
+IEEE INTERNET COMPUTING                                                                    http://computer.org/internet/      MARCH • APRIL 2002   93
+

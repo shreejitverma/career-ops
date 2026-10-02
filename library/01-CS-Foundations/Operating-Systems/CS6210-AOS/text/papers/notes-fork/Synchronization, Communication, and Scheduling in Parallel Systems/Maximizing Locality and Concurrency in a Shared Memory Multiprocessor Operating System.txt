@@ -1,0 +1,919 @@
+         Tornado: Maximizing Locality and Concurrency in a Shared Memory
+                        Multiprocessor Operating System
+
+                                                               
+                   Ben Gamsa              Orran Krieger                Jonathan Appavoo                 Michael Stumm
+                                                                                          
+    Department of Electrical and Computer Engineering                                         IBM T.J. Watson Research Center
+    University of Toronto, Toronto, Canada                                                    Yorktown Heights, New York
+    
+        ben,jonathan,stumm  @eecg.toronto.edu                                                okrieg@us.ibm.com
+
+
+
+                           Abstract                                      small.1 The primary performance concern for these sys-
+                                                                         tems focused on maximizing concurrency, primarily by
+    We describe the design and implementation of Tornado, a              identifying contended locks and breaking them up into
+new operating system designed from the ground up specifically            finer-grained locks.
+for today’s shared memory multiprocessors. The need for im-
+                                                                            Modern multiprocessors, such as Stanford’s Dash and
+proved locality in the operating system is growing as multipro-
+cessor hardware evolves, increasing the costs for cache misses           Flash systems, Toronto’s NUMAchine, SGI’s Origin,
+and sharing, and adding complications due to NUMAness. Tor-              HP/Convex Exemplar, and Sun’s larger multiprocessors,
+nado is optimized so that locality and independence in applica-          introduce new serious performance problems because
+tion requests for operating system services—whether from mul-            of (  ) higher memory latencies due to faster processors
+tiple sequential applications or a single parallel application—          and more complex controllers, (  ) large write sharing
+are mapped onto locality and independence in the servicing of            costs, (  ) large secondary caches, (  ) large cache lines
+these requests in the kernel and system servers. By contrast,            that give rise to false sharing, ( ) NUMA effects, and
+previous shared memory multiprocessor operating systems all              (  ) larger system sizes, that stress the bottlenecks in the
+evolved from designs constructed at a time when sharing costs            system software and uncover new ones. These character-
+were low, memory latency was low and uniform, and caches                 istics all require that the system software be optimized for
+were small; for these systems, concurrency was the main per-
+                                                                         locality, something that was not necessary in the past. In
+formance concern and locality was not an important issue.
+                                                                         addition to maximizing temporal and spatial locality as
+    Tornado achieves this locality by starting with an object-
+oriented structure, where every virtual and physical resource            required for uniprocessors, optimizing for locality in the
+is represented by an independent object. Locality, as well as            context of modern multiprocessors also means:
+concurrency, is further enhanced with the introduction of three
+key innovations: (  ) clustered objects that support the partition-           minimizing read/write and write sharing so as to
+ing of contended objects across processors, (  ) a protected pro-           minimize cache coherence overheads,
+cedure call facility that preserves the locality and concurrency
+of IPC’s, and (  ) a new locking strategy that allows all lock-
+                                                                               minimizing false sharing, and
+ing to be encapsulated within the objects being protected and                  minimizing the distance between the accessing pro-
+greatly simplifies the overall locking protocols. As a result of               cessor and the target memory module (in the case of
+these techniques, Tornado has far better performance character-
+                                                                               NUMA multiprocessors).
+istics, particularly for multithreaded applications, than existing
+commercial operating systems. Tornado has been fully imple-
+mented and runs both on Toronto’s NUMAchine hardware and                    To understand the importance of locality in modern
+on the SimOS simulator.                                                  multiprocessors, consider a simple counter (for example,
+                                                                         a performance counter or a reference count) with multiple
+                                                                         threads concurrently updating it. Figure 1 shows the per-
+                                                                         formance of different implementations of such a counter
+1       Introduction                                                     (in cycles per update) when run on SimOS simulating a
+                                                                         16 processor, 4 processor-per-node NUMA multiproces-
+Traditional multiprocessor operating systems, including                  sor. In these experiments, sufficient delays are introduced
+those commercially available today (e.g., IBM’s AIX,                     between counter updates to ensure that the counter is not
+Sun’s Solaris, SGI’s IRIX, HP’s HP/UX), all evolved                      contended. The shared counter scales well if a system
+from designs when multiprocessors were generally small,
+memory latency relative to processor speeds was compar-
+atively low, memory sharing costs were low, memory ac-                      1 In fact, most of these systems evolved from uniprocessor operating
+
+cess costs were uniform, and caches and cache lines were                 system designs.
+                                                                                    100                                     10
+                                                    array
+         10000
+                                                    shared
+
+Cycles
+                                                    shared (old arch)                   10
+         1000                                       padded array
+                                                    clustered object
+          100                                                                           1                                   1
+                                                                                             12   4   8   12       16            1   2   3   4
+           10
+                 1 2   4        8         12          16                            100                                     10
+
+
+
+                                                                            Slow Down
+                             Processors
+                                                                                        10
+          Figure 1: Cycles per update of a counter (log scale).
+                                                                                        1                                   1
+                                                                                             12   4   8   12       16            1   2   3   4
+is simulated with hardware parameters set to those typ-
+ical of ten years ago (third curve from the bottom), but it                         100                                     10
+performs orders of magnitude worse when simulating a                                                            sgi
+                                                                                                                convex
+modern shared memory multiprocessor, such as NUMA-                                      10                      ibm
+                                                                                                                sun
+chine (top-most curve).2 The counter performs no better                                                         tornado
+when the counter is converted to an array with each pro-                                1                                   1
+cessor updating its own counter individually (complicat-                                     12   4   8   12       16            1   2   3   4
+ing the extraction of the total counter value) because of                                                      Processors
+false sharing. Good performance can be achieved only
+by additionally padding each array entry to the secondary                  Figure 2: Normalized cost (log scale) of simultaneously per-
+cache line size, or by applying the clustered object tech-                 forming on n processors: n in-core page faults (top), n fstats
+niques described later in this paper (bottom two curves).                  (middle), and n thread creations/deletions (bottom) for 5 com-
+   In general, data structures that may have been efficient                mercial shared memory multiprocessor operations systems and
+in previous systems, and might even possess high levels                    for Tornado. A full description of these experiments can be
+of concurrency, are often inappropriate in modern sys-                     found in Section 7.
+tems with high cache miss and write sharing costs. More-
+over, as the counter example above demonstrates, a sin-                    ping any locality and independence that might exist in
+gle poorly constructed component accessed in a critical                    OS requests from applications to locality and indepen-
+path can have a serious performance impact. While the                      dence in the servicing of these requests in the operating
+importance of locality has been recognized by many im-                     system kernel and servers. More specifically, Tornado is
+plementors of shared memory multiprocessor operating                       designed to service all OS requests on the same proces-
+systems, it can be extremely difficult to retrofit locality                sor they are issued on, and to handle requests to different
+into existing operating system structures. The partition-                  resources without accessing any common data structures
+ing, distribution, and replication of data structures as well              and without acquiring any common locks. As a result,
+as the algorithmic changes needed to improve locality are                  Tornado does not exhibit the difficulties of the aforemen-
+difficult to isolate and implement in a modular fashion,                   tioned systems (see Figure 2). Moreover, we found that
+given a traditional operating system structure.                            we could achieve this by using a small number of rela-
+   The fact that existing operating system structures have                 tively simple techniques in a systematic fashion. As a re-
+performance problems, especially when supporting par-                      sult, Tornado has a simpler structure than other multipro-
+allel applications, is exemplified in Figure 2, which                      cessor operating systems, and hence can be more easily
+shows the results of a few simple micro-benchmarks run                     maintained and optimized.
+on a number of commercial multiprocessor operating sys-                       Tornado uses an object-oriented approach, where ev-
+tems.3 For each commercial operating system consid-                        ery virtual and physical resource in the system is repre-
+ered, there is a significant slowdown when simple op-                      sented by an independent object, ensuring natural local-
+erations are issued in parallel that should be serviceable                 ity and independence for all resources. Aside from its
+completely independently of each other.                                    object-oriented structure, Tornado has three additional in-
+   In this paper, we describe the design and implemen-                     novations that help maximize locality (as well as concur-
+tation of Tornado, a new shared memory multiproces-                        rency). First, Clustered Objects allow an object to be par-
+sor operating system that was designed from the ground                     titioned into representative objects, where independent
+up with the primary overriding design principle of map-                    requests on different processors are handled by different
+                                                                           representatives of the object in the common case. Thus,
+                                                                           simultaneous requests from a parallel application to a sin-
+   2 Also, although not shown, the number of cycles required per update
+                                                                           gle virtual resource (i.e., page faults to different pages of
+varies greatly for the different threads due to NUMA effects.              the same memory region) can be handled efficiently pre-
+   3 While micro-benchmarks are not necessarily a good measure of
+
+overall performance, these results do show that the existing systems can
+                                                                           serving as much locality as possible.
+have performance problems.                                                    Second, the Tornado Protected Procedure Call facil-
+ity maps the locality and concurrency in client requests             HAT
+                                                                                                      COR
+to the servicing of these requests in the kernel and sys-                        Region     FCM
+tem servers, and yet performs competitively with the best           Process                                   DRAM
+                                                                                 Region     FCM
+uniprocessor IPC facilities. Thus, repeated requests to                                               COR
+the same server object (such as a read for a file) are ser-
+viced on the same processor as the client thread, and con-    Figure 3: The key memory management object relationships in
+current requests are automatically serviced by different      Tornado.
+server threads without any need for data sharing or syn-
+chronization to start the server threads.                     in Tornado. On a page-fault, the exception is delivered to
+   Finally, Tornado uses a semi-automatic garbage collec-     the Process object for the thread that faulted. The Process
+tion scheme that facilitates localizing lock accesses and     object maintains the list of mapped memory regions in the
+greatly simplifies locking protocols. As a matter of prin-    process’s address space, which it searches to identify the
+ciple, all locks are internal to the objects (or more pre-    responsible Region object to forward the request to. The
+cisely their representatives) they are protecting, and no     region translates the fault address into a file offset, and
+global locks are used. In conjunction with clustered ob-      forwards the request to the File Cache Manager (FCM)
+ject structures, the contention on a lock is thus bounded     for the file backing that portion of the address space. The
+by the clients of the representative being protected by the   FCM checks if the file data is currently cached in mem-
+lock. With the garbage collection scheme, no additional       ory. If it is, then the address of the corresponding physi-
+(existence) locks are needed to protect the locks internal    cal page frame is returned to the Region, which makes a
+to the objects. As a result, Tornado’s locking strategy       call to the Hardware Address Translation (HAT) object to
+results in much lower locking overhead, simpler lock-         map the page, and then returns. Otherwise, the FCM re-
+ing protocols, and can often eliminate the need to worry      quests a new physical page frame from the DRAM man-
+about lock hierarchies.                                       ager, and asks the Cached Object Representative (COR)
+   The foundation of the system architecture is Tornado’s     to fill the page from a file. The COR then makes an upcall
+object-oriented design strategy, described in Section 2.      to the corresponding file server to read in the file block.
+This is followed by a description of the three key com-       The thread is re-started when the file server returns with
+ponents discussed above: clustered objects (Section 3),       the required data.
+locking (Section 5), and protected procedure calls (Sec-         This example illustrates the advantage of employing
+tion 6), with a short interlude to consider memory alloca-    an object-oriented approach. In the performance criti-
+tion issues in Section 4. Although we focus primarily on      cal case of an in-core page fault, all objects invoked are
+the Tornado kernel, it is important to note that these com-   specific to either the faulting process or the file(s) back-
+ponents are also used in the implementation of the Tor-       ing that process; the locks acquired and data structures
+nado system servers.                                          accessed are internal to the objects. Hence, when dif-
+   Tornado is fully implemented (in C++), and runs on         ferent processes are backed by (logically) different files,
+our 16 processor NUMAchine [13, 29] and on the SimOS          there are no potential sources of contention. Also, for
+simulator [25]; it supports most of the facilities (e.g.,     processes running on different processors, the operating
+shells, compilers, editors) and services (pipes, TCP/IP,      system will not incur any communication misses when
+NFS, file system) one expects. Experimental results that      handling their faults. In contrast, many operating systems
+demonstrate the performance benefits of our design are        maintain a global page cache or a single HAT layer which
+presented in Section 7, followed by an examination of re-     can be a source of contention and offers no locality.
+lated work in Section 8 and concluding remarks in Sec-
+                                                                 Localizing data structures in the Tornado fashion re-
+tion 9.
+                                                              sults in some new implementation and policy tradeoffs.
+                                                              For example, without a global page cache, it is difficult
+2   Object-oriented structure                                 to implement global policies like a clock replacement al-
+                                                              gorithm in its purest form. Memory management in Tor-
+Operating systems are driven by the requests of appli-        nado is based on a working set policy (similar to that em-
+cations on virtual resources such as virtual memory re-       ployed by NT [9]), and most decisions can be made local
+gions, network connections, threads, address spaces, and      to FCMs.
+files. To achieve good performance on a multiprocessor,          In Tornado, most operating system objects have multi-
+requests to different virtual resources should be handled     ple implementations, and the client or system can choose
+independently; that is, without accessing any shared data     the best implementation to use at run time. The imple-
+structures and without acquiring any shared locks. One        mentation can be specific to the degree of sharing, so
+natural way to accomplish this is to use an object-oriented   implementing an object with locking protocols and data
+strategy, where each resource is represented by a different   structures that scale is only necessary if the object is
+object in the operating system.                               widely shared. As a result, a lower overhead implementa-
+   As an example, Figure 3 shows, in a slightly simpli-       tion can be used when scalability is not required. We have
+fied form, the key objects used for memory management         found the object-oriented structure of Tornado to greatly
+simplify its implementation, allowing us to initially im-                                   P0       P1       P2
+plement services using only simple objects with limited
+concurrency, improving the implementation only when                                          object reference
+performance (or publication) required it. In the future we
+expect to be able to dynamically change the objects used
+for a resource.                                                                            rep       rep      rep
+   Although our object-oriented structure is not the only
+                                                                                             Clustered object
+way to get the benefits of locality and concurrency, it is
+a natural structuring technique and provides the founda-
+tion for other Tornado features such as the clustered ob-                      Figure 4: An abstract depiction of a clustered object.
+ject system [23] and the building block system [1].
+                                                                                The internal structure of a clustered object can be de-
+3     Clustered Objects                                                     fined in a variety of ways. One aspect of this variety
+                                                                            is the degree of clustering. There might be one rep for
+Although the object-oriented structure of Tornado can                       the entire system, one rep per processor, or one rep for
+help reduce contention and increase locality by map-                        a cluster of neighboring processors. For example, in the
+ping independent resources to independent objects, some                     case of the memory management subsystem of Tornado,
+components, such as a File Cache Manager (FCM) for                          the Cached Object Representative (COR) has a single rep
+a shared file, a Process object for a parallel program, or                  that is shared across all processors (thus acting as a regu-
+the system DRAM Manager, may be widely shared and                           lar shared object) since it is read-mostly and only invoked
+hence require additional locality enhancing measures.                       when file I/O is required (which occurs relatively infre-
+   Common techniques used to reduce contention for                          quently). The Region is also read-mostly, but is on the
+heavily shared components include replication, distribu-                    critical path for all page faults, and hence can benefit from
+tion, and partitioning of objects. For example, for the                     partial replication, with one rep per cluster of processors.
+(performance) counter discussed in the introduction, full                   On the other hand, the FCM maintains the state of the
+distribution of the counter is used to ensure each proces-                  pages of a file cached in memory, and hence can benefit
+sor can independently update its component, at the cost                     from a partitioning strategy, where the hash table for the
+of making the computation of the true current value (i.e.,                  cache is distributed across a number of reps (at least for
+the sum of all elements) more complicated. As another                       files that are being widely shared).
+example, consider the thread dispatch queue. If a sin-                          With multiple reps per object, it is necessary to keep
+gle list is used in a large multiprocessor system, it may                   them consistent. A variety of strategies are possible, in-
+well become a bottleneck and contribute significant ad-                     cluding invalidation and update protocols. Coordination
+ditional cache coherency traffic. By partitioning the dis-                  between reps of a given object can occur either through
+patch queue so that each processor has a private list, con-                 shared memory or a form of remote execution in Tor-
+tention is eliminated.4                                                     nado called remote PPCs (described later in Section 6).
+   These types of optimizations have been applied before                    Although shared memory is generally more efficient for
+in other systems, but generally in an ad hoc manner, and                    fine-grained operations, it can sometimes be cheaper to
+only to a few individual components. The goal of Tor-                       incur the cost of the remote execution facility and per-
+nado’s clustered object system is to facilitate the applica-                form the operation local to the data, if there is the pos-
+tion of these techniques as an integral part of a system’s                  sibility of high contention, or if there is a large amount of
+overall design [23].                                                        data to be accessed. With an efficient remote execution
+                                                                            facility, the tradeoff point can be as low as a few tens of
+                                                                            cache misses.
+3.1     Overview
+                                                                                The use of clustered objects has several benefits. First,
+A clustered object presents the illusion of a single object,                it facilitates the types of optimizations commonly applied
+but is actually composed of multiple component objects,                     on multiprocessors, such as replication or partitioning of
+each of which handles calls from a specified subset of the                  data structures and locks. Second, it preserves the strong
+processors (see Figure 4). Each component object repre-                     interfaces of object-oriented design so that clients need
+sents the collective whole for some set of processors, and                  not concern themselves with the location or organization
+is thus termed a clustered object representative, or just                   of the reps, and just use clustered object references like
+rep for short. All clients access a clustered object using a                any other object reference. All complexity resides in the
+common clustered object reference (that logically refers                    internal implementation of the clustered objects and the
+to the whole), with each call to the clustered object auto-                 clustered object system.
+matically directed to the appropriate local representative.                     Third, clustered objects enable incremental optimiza-
+                                                                            tions. Initially, a clustered object might be implemented
+   4 However, it too has complications, due to the difficulty of ensuring   with just one rep serving requests from all processors.
+good load balancing and respecting system-wide priorities.                  This implementation would be almost identical to a corre-
+                                                                       a) Page Fault Handling                   b) Region Deletion
+sponding non-clustered implementation. If performance                    5              1 rep                   5
+
+
+                                                                 Slow Down
+requirements demand it, then the clustered object can be                                multi rep
+successively optimized independently of the rest of the
+system.
+                                                                         1                                      1
+   Fourth, several different implementations of a clus-                        12   4        8        12   16        12     4        8        12   16
+tered object may exist, each with the same external inter-                               Processors                              Processors
+
+face, but each optimized for different usage patterns.
+   Finally, the clustered object system supports dynamic         Figure 5: Comparison of the performance of a Process clus-
+strategies where the specific type of representative can be      tered object with one rep vs. a Process clustered object with n
+changed at run time based on the type and distribution of        reps (one per processor) for (a) in-core page fault handling and
+requests.                                                        (b) Region destruction
+
+                                                                 are much more common than adding or deleting regions.
+3.2    Application of Clustered Objects
+In our implementation, large-grain objects, like FCM,            3.3             Clustered Object implementation
+Region, and Thread objects, are candidates for clustered
+objects, rather than smaller objects like linked lists. One      The key to the implementation of clustered objects is the
+example that illustrates many of the benefits of our ap-         use of per-processor translation tables. For each clustered
+proach is the Process object.                                    object the tables maintain a pointer to the rep responsible
+   Because a Process can have multiple threads running           for handling method invocations for the local processor.
+on multiple processors and most of the Process object ac-        A clustered object reference is just a pointer into the table,
+cesses are read-only, the Process clustered object is repli-     with the extra level of indirection through the local table
+cated to each processor the process has threads running          providing the mechanism for locating the local rep. (A
+on. On other processors, a simple rep is used that redi-         clustered object call thus requires just one extra instruc-
+rects all calls to one of the full reps. Some fields, like the   tion.) By having each per-processor copy of the table lo-
+base priority, are updated by sending all modifications to       cated at the same virtual address, a single pointer into the
+the home rep and broadcasting an update to all the other         table will refer to a different entry (the rep responsible for
+reps. Other components, like the list of memory Regions          handling the invocation) on each processor.
+in the process, are updated on demand as each rep ref-              Because it is generally unknown a priori which reps
+erences the Region for the first time, reducing the cost         will be needed when and where, reps are typically created
+of address space changes when Regions are not widely             on demand when first accessed. This is accomplished
+shared. If threads of the program are migrated, the cor-         by requiring each clustered object to define a miss han-
+responding reps of the Process object are migrated with          dling object5 and by initializing all entries in the transla-
+them to maintain locality.                                       tion tables to point to a special global miss handling ob-
+   As an illustration of some of the tradeoffs with clus-        ject (see Figure 6). When an invocation is made for the
+tered objects, consider Figure 5(a) which shows the per-         first time on a given processor, the global miss handling
+formance of page fault handling for a multithreaded pro-         object is called. Because it knows nothing about the in-
+gram (more details on the experiments are provided in            tended target clustered object, it blindly saves all regis-
+Section 7). With multiple reps for the Process object, the       ters and calls the clustered object’s miss handler to let it
+Region list is replicated and page faults can be processed       handle the miss. The object miss handler then, if neces-
+with full concurrency, compared to the simple shared             sary, creates a rep and installs a pointer to it in the trans-
+case where a lock on the Region list creates a bottleneck.       lation table; otherwise, if a rep already exists to handle
+The clustered object structure effectively splits the Pro-       method invocations from that processor, a pointer to it is
+cess lock among the representatives, allowing each rep           installed in the translation table. In either case, the object
+to lock its copy independently, thus eliminating both the        miss handler returns with a pointer to the rep to use for the
+write-sharing of the lock and its contention. Although it        call. The original call is then restarted by the global miss
+would appear that a similar effect could be achieved with        handler using the returned rep, and the call completes as
+a reader-writer lock protecting a single shared Process          normal, with the caller and callee unaware of the miss
+object, the lock is normally held for such a short duration      handling work that took place. This whole process re-
+that the overheads of the reader-writer lock (including the      quires approximately 150 instructions,6 which although
+write-sharing it entails) would overshadow any concur-           non-negligible, is still inexpensive enough to be used as
+rency benefits.                                                  a general purpose mechanism for triggering dynamic ac-
+   However, by replicating the Process object, other oper-
+ations, such as deleting a memory Region, become more                        5 Default miss handlers are provided for the common cases.
+expensive (see Figure 5(b)) because of the need to keep             6 All references to instructions in the paper are for MIPS instructions,
+the Process object reps consistent. This tradeoff is gener-      which should be comparable to most other RISC processors. Results
+ally worthwhile for the Process object, since page faults        from full experimental tests are presented in Section 7.
+           i
+               Miss Handling Table (partitioned)                               4 Dynamic Memory Allocation
+
+                                                                               For the clustered object approach to be effective, it re-
+                    object             Translation
+                    miss               Tables                                  quires a facility that supports processor-local memory al-
+                    handler                                                    location. The memory allocator must be efficient, highly
+       i                      i                   i
+                                                                               concurrent, and maximize locality both in its internal de-
+                                                           global
+                                                                               sign and in the memory it returns on allocation. The Tor-
+                    rep                  rep
+                                                           miss                nado memory allocation facility is based on the work of
+                                                           handler             McKenney and Slingwine [22], which is one of the few
+           P0                     P1                  P2                       published designs that maximizes concurrency and lo-
+                                                                               cality, and is targeted at multiprocessor kernel environ-
+                                                                               ments.
+Figure 6: Overview of clustered object implementation. Clus-
+tered object i has been accessed on P0 and P1, where reps have                    Although the original design provides many of the fea-
+been installed; P2 has not yet accessed object i.                              tures required, the evolution of hardware and software
+                                                                               motivated a few key changes. To address the issue of
+                                                                               false sharing with current systems’ large cache lines (up
+tions beyond just inserting a rep into the table. 7
+                                                                               to 128 bytes), small blocks that are intended to be ac-
+      Miss handling requires that all methods of a clustered
+                                                                               cessed strictly locally are allocated from a separate pool. 9
+object be virtual and that a standard error code type be
+                                                                               Additionally, to address NUMA locality issues, the Tor-
+returned to allow the global miss handler to return an er-                     nado allocator partitions the pools of free memory into
+ror when necessary. This restriction has not been a prob-                      clusters. Although this requires an extra check on each
+lem for us, since Tornado uses an object-oriented struc-                       free to determine the home cluster of the target block, this
+ture, and since most clustered objects have abstract base
+                                                                               adds only three instructions to the critical path, most of
+classes to allow different implementations.
+                                                                               which can be hidden in super-scalar processors. Finally,
+      To allow the global miss handler to locate the clustered                 to satisfy the need for a high-performance user-level mul-
+object, the clustered object miss handler is installed at                      tiprocessor allocator, we replaced the use of disabled in-
+creation time in a global miss handling object table. This                     terrupts with an optimized locking protocol that takes ad-
+table is not replicated per-processor, but instead is parti-                   vantage of the common availability of load-linked/store-
+tioned, with each processor receiving a fraction of the to-                    conditional instructions in today’s processors to reduce
+tal table. The global miss handler can then use the ob-                        locking overhead to just four instructions.
+ject reference that caused the miss to locate the clustered
+                                                                                  The result of these modifications is an allocator that re-
+object’s miss handler. This interaction with the clustered
+                                                                               quires 16 instructions for common case allocation, and
+object system adds approximately 300 instructions to the
+                                                                               21 instructions for the common case deallocation (includ-
+overhead of object creation and destruction. Again, al-
+                                                                               ing checks for remote frees and overfull free lists), while
+though significant, we feel the various benefits of clus-
+                                                                               still providing the locality, concurrency, and efficiency
+tered objects make this cost reasonable, especially if the
+                                                                               required.10
+ratio of object calls to object creation is high, as we ex-
+pect it to be.
+      Finally, the translation tables are likely to be sparsely
+populated, because (  ) there can be a large number                           5 Synchronization
+of clustered objects (tens of thousands per processor),
+(  ) the translation table on each processor has to be large                There are two kinds of locking issues in most systems:
+enough to handle all objects created anywhere in the sys-                      those related to concurrency control with respect to mod-
+tem, and (  ) many clustered objects are only accessed on                 ifications to data structures, which we refer to simply as
+the processor on which they are created. As a result, the                      locking, and those related to protecting the existence of
+translation tables reside in virtual memory (even in the                       the data structures; i.e., providing existence guarantees
+kernel), with pages only allocated when needed. How-                           to ensure the data structure containing the variable is not
+ever, instead of paging out pages when memory runs low,                        deallocated during an update. We discuss each in turn.
+our implementation simply discards victim pages, since
+the table is really just a cache of entries, with the miss
+handlers of the clustered objects keeping track of the ex-                     pages to a fixed size compression table (i.e., second-level cache), since
+istence and location of the reps (i.e., they maintain the                      many of the pages are sparsely populated, but we have not yet imple-
+                                                                               mented this.
+backing copy).8                                                                    9 Another approach would been to make the minimum block size of
+
+                                                                               the allocator the same as the cache line size, but at 128 bytes, this can
+                                                                               increase internal fragmentation considerably.
+    7 The entry can also be pre-filled to avoid the cost of the miss, should     10 Although difficult to accurately measure on a super-scalar out-of-
+
+the rep structure be known in advance.                                         order processor, on a MIPS R10000 processor the cost of a malloc/free
+    8 As an optimization, it would make sense to compress the victim           pair was about 7 cycles over and above that of a null function call.
+5.1      Locking                                                               for read-only objects). It also removes the primary rea-
+                                                                               son for holding locks across object invocations, increas-
+One of the key problems with respect to locking is its                         ing modularity and obviating the need for a lock hierar-
+overhead. In addition to the basic instruction overhead                        chy in most cases.
+of locking, there is the cost of the extra cache coherence
+traffic due to the intrinsic write-sharing of the lock. With
+Tornado’s object-oriented structure it is natural to encap-                    5.3      Garbage collection implementation
+sulate all locking within individualobjects. This helps re-                    The key idea in the implementation of our semi-
+duce the scope of the locks and hence limits contention.                       automatic garbage collection scheme is to distinguish
+Moreover, the use of clustered objects helps limit con-                        between what we call temporary references and persis-
+tention further by splitting single objects into multiple                      tent references. Temporary references are all clustered
+representatives thus limiting contention for any one lock                      object references that are held privately by a single
+to the number of processors sharing an individual repre-                       thread, such as references on a thread’s stack; these
+sentative. This allows us to optimize for the uncontended                      references are all implicitly destroyed when the thread
+case. We use highly efficient spin-then-block locks, that                      terminates. In contrast, persistent references are those
+require only two dedicated bits11 from any word (such                          stored in (shared) memory; they can be accessed by
+as the lower bits of an aligned pointer), at a total cost of                   multiple threads and might survive beyond the lifetime
+20 instructions for a lock/unlock pair in the uncontended                      of a single thread.
+case.12                                                                           The distinction between temporary and persistent ref-
+                                                                               erences is used to divide clustered object destruction into
+                                                                               three phases. In the first phase, the object ensures that all
+5.2      Existence guarantees
+                                                                               persistent references to it have been removed. This is part
+Providing existence guarantees is likely the most diffi-                       of the normal cleanup procedure required in any system;
+cult aspect of concurrency control. The traditional way                        when an object is to be deleted, references to the object
+of eliminating races between one thread trying to lock an                      must be removed from lists and tables and other objects.
+object and another deallocating it, is to ensure that all ref-                    In the second phase, the clustered object system in-
+erences to an object are protected by their own lock, and                      sures that all temporary references have been eliminated.
+all the references are used only while holding the lock on                     To achieve this, we chose a scheme that is simple and ef-
+the reference. The disadvantage of this approach is that                       ficient. It is based on the observation that the kernel and
+the reference lock in turn needs its own protector lock,                       system servers are event driven and that the service times
+with the pattern repeating itself until some root object that                  for those events are relatively short. In describing our
+can never be deallocated. This results in a complex global                     scheme, first consider the uniprocessor case. The num-
+lock hierarchy that must be strictly enforced to prevent                       ber of operations (i.e., calls to the server from some exter-
+deadlock, and it encourages holding locks for long peri-                       nal client thread) currently active is maintained in a per-
+ods of time while operations on referenced objects (and                        processor counter; the counter is incremented every time
+their referenced objects) are performed. For example, in                       an operation is started and decremented when the opera-
+the page fault example, the traditional approach would re-                     tion completes. Thus, when the count is zero, we know
+quire holding a lock on the process object for the duration                    there can be no live temporary references to any object
+of the page fault, solely to preserve the continued exis-                      on that processor, and phase two ends.14 A concern with
+tence of the Regions it references.13                                          this approach is that there is no guarantee that the count
+   For Tornado, we decided to take a somewhat differ-                          of live threads will ever actually return to zero, which
+ent approach, using a semi-automatic garbage collection                        could lead to a form of starvation. However, since sys-
+scheme for clustered objects. With this approach, a clus-                      tem server calls tend to be short, we do not believe this to
+tered object reference can be safely used at any time,                         be a problem in practice.15
+whether any locks are held or not, even as the object is                          For the multiprocessor case, we need to also consider
+being deleted. This simplifies the locking protocol, often                     threads running on other processors with temporary refer-
+eliminating the need for a lock completely (for example,                       ences to the object. Each clustered object can easily know
+                                                                               which set of processors can access it, because the first ac-
+                                                                               cess to an object on a processor always results in a trans-
+   11 One bit indicates if the lock is held and the other indicates if there   lation table miss, and any reference stored in an object
+are queued threads. A separate shared hash table is used to record the
+list of waiting threads.
+   12 We measured the lock time on an R10000 processor in a manner                14 This is a much stronger requirement than actually required; it
+
+similar to memory allocation, and found it cost about 10 cycles over the       would, for example, suffice to ensure that all threads have completed
+cost of a pair of null function calls.                                         that were active when object destruction was initiated, but that would
+   13 A different approachaltogether is to use lock-free concurrencycon-       require keeping track of much more information that just a raw count.
+trol. However, practical algorithms often require additional instructions         15 One approach under consideration is to swap the active count vari-
+
+not currently found on modern processors, and they have their own dif-         able periodically, so that the count of new calls is isolated from the count
+ficulties in dealing with memory deallocation [14, 17]                         of previous calls. More careful investigation is still required.
+can be accessed only by the set of processors that have                    file that the client has mapped can be maintained in
+already made an access to the object. Hence, the set of                    data structures local to the thread that is accessing the
+processors can be determined when cleaning up the per-                     mapped file. In some sense, this is like extending the
+sistent references by determining which processors have                    Unix trap-to-kernel process model to all servers (and
+objects with a persistent reference to the target clustered                the kernel for Tornado), but without needing to dedicate
+object and forming the union of the set. We use a circu-                   resources to each client, as all clients use the same port
+lating token scheme to determine that the per-processor                    to communicate to a given server, including the kernel.
+counters have reached zero on each processor of the tar-                   The PPC model is thus a key component to enabling
+get processor set, with the token visiting each processor                  locality and concurrency within servers.
+that potentially holds references to the object being de-                     To support cross-process clustered object calls, a stub
+stroyed. When a processor receives the token it waits un-                  generator is provided that generates stubs based on the
+til its count of active threads goes to zero, before passing               public interface of a clustered object. The clustered ob-
+it on to the next processor. When the token comes back to                  ject system also includes support in the way of a few ex-
+the initiating processor it knows that the active count has                tra bits in the object translation table that identify those
+gone to zero on all processors since it last had the token. 16             clustered objects that can accept external calls. To en-
+    Finally, when all temporary references have been elim-                 sure references invoked from an external source are valid,
+inated, the clustered object can be destroyed (i.e., its reps              the PPC subsystem checks to ensure they fall within the
+can be destroyed, their memory released, and the clus-                     translation table, are properly aligned, and pass the secu-
+tered object entry freed).                                                 rity bits check. This makes it easy to use clustered object
+    Unfortunately, we have not yet tuned this code, so it                  references, in conjunction with the identity of the target
+currently requires approximate 270 instructions to fully                   server, as a global object reference. As a result, cross-
+deallocate an object once it has been handed to the                        process clustered object calls are made directly to the lo-
+cleanup system.                                                            cal rep of the target object, providing the same locality
+                                                                           and concurrency benefits for cross-process calls as for in-
+                                                                           process calls.
+6    Interprocess communication
+                                                                              The PPC facility also supports cross-processor com-
+In a microkernel system like Tornado that relies on client-                munication among clustered objects. Remote PPCs are
+server communication, it is important to extend the lo-                    used primarily for device interactions, for function ship-
+cality and concurrency of the architecture beyond the in-                  ping between the reps of a clustered object to coordi-
+ternal design of individual components to encompass the                    nate their state where preferred over shared memory ac-
+full end-to-end design. For example, in the memory man-                    cess (i.e., data shipping), and for operating on processor-
+agement subsystem, each page fault is an implicit call                     local exception-level state (such as the per-processor PPC
+from the faulting thread to the process object; each call                  thread cache).
+by the Cached Object Representative (COR) to its cor-
+responding file object in the file system is another cross-
+process object call; and each call from the file system to
+                                                                           6.1    PPC implementation
+the device driver object is another. Concurrency and lo-                   The implementation of our PPC facility involves on-
+cality in these communications are crucial to maintaining                  demand creation of server threads to handle calls and the
+the high performance that exists within the various Tor-                   caching of the threads for future calls. To maximize per-
+nado subsystems and servers.                                               formance in a multiprocessor environment, state infor-
+   Tornado uses a Protected Procedure Call (PPC)                           mation about a PPC endpoint (a Tornado port), including
+model [12], where a call from a client object to a server                  a cache of ready threads, is maintained on a per-processor
+object acts like a clustered object call that crosses from                 basis. This allows a full call and return to be completed
+the protection domain of the client to that of the server,                 without the need for any locks (beyond disabling inter-
+and then back on completion. The key advantages of                         rupts as normally happens as part of the PPC trap) or ac-
+the PPC model are that: (  ) client requests are always                   cesses to shared data (in the common case that the port
+serviced on their local processor; (  ) clients and servers             cache is not empty).
+share the processor in a manner similar to handoff                            For each server that has previously been accessed on a
+scheduling; and (  ) there are as many threads of control             processor, the processor maintains a list of worker threads
+in the server as client requests. This also means that                     to handle calls,which grows and shrinks according to the
+any client-specific state maintained in the server can                     demand on the server on the processor. A PPC call in-
+be held local to the client, reducing unnecessary cache                    volves just a trap, a couple of queue manipulations to de-
+traffic. For example, for page faults to memory-mapped                     queue the worker and enqueue the caller on the worker,
+files that require I/O, all of the state concerning the                    and a return-from-trap to the server, with a similar se-
+                                                                           quence for a return PPC call. Parameter passing registers
+  16 To deal with scalability, there can be multiple tokens circulating,   are left untouched by the call sequence and hence are im-
+covering different subsets of processors.                                  plicitly passed between client and server.
+                                                                                                       numa pfault 1 rep
+   On first use, as well as for the uncommon case of there                                             simos pfault 1 rep
+being no workers available on the port, the call is redi-                                100           numa pfault multi rep
+                                                                                                       simos pfault multi rep
+rected to a special MetaPort, whose sole purpose is to                                                 numa stat
+                                                                                                       simos stat
+
+                                                                                Cycles
+handle these special cases. The workers for this port have
+resources pre-reserved for them so that these redirected                                 50
+calls will always succeed.
+   Although the design is primarily targeted at maximiz-
+ing concurrency, a common case call and return requires
+                                                                                         0
+only 372 instructions, including 50 instructions for user-                                     1   2      3        4            6     8
+level register save and restore, 14 for stubs, 49 for the                                                         Processors
+clustered object security checking code, and 30 instruc-
+tions for debugging. Stacks can optionally be mapped                           Figure 7: Comparison of SimOS vs. NUMAchine for various
+dynamically among all threads, which adds 62 instruc-                          benchmarks.
+tions to the base latency, but allows the memory to be
+reused across servers, minimizing the cache footprint.                         L2 cache, all direct mapped. The bus and rings are 64
+This leaves 167 instructions for the core cost of a PPC                        bits wide and clocked at 40MHz,18 giving a bandwidth
+call and return, which compares favorably to the corre-                        of 320MB/s for each link. The key latencies for the sys-
+sponding cost of 158 instructions for two one-way calls                        tem are: 15 cycles for the secondary cache, 270 for local
+for one of the fastest uniprocessor IPC systems running                        memory, and approximately 370 cycles for remote mem-
+on the same (MIPS R4000 based) processor [19]. In addi-                        ory.
+tion, up to 8KB of data can be exchanged between client                           Although the simulator does not model precisely the
+and server (in both directions) through remapping a re-                        same architecture as our hardware (in particular the in-
+gion for an additional cost of only 82 instructions.                           terconnect and the coherence protocol implementation
+   The final component of the PPC system, remote PPCs,                         are different), it does model a similar NUMA architec-
+are like regular PPCs with a pair of remote interrupts on                      ture based on the MIPS R4400 processor with compo-
+the call and return to connect the two sides. One key dif-                     nent sizes, latencies, and bandwidths configured similar
+ference, however, is that a full context switch is required                    to those of NUMAchine. In addition, the simulator has
+on both sides for both the call and return. One natural                        been validated by previous researchers and by ourselves
+optimization we have not yet applied would be to have                          using both micro- and macro-benchmarks. For example,
+the caller spin in the trap handler for a few microseconds                     Figure 7 shows the results of a number of different tests
+before calling the scheduler in case the remote PPC call                       run on SimOS and our hardware. (The tests are discussed
+completes quickly, avoiding the overhead of the two con-                       in more detail below.) Although the exact cycle counts
+text switches on the calling side. Still more expensive                        are not identical, the general trends match closely, allow-
+than we would like, the remote PPC call/return pair re-                        ing us to reasonably evaluate the effect of various trade-
+quires approximately 2200 instructions (including 1300                         offs in the Tornado architecture.
+for two remote interrupt exchanges), plus the cost of four                        In this section we examine the performance of the indi-
+cache transfers (a pair for each of the remote PPC call and                    vidual components presented in this paper, and then look
+return exchanges).17                                                           at some higher level microbenchmarks run under both
+                                                                               Tornado and other current multiprocessor systems.
+7     Experimental results
+The results presented in this paper are based on both hard-                    7.1             Component results
+ware tests on a locally developed 16 processor NUMA-
+                                                                               Figure 8(a) shows the results of a number of concurrent
+chine prototype [13, 29] and the SimOS simulator from
+                                                                               stress tests on the components described in this paper;
+Stanford [25]. The NUMAchine architecture consists of
+                                                                               namely, dynamic memory allocation ( threads malloc
+a set of stations (essentially small, bus-based multipro-
+                                                                               and free), clustered object miss handling ( threads in-
+cessors) connected by a hierarchy of rings. It uses a novel
+                                                                               voke independent clustered objects not in the table), clus-
+selective broadcast mechanism to efficiently handle in-
+                                                                               tered object garbage collection ( threads trigger garbage
+validations, as well as broadcast data. The test machine
+                                                                               collection), and protected procedure calling ( threads
+has 4 stations, each with 4 processors and a memory mod-
+                                                                               call a common clustered object in another address space).
+ule (for a total of 16 processors), connected by a single
+                                                                               Results are collected over a large number of iterations and
+ring. The final machine will have 48 processors with a
+                                                                               averaged separately for each thread. Figure 8(a) includes
+two-level hierarchy of rings. The processors are 150MHz
+                                                                               the average time in cycles across all threads, as well as
+MIPS R4400 processors with 16K I/D L1 cache and 1MB
+                                                                               range bars indicating the range of thread times.
+
+   17 We expect to reduce this to about 600 instructions when optimiza-
+
+tions already applied to the local case are applied to the remote call path.     18 The final version will run at 50MHz.
+            2500        gc                         2500        numa gc                         2500             simos4way gc
+                        ppc                                    numa ppc                                         simos4way ppc
+                        miss                                   numa miss                                        simos4way miss
+            2000        malloc                     2000        numa malloc                     2000             simos4way malloc
+                                                               simos gc
+                                                               simos ppc
+            1500                                   1500        simos miss                      1500
+   Cycles
+                                                               simos malloc
+            1000                                   1000                                        1000
+
+             500                                    500                                         500
+
+
+                   12   4       8        12   16          12   4       8        12     16                 12    4          8        12      16
+             a)             Processors              b)             Processors                     c)                   Processors
+
+
+Figure 8: Nanobenchmarks: Garbage collection (gc), Protected Procedure Calls (ppc), in-core page miss handling (miss), and
+dynamic memory allocation (malloc), run under Tornado on NUMAchine (numa) and under Tornado on SimOS (simos). The left
+figure (a) shows the average number of cycles required on NUMAchine for n threads with range bars indicating the range over all
+threads. The middle figure (b) shows the average cycles required on NUMAchine and SimOS. The right figure (c) shows the average
+cycles required on SimOS configured with 4-way set associative caches.
+
+   These results show that memory allocation and miss                            System                    OS            # Cpus        Legend
+handling perform quite well although there is a lot of vari-                UofT NUMAchine               Tornado           16           numa
+ance across the threads for the garbage collection and                     SimOS NUMAchine               Tornado           16           simos
+                                                                              SimOS 4waya                Tornado           16        simos4way
+PPC tests. As the number of processors increases, the                     SUN 450 UltraSparc II        Solaris 2.5.1        4            sun
+range remains consistent, but the overall average slowly                 IBM G30 PowerPC 604           AIX 4.2.0.0          4            ibm
+increases. If we compare the results from NUMAchine                          SGI Origin 2000            IRIX 6.4           40b            sgi
+to those on SimOS, shown in Figure 8(b), we see the                         Convex SPP-1600            SPP-UX 4.2          32c         convex
+same sort of trend (except that it is worse under SimOS).
+                                                                          a simulated 4-way set associative cache
+However, running the same tests with SimOS set to sim-
+                                                                          b Maximum used in experiments is 16
+ulate the caches with 4-way associativity, the results be-                c Maximum used in experiments is 8
+come almost perfectly uniform and flat (see Figure 8(c)).
+This indicates that the cause of the variability is local
+cache conflicts—caused by multiple data structures oc-                  Table 1: Platforms on which micro-benchmarks where run.
+casionally mapping to the same cache block on some
+processors—and is not due to some unforeseen sharing.
+                                                                              Operation      Thread Creation        Page Fault       File Stat
+7.2          Microbenchmarks                                                  NUMAchine                   15               46                5
+                                                                              Sun                       178                19                3
+To evaluate the effectiveness of the Tornado design at                        IBM                       691                43                3
+a level above the individual components, we ran a few                         SGI                         11               21                2
+                                                                              Convex                      84               56                5
+multiprocessor operating system stress tests. The micro-
+benchmarks are composed of three separate tests: thread
+                                                                       Table 2: Base costs, in microseconds, for thread creation, page
+creation, in-core page faults, and file stat, each with
+                                                                       fault handling, and file stating, with a single processor.
+worker threads performing the operation being tested:
+
+Thread Creation Each worker successively creates                       high variability from run to run and between the different
+     and then joins with a child thread (the child does                threads within a run, the overall trend was consistent.
+     nothing but exit).
+                                                                          Figure 9(a) shows normalized results for the different
+Page Fault Each worker thread accesses a set of in-core                tests on NUMAchine. Because all results are normalized
+     unmapped pages in independent (separate mmap)                     against the uniprocessor tests, an ideal result would be a
+     memory regions.                                                   set of perfectly flat lines at 1. Overall, the results demon-
+File Stat Each worker thread repeatedly fstats an inde-                strate good performance, since the slowdown is usually
+     pendent file.                                                     less than 50 percent. However, as with the component
+                                                                       tests, there is high variability in the results, which ac-
+Each test was run in two different ways; multithreaded                 counts for the apparent randomness in the graphs.
+and multiprogrammed. In the multithreaded case, the test
+was run as described above. In the multiprogrammed                        Similar results are obtained under SimOS. Figure 9(b)
+tests, instances of the test were started with one worker              shows the raw times in microseconds for the multi-
+thread per instance. In all cases, the tests were run multi-           threaded tests run under NUMAchine and SimOS. As
+ple times in succession and the results were collected af-             with the component tests, setting SimOS to simulate 4-
+ter a steady state was reached. Although there was still a             way associative caches smooths out the results consider-
+           3                 stat mt                                                                                    3
+                                                                    60
+                             pagefault mt                                                                                           stat mt
+                             thread mt                                                                                              pagefault mt
+                             stat mp                                                                                                thread mt
+                             pagefault mp
+
+
+      Slow Down                                      Microseconds                                           Slow Down
+                             thread mp                              40
+                                                                                       numa stat mt
+                                                                                       simos stat mt
+                                                                                       numa pagefault mt
+                                                                                       simos pagefault mt
+                                                                                       numa thread mt
+                                                                    20                 simos thread mt
+           1                                                                                                            1
+
+                                                                    0
+                   1 2   4         8       12   16                       1   2    4                   8                     1   2       4           8
+              a)                Processors                    b)                 Processors                   c)                       Processors
+
+
+Figure 9: Microbenchmarks: Cost of thread creation/destruction (thread), in-core page fault handling (pagefault), and file
+stat (stat) with n worker threads running either in one process (mt) or in n processes with one thread per process (mp). The left
+figure (a) shows slowdown relative to the uniprocessor case. The middle figure (b) shows the raw times in microseconds for the
+multithreaded tests on NUMAchine and SimOS, and the right figure (c) shows the slowdown of the multithreaded tests run on SimOS
+configured with 4-way set associative caches.
+
+ably (Figure 9(c)).19                                                                  operations demonstrates base performance competitive
+   To see how existing systems perform, we ran the same                                with commercial systems, which is important since scal-
+tests on a number of systems available to us (see Ta-                                  ability is of limited value if the base overhead is too large.
+ble 1, Table 2, and Figure 10). The results demonstrate                                In Section 7.1 we saw that the infrastructure of our sys-
+a number of things. First, many of the systems do quite                                tem is highly scalable, including the IPC, clustered ob-
+well on the multiprogrammed tests, reflecting the effort                               ject, and the memory allocation facilities, providing the
+that has gone into improving multi-user throughput over                                foundation for scalable system services. In Section 7.2
+the last 10–15 years. However, the results are some-                                   we saw that, for simple microbenchmarks, our system ex-
+what mixed for the multithreaded tests. In particular, al-                             hibits much better scalability than commercial systems.
+though SGI does extremely well on the multiprogrammed                                  While microbenchmark results are generally considered a
+tests, it does quite poorly on the multithreaded tests. This                           poor metric for comparison, the nearly perfect scalability
+is particularly interesting when compared to results on                                of Tornado compares favorably to the large (e.g., 100X
+an older bus-based, 6-processor SGI Challenge running                                  on 16 processors) slowdown for the commercial systems
+IRIX 6.2 (not shown), where the multiprogrammed re-                                    on the multithreaded experiments. It seems unlikely that
+sults are slightly worse and the multithreaded results are                             this kind of a slowdown in the performance of such fun-
+quite a bit better. This appears to reflect the strength and                           damental operations as page faults, thread creation, and
+direction of the new NUMA SGI systems. Overall, Sun                                    file state does not have a large impact on application per-
+performs quite well with good multithreaded results and                                formance.
+respectable multiprogrammed results; however, we had                                      The disparity between the performance of the multi-
+only a four processor system, so it is hard to extrapolate                             threaded and multiprogrammed results for the commer-
+the results to larger systems.                                                         cial systems suggests that locality and locking overhead
+   One possible reason for poor performance is load bal-                               on the operating system structures that represent a pro-
+ancing at a very fine granularity. For example, we sus-                                cess is a major source of slowdown. The process is only
+pect that the poor performance of AIX in the multipro-                                 a single example of a shared object, and we expect that
+grammed thread creation experiment is due to a shared                                  experimentation will demonstrate that commercial sys-
+dispatch queue resulting in frequent thread migration.                                 tems exhibit slowdown (for even multiprogrammed ex-
+While load balancing is important, for most workloads                                  periments) when resources such as files or memory re-
+systems like IRIX deal with it at a large granularity that                             gions are shared. In our future work we will investi-
+does not require a shared dispatch queue.                                              gate the performance of Tornado when other resources
+                                                                                       are shared, and study the performance of our system for
+7.3               Summary of results                                                   real applications.
+
+While Tornado is still very much an active research
+project, the performance results obtained so far demon-                                8 Related work
+strate the strengths of our basic design. The cycle counts
+provided throughout this paper for the costs of various                                A number of papers have been published on performance
+                                                                                       issues in shared-memory multiprocessor operating sys-
+   19 There is still an anomaly involving a single thread taking longer                tems, mostly in the context of resolving specific problems
+than the others that we have yet to track down. This pulls up the average              in a specific system [5, 6, 8, 21, 24, 26]. These systems
+at two processors, but has less effect on the average when there are more              were mostly uniprocessor or small-scale multiprocessor
+threads running.                                                                       Unix systems trying to scale up to larger systems. Two
+    Slow Down
+                10                        sgi           10                                      10
+                                          convex
+                                          ibm
+                                          sun
+                                          numa
+
+                1                                       1                                       1
+                      12   4      8       12       16         12   4      8       12   16             12   4      8       12   16
+                 a)            Processors                b)            Processors                c)            Processors
+
+                5                                       5                                       5
+
+
+
+
+    Slow Down
+
+
+
+                1                                       1                                       1
+                      12   4      8       12       16         12   4      8       12   16             12   4      8       12   16
+                 d)            Processors                e)            Processors                f)            Processors
+
+
+Figure 10: Microbenchmarks across all tests and systems. The top row (a–c) depicts the multithreaded tests with n threads in one
+process. The bottom row (d–f) depicts the multiprogrammed tests with n processes, each with one thread. The leftmost set (a,d)
+depicts the slowdown for in-core page fault handling, the middle set (b,e) depicts the slowdown for file stat, and the rightmost set
+depicts the slowdown for thread creation/destruction. The systems on which the tests were run are: SGI Origin 2000 running IRIX
+6.4, Convex SPP-1600 running SPP-UX 4.2, IBM 7012-G30 PowerPC 604 running AIX 4.2.0.0, Sun 450 UltraSparc II running
+Solaris 2.5.1, and NUMAchine running Tornado.
+
+projects that were aimed explicitly at large-scale multi-                  lished works on multiprocessor memory allocation, in
+processors were Hive [7], and the precursor to Tornado,                    particular for kernel environments. A survey paper by
+Hurricane [28]. Both independently chose a clustered                       Wilson et al [31] covers many of the other schemes,
+approach by connecting multiple small-scale systems to                     but does not address multiprocessor or caching issues.
+form either, in the case of Hive, a more fault tolerant sys-               Grunwald et al examined cache performance of alloca-
+tem, or, in the case of Hurricane, a more scalable sys-                    tion schemes [15] and suggest a number of techniques
+tem. However, both groups ran into complexity problems                     they felt would be most effective in dealing with local-
+with this approach and both have moved on to other ap-                     ity issues. Most of these techniques can be found in the
+proaches: Disco [4] and Tornado, respectively.                             McKenney and Slingwine memory allocator (with a few
+                                                                           additions in our own adaptation).
+Clustered objects. Concepts similar to clustered ob-
+jects have appeared in a number of distributed systems,                    Synchronization. The topic of locking and concur-
+most notably in Globe [18] and SOS [20]. In all these                      rency control in general has a long history, as does
+cases (including Tornado’s clustered objects) the goal is                  garbage collection [30]. The relationship between lock-
+to hide the distributed nature of the objects from the users               ing and garbage collection is evident in some of the is-
+of the objects while improving performance over a more                     sues surrounding memory management for lock-free ap-
+naive centralized approach. However, the issues faced in                   proaches [17]. Our garbage collection scheme is in some
+a tightly coupled shared-memory multiprocessor are very                    sense a hack, but works reasonably well in our environ-
+different from those of a distributed environment. For ex-                 ment. Although it is somewhat similar to IBM’s patent
+ample, communication is cheaper, efficiency (time and                      4809168, their scheme appears to target uniprocessors
+space) is of greater concern, direct sharing is possible,                  only and is less general than ours. The benefits for our
+and the failure modes are simpler. Hence, the Tornado                      locking protocol are particularly evident in large, com-
+clustered object system is geared more strongly towards                    plex software systems, where there are many developers
+maximizing performance and reducing complexity than                        with varying skill and experience in dealing with concur-
+the other systems.                                                         rency control.
+
+Dynamic memory allocation. Our dynamic memory                              Protected procedure call. The majority of research
+allocation design borrows heavily from McKenney and                        on performance conscious inter-process communication
+Slingwine’s design [22], which is one of the few pub-                      (IPC) is for uniprocessor systems. Excellent results have
+been reported for these systems, to the point where it has            As the adage goes, “any problem in computer science
+been argued that the IPC overhead has become largely ir-           can be solved by an extra level of indirection.”21 In Tor-
+relevant [2].20 Although many results have been reported           nado, the clustered object translation table provides this
+over the years on a number of different platforms, the             level of indirection, which we have found useful for sev-
+core cost for a call-return pair (with similar functionality)      eral purposes. For example, it includes clustered ob-
+is usually between 100 and 200 instructions [10, 11, 16,           ject access control information for implementing IPC se-
+19]. However, the Tornado PPC facility goes beyond the             curity, helps track accesses to objects in support of the
+standard techniques used to optimize IPC performance,              garbage collection system, and supplants the need for
+by optimizing for the multiprocessor case by eliminating           many other global tables by allowing clients to directly
+locks and shared data accesses, and by providing concur-           use references to server objects, rather than using an iden-
+rency to the servers.                                              tifier that must be translated to the target object on each
+   The key previous work done in multiprocessor IPC                call.
+was by Bershad et al [3], where excellent results were ob-            The Tornado object-oriented strategy does not come
+tained on the hardware of the time. However, it is inter-          without cost, however. Overheads include: (  ) virtual
+esting that the recent changes in technology lead to de-           function invocation, (  ) the indirection through the trans-
+sign tradeoffs far different from what they used to be.            lation table, and (  ) the intrinsic cost of modularity,
+The Firefly multiprocessor [27] on which Bershad’s IPC             where optimizations possible by having one component
+work was developed has a smaller ratio of processor to             of the system know about the details of another are not
+memory speed, has caches that are no faster than main              allowed. Our experiences to-date suggest that these costs
+memory (used to reduce bus traffic), and uses an updat-            are low compared to the performance advantages of lo-
+ing cache consistency protocol. For these reasons, Ber-            cality, and will over time grow less significant with the in-
+shad found that he could improve performance by idling             creasing discrepancy between processor speed and mem-
+server processes on idle processors (if they were avail-           ory latency. However, more experimentation is required.
+able), and having the calling process migrate to that pro-            Our primary goal in developing Tornado was to de-
+cessor to execute the remote procedure. This approach              sign a system that would achieve high performance on
+would be prohibitivein today’s systems with the high cost          shared-memory multiprocessors. We believe that the per-
+of cache misses and invalidations.                                 formance numbers presented in this paper illustrate that
+                                                                   we have been successful in achieving this goal. A result
+                                                                   that is just as important that we did not originally target
+9      Concluding Remarks                                          was ease of development. The object-oriented strategy
+                                                                   coupled with clustered objects makes it easier to first get a
+Tornado was built on our experience with the Hurricane             simple correct implementation of a new service and then
+operating system [28]. Hurricane was designed for scal-            incrementally optimize its performance later. Also, the
+ability by loosely coupling small tightly-coupled operat-          locking protocol has made it much easier for inexperi-
+ing systems images (called clusters) to form a large-scale         enced programmers to develop code, both because fewer
+single system image. This approach is now being em-                locks have to be acquired and because objects will not
+ployed in one form or another by several commercial sys-           disappear even if locks on them are released.
+tems, for example in SGI’s Cellular IRIX. However, de-                Tornado currently runs on SimOS and on a 16 pro-
+spite many of the positive benefits of this approach, we           cessor prototype of NUMAchine. It supports most of
+found that: (  ) the traditional within-cluster structures ex-    the facilities (e.g., shells, compilers, editors) and services
+hibit poor locality which severely impacts performance             (pipes, TCP/IP, NFS, file system) one expects. We are
+on modern multiprocessors, (  ) the rigid clustering re-        starting to explore scalability issues, work on policies for
+sults in increased complexity as well as high overhead or          parallel applications, and study how to clusterize objects
+poor scalability for some applications, and (  ) the tradi-   in a semi-automated fashion. A sister project to Tornado,
+tional structures as well as the clustering strategy make it       the Kitchawan operating system from IBM T.J.Watson
+difficult to support the specialized policy requirements of        Research Center, employs many of the ideas from Tor-
+parallel applications.                                             nado, and is additionally exploring fault containment,
+   Tornado does not have these problems. The object-               availability, portability and some of the other issues re-
+oriented nature of Tornado and its clustered objects al-           quired for an industrial strength operating system.
+low any available locality and independence to be ex-
+ploited, allow the degree of clustering to be defined on a
+per-object basis, and make it easier to explore policy and         Acknowledgments
+implementation alternatives. Moreover, the fine-grained,           Rob Ho implemented most of the microbenchmarks. Ron Un-
+in-object locking strategy of Tornado has much lower               rau and Tarek Abdelrahmen helped run the performance ex-
+complexity, lower overhead, and better concurrency.
+                                                                     21 In a private communication, Roger Needham attributes this to
+    20 We do not agree with these arguments.                       David Wheeler.
+periments. Many helped with the implementation of Tornado,              nical Conference, 1993.
+in particular: Derek DeVries, Daniel Wilk, and Eric Parsons.       [17] M. Herlihy. A methodology for implementing highly con-
+More to come....                                                        current data objects. ACM Trans. on Programming Lan-
+                                                                        guages and Systems, 15(5):745–770, November 1993.
+                                                                   [18] P. Homburg, L. van Doorn, M. van Steen, A. S. Tanen-
+References                                                              baum, and Wi. de Jonge. An object model for flexible dis-
+                                                                        tributed systems. In Proc. of the 1st Annual ASCI Confer-
+[ 1] M. Auslander, H. Franke, O. Krieger, B. Gamsa, and                 ence, pages 69–78, 1995.
+     M. Stumm. Customization-lite. In 6th Workshop on Hot          [19] T. Jaeger et al. Achieved IPC performance. In 6th Work-
+     Topics in Operating Systems (HotOS-VI), pages 43–48,               shop on Hot Topics in Operating Systems (HotOS-VI),
+     1997.                                                              1997.
+[2] B. Bershad. The increasing irrelevance of IPC perfor-          [20] M. Makpangou, Y. Gourhant, J.P. Le Narzul, and
+     mance for microkernel-based operating systems. In Proc.            M. Shapiro. Fragmented objects for distributed abstrac-
+     USENIX Workshop on Micro-Kernels and Other Kernel                  tions. In T. L. Casavant and M. Singhal, editors, Readings
+     Architectures, pages 205–212, 1992.                                in Distributed Computing Systems, pages 170–186. IEEE
+[3] B. N. Bershad, T. E. Anderson, E. D. Lazowska, and H. M.            Computer Society Press, 1994.
+     Levy. Lightweight remote procedure call. ACM Trans.           [21] D. McCrocklin. Scaling Solaris for enterprise computing.
+     Computer Systems, 8(1):37–55, February 1990.                       In Spring 1995 Cray Users Group Meeting, 1995.
+[4] E. Bugnion, S. Devine, K. Govil, and M. Rosenblum.             [22] P. E. McKenney and J. Slingwine. Efficient kernel mem-
+     Disco: running commodity operating systems on scal-                ory allocation on shared-memory multiprocessor. In Proc.
+     able multiprocessors. ACM Trans. on Computer Systems,              USENIX Technical Conference, pages 295–305, 1993.
+     15(4):412–447, November 1997.                                 [23] E. Parsons, B. Gamsa, O. Krieger, and M. Stumm.
+[5] M. Campbell et al. The parallelization of UNIX system               (De-)clustering objects for multiprocessor system soft-
+     V release 4.0. In Proc. USENIX Technical Conference,               ware. In Proc. Fourth Intl. Workshop on Object Orien-
+     pages 307–324, 1991.                                               tation in Operating Systems (IWOOS95), pages 72–84,
+[6] J. Chapin, S. A. Herrod, M. Rosenblum, and A. Gupta.                1995.
+     Memory system performance of UNIX on CC-NUMA                  [24] D. L. Presotto. Multiprocessor streams for Plan 9. In Proc.
+     multiprocessors. In Proc. ACM SIGMETRICS Intl. Conf.               Summer UKUUG Conf., pages 11–19, 1990.
+     on Measurement and Modelling of Computer Systems,             [25] M. Rosenblum, E. Bugnion, S. Devine, and S. A. Her-
+     1995.                                                              rod. Using the SimOS machine simulator to study com-
+[7] J. Chapin, M. Rosenblum, S. Devine, T. Lahiri, D. Teo-              plex computer systems. ACM Trans. on Modeling and
+     dosio, and A. Gupta. Hive: Fault containment for shared-           Computer Simulation, 7(1):78–103, Jan. 1997.
+     memory multiprocessors. In Proc. of the 15th ACM Symp.        [26] J. Talbot. Turning the AIX operating system into an MP-
+     on Operating Systems Principles (SOSP), pages 12–25,               capable OS. In Proc. USENIX Technical Conference,
+     1995.                                                              1995.
+[8] D. R. Cheriton and K. J. Duda. A caching model of oper-        [27] C. P. Thacker and L. C. Stewart. Firefly: a multiprocessor
+     ating system kernel functionality. In Proc. Symp. on Oper-         workstation. In Proc. 2nd Intl. Conf. on Architectural Sup-
+     ating Systems Design and Implementation (OSDI), pages              port for Programming Languages and Operating Systems
+     179–193, 1994.                                                     (ASPLOS), pages 164–172, 1987.
+[9] H. Custer. Inside Windows NT. Microsoft Press, 1993.           [28] R. Unrau, O. Krieger, B. Gamsa, and M. Stumm. Hier-
+[10] D. R. Engler, M. F. Kaashoek, and Jr. O’Toole J. Exoker-           archical clustering: A structure for scalable multiproces-
+     nel: an operating system architecture for application-level        sor operating system design. Journal of Supercomputing,
+     resource management. In Proc. 15th ACM Symp. on Op-                  (1/2):105–134, 1995.
+     erating Systems Principles, pages 251–266, 1995.              [29] Z. Vranesic et al. The NUMAchine multiprocessor. Tech-
+[11] B. Ford and J. Lepreau. Evolving Mach 3.0 to a migrat-             nical Report CSRI-324, Computer Systems Research In-
+     ing thread model. In Proc. USENIX Technical Conference,            stitute, University of Toronto, 1995.
+     pages 97–114, 1994.                                           [30] P. R. Wilson. Uniprocessor garbage collection techniques.
+[12] B. Gamsa, O. Krieger, and M. Stumm. Optimizing                     In Intl. Workshop on Memory Management. Springer-
+     IPC performance for shared-memory multiprocessors. In              Verlag, 1992.
+     Proc. ICPP, pages 208–211, 1994.                              [31] P. R. Wilson, M. S. Johnstone, M. Neely, and D. Boles.
+[13] A. Grbic et al. Design and implementation of the NUMA-             Dynamic storage allocation: A survey and critical review.
+     chine multiprocessor. In Proceedings of the 35rd DAC,              In Intl. Workshop on Memory Management. Springer-
+     pages 66–69, 1998.                                                 Verlag, 1995.
+[14] M. Greenwald and D.R. Cheriton. The synergy between
+     non-blocking synchronization and operating system struc-
+     ture. In Symp. on Operating System Design and Imple-
+     mentation, pages 123–136, 1996.
+[15] D. Grunwald, B. G. Zorn, and R. Henderson. Improving
+     the cache locality of memory allocation. In Proc. Conf.
+     on Programming Language Design and Implementation
+     (PLDI), pages 177–186, 1993.
+[16] G. Hamilton and P. Kougiouris. The Spring nucleus: A
+     microkernel for objects. In Proc. USENIX Summer Tech-
+

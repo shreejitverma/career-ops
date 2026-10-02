@@ -1,0 +1,909 @@
+               Large-scale Incremental Processing
+         Using Distributed Transactions and Notifications
+
+                                         Daniel Peng and Frank Dabek
+                                     dpeng@google.com, fdabek@google.com
+                                                       Google, Inc.
+
+
+                        Abstract                                   lelism of the computation; all documents finish one pro-
+                                                                   cessing step before starting the next. For example, when
+   Updating an index of the web as documents are                   the indexing system is writing inverted links to the cur-
+crawled requires continuously transforming a large                 rent highest-PageRank URL, we need not worry about
+repository of existing documents as new documents ar-              its PageRank concurrently changing; a previous MapRe-
+rive. This task is one example of a class of data pro-             duce step has already determined its PageRank.
+cessing tasks that transform a large repository of data               Now, consider how to update that index after recrawl-
+via small, independent mutations. These tasks lie in a             ing some small portion of the web. It’s not sufficient to
+gap between the capabilities of existing infrastructure.           run the MapReduces over just the new pages since, for
+Databases do not meet the storage or throughput require-           example, there are links between the new pages and the
+ments of these tasks: Google’s indexing system stores              rest of the web. The MapReduces must be run again over
+tens of petabytes of data and processes billions of up-            the entire repository, that is, over both the new pages
+dates per day on thousands of machines. MapReduce and              and the old pages. Given enough computing resources,
+other batch-processing systems cannot process small up-            MapReduce’s scalability makes this approach feasible,
+dates individually as they rely on creating large batches          and, in fact, Google’s web search index was produced
+for efficiency.                                                    in this way prior to the work described here. However,
+   We have built Percolator, a system for incrementally            reprocessing the entire web discards the work done in
+processing updates to a large data set, and deployed it            earlier runs and makes latency proportional to the size of
+to create the Google web search index. By replacing a              the repository, rather than the size of an update.
+batch-based indexing system with an indexing system                   The indexing system could store the repository in a
+based on incremental processing using Percolator, we               DBMS and update individual documents while using
+process the same number of documents per day, while                transactions to maintain invariants. However, existing
+reducing the average age of documents in Google search             DBMSs can’t handle the sheer volume of data: Google’s
+results by 50%.                                                    indexing system stores tens of petabytes across thou-
+                                                                   sands of machines [30]. Distributed storage systems like
+1   Introduction
+                                                                   Bigtable [9] can scale to the size of our repository but
+   Consider the task of building an index of the web that          don’t provide tools to help programmers maintain data
+can be used to answer search queries. The indexing sys-            invariants in the face of concurrent updates.
+tem starts by crawling every page on the web and pro-                 An ideal data processing system for the task of main-
+cessing them while maintaining a set of invariants on the          taining the web search index would be optimized for in-
+index. For example, if the same content is crawled un-             cremental processing; that is, it would allow us to main-
+der multiple URLs, only the URL with the highest Page-             tain a very large repository of documents and update it
+Rank [28] appears in the index. Each link is also inverted         efficiently as each new document was crawled. Given
+so that the anchor text from each outgoing link is at-             that the system will be processing many small updates
+tached to the page the link points to. Link inversion must         concurrently, an ideal system would also provide mech-
+work across duplicates: links to a duplicate of a page             anisms for maintaining invariants despite concurrent up-
+should be forwarded to the highest PageRank duplicate              dates and for keeping track of which updates have been
+if necessary.                                                      processed.
+   This is a bulk-processing task that can be expressed               The remainder of this paper describes a particular in-
+as a series of MapReduce [13] operations: one for clus-            cremental processing system: Percolator. Percolator pro-
+tering duplicates, one for link inversion, etc. It’s easy to       vides the user with random access to a multi-PB reposi-
+maintain invariants since MapReduce limits the paral-              tory. Random access allows us to process documents in-
+
+
+                                                               1
+                                             Chunkserver
+                                                                     servers, a way to organize an incremental computation.
+       Application
+                                                                        A Percolator system consists of three binaries that run
+                            RPC
+    Percolator Library
+                                         Bigtable Tabletserver
+                                                                     on every machine in the cluster: a Percolator worker, a
+                                                                     Bigtable [9] tablet server, and a GFS [20] chunkserver.
+                                                                     All observers are linked into the Percolator worker,
+             Figure 1: Percolator and its dependencies               which scans the Bigtable for changed columns (“noti-
+                                                                     fications”) and invokes the corresponding observers as
+dividually, avoiding the global scans of the repository              a function call in the worker process. The observers
+that MapReduce requires. To achieve high throughput,                 perform transactions by sending read/write RPCs to
+many threads on many machines need to transform the                  Bigtable tablet servers, which in turn send read/write
+repository concurrently, so Percolator provides ACID-                RPCs to GFS chunkservers. The system also depends
+compliant transactions to make it easier for programmers             on two small services: the timestamp oracle and the
+to reason about the state of the repository; we currently            lightweight lock service. The timestamp oracle pro-
+implement snapshot isolation semantics [5].                          vides strictly increasing timestamps: a property required
+   In addition to reasoning about concurrency, program-              for correct operation of the snapshot isolation protocol.
+mers of an incremental system need to keep track of the              Workers use the lightweight lock service to make the
+state of the incremental computation. To assist them in              search for dirty notifications more efficient.
+this task, Percolator provides observers: pieces of code                From the programmer’s perspective, a Percolator
+that are invoked by the system whenever a user-specified             repository consists of a small number of tables. Each
+column changes. Percolator applications are structured               table is a collection of “cells” indexed by row and col-
+as a series of observers; each observer completes a task             umn. Each cell contains a value: an uninterpreted array of
+and creates more work for “downstream” observers by                  bytes. (Internally, to support snapshot isolation, we rep-
+writing to the table. An external process triggers the first         resent each cell as a series of values indexed by times-
+observer in the chain by writing initial data into the table.        tamp.)
+   Percolator was built specifically for incremental pro-               The design of Percolator was influenced by the re-
+cessing and is not intended to supplant existing solutions           quirement to run at massive scales and the lack of a
+for most data processing tasks. Computations where the               requirement for extremely low latency. Relaxed latency
+result can’t be broken down into small updates (sorting              requirements let us take, for example, a lazy approach
+a file, for example) are better handled by MapReduce.                to cleaning up locks left behind by transactions running
+Also, the computation should have strong consistency                 on failed machines. This lazy, simple-to-implement ap-
+requirements; otherwise, Bigtable is sufficient. Finally,            proach potentially delays transaction commit by tens of
+the computation should be very large in some dimen-                  seconds. This delay would not be acceptable in a DBMS
+sion (total data size, CPU required for transformation,              running OLTP tasks, but it is tolerable in an incremental
+etc.); smaller computations not suited to MapReduce or               processing system building an index of the web. Percola-
+Bigtable can be handled by traditional DBMSs.                        tor has no central location for transaction management;
+   Within Google, the primary application of Percola-                in particular, it lacks a global deadlock detector. This in-
+tor is preparing web pages for inclusion in the live web             creases the latency of conflicting transactions but allows
+search index. By converting the indexing system to an                the system to scale to thousands of machines.
+incremental system, we are able to process individual
+documents as they are crawled. This reduced the aver-                2.1   Bigtable overview
+age document processing latency by a factor of 100, and                 Percolator is built on top of the Bigtable distributed
+the average age of a document appearing in a search re-              storage system. Bigtable presents a multi-dimensional
+sult dropped by nearly 50 percent (the age of a search re-           sorted map to users: keys are (row, column, times-
+sult includes delays other than indexing such as the time            tamp) tuples. Bigtable provides lookup and update oper-
+between a document being changed and being crawled).                 ations on each row, and Bigtable row transactions enable
+The system has also been used to render pages into                   atomic read-modify-write operations on individual rows.
+images; Percolator tracks the relationship between web               Bigtable handles petabytes of data and runs reliably on
+pages and the resources they depend on, so pages can be              large numbers of (unreliable) machines.
+reprocessed when any depended-upon resources change.                    A running Bigtable consists of a collection of tablet
+2    Design                                                          servers, each of which is responsible for serving several
+                                                                     tablets (contiguous regions of the key space). A master
+   Percolator provides two main abstractions for per-                coordinates the operation of tablet servers by, for exam-
+forming incremental processing at large scale: ACID                  ple, directing them to load or unload tablets. A tablet is
+transactions over a random-access repository and ob-                 stored as a collection of read-only files in the Google
+
+
+                                                                 2
+SSTable format. SSTables are stored in GFS; Bigtable              bool UpdateDocument(Document doc) {
+relies on GFS to preserve data in the event of disk loss.           Transaction t(&cluster);
+Bigtable allows users to control the performance charac-            t.Set(doc.url(), "contents", "document", doc.contents());
+                                                                    int hash = Hash(doc.contents());
+teristics of the table by grouping a set of columns into
+a locality group. The columns in each locality group are              // dups table maps hash → canonical URL
+stored in their own set of SSTables, which makes scan-                string canonical;
+ning them less expensive since the data in other columns              if (!t.Get(hash, "canonical-url", "dups", &canonical)) {
+                                                                         // No canonical yet; write myself in
+need not be scanned.                                                     t.Set(hash, "canonical-url", "dups", doc.url());
+   The decision to build on Bigtable defined the over-                } // else this document already exists, ignore new copy
+all shape of Percolator. Percolator maintains the gist of             return t.Commit();
+                                                                  }
+Bigtable’s interface: data is organized into Bigtable rows
+and columns, with Percolator metadata stored along-
+side in special columns (see Figure 5). Percolator’s              Figure 2: Example usage of the Percolator API to perform ba-
+API closely resembles Bigtable’s API: the Percolator li-          sic checksum clustering and eliminate documents with the same
+                                                                  content.
+brary largely consists of Bigtable operations wrapped in
+Percolator-specific computation. The challenge, then, in                                   Time
+
+implementing Percolator is providing the features that                          1
+Bigtable does not: multirow transactions and the ob-                                       2
+server framework.                                                                                                 3
+                                                                                                                                 [t]
+2.2   Transactions
+                                                                  Figure 3: Transactions under snapshot isolation perform reads
+   Percolator provides cross-row, cross-table transac-            at a start timestamp (represented here by an open square) and
+tions with ACID snapshot-isolation semantics. Percola-            writes at a commit timestamp (closed circle). In this example,
+tor users write their transaction code in an imperative           transaction 2 would not see writes from transaction 1 since trans-
+language (currently C++) and mix calls to the Percola-            action 2’s start timestamp is before transaction 1’s commit times-
+                                                                  tamp. Transaction 3, however, will see writes from both 1 and 2.
+tor API with their code. Figure 2 shows a simplified ver-         Transaction 1 and 2 are running concurrently: if they both write
+sion of clustering documents by a hash of their contents.         the same cell, at least one will abort.
+In this example, if Commit() returns false, the transac-
+tion has conflicted (in this case, because two URLs with          tects against write-write conflicts: if transactions A and
+the same content hash were processed simultaneously)              B, running concurrently, write to the same cell, at most
+and should be retried after a backoff. Calls to Get() and         one will commit. Snapshot isolation does not provide
+Commit() are blocking; parallelism is achieved by run-            serializability; in particular, transactions running under
+ning many transactions simultaneously in a thread pool.           snapshot isolation are subject to write skew [5]. The main
+   While it is possible to incrementally process data with-       advantage of snapshot isolation over a serializable proto-
+out the benefit of strong transactions, transactions make         col is more efficient reads. Because any timestamp rep-
+it more tractable for the user to reason about the state of       resents a consistent snapshot, reading a cell requires only
+the system and to avoid the introduction of errors into           performing a Bigtable lookup at the given timestamp; ac-
+a long-lived repository. For example, in a transactional          quiring locks is not necessary. Figure 3 illustrates the re-
+web-indexing system the programmer can make assump-               lationship between transactions under snapshot isolation.
+tions like: the hash of the contents of a document is al-            Because it is built as a client library accessing
+ways consistent with the table that indexes duplicates.           Bigtable, rather than controlling access to storage itself,
+Without transactions, an ill-timed crash could result in a        Percolator faces a different set of challenges implement-
+permanent error: an entry in the document table that cor-         ing distributed transactions than traditional PDBMSs.
+responds to no URL in the duplicates table. Transactions          Other parallel databases integrate locking into the sys-
+also make it easy to build index tables that are always           tem component that manages access to the disk: since
+up to date and consistent. Note that both of these exam-          each node already mediates access to data on the disk it
+ples require transactions that span rows, rather than the         can grant locks on requests and deny accesses that violate
+single-row transactions that Bigtable already provides.           locking requirements.
+   Percolator stores multiple versions of each data item             By contrast, any node in Percolator can (and does) is-
+using Bigtable’s timestamp dimension. Multiple versions           sue requests to directly modify state in Bigtable: there is
+are required to provide snapshot isolation [5], which             no convenient place to intercept traffic and assign locks.
+presents each transaction with the appearance of reading          As a result, Percolator must explicitly maintain locks.
+from a stable snapshot at some timestamp. Writes appear           Locks must persist in the face of machine failure; if a
+in a different, later, timestamp. Snapshot isolation pro-         lock could disappear between the two phases of com-
+
+
+                                                              3
+ key         bal:data         bal:lock                 bal:write
+                                                                           Column       Use
+             6:               6:                       6: data @ 5
+ Bob
+             5: $10           5:                       5:                  c:lock       An uncommitted transaction is writing this
+             6:               6:                       6: data @ 5                      cell; contains the location of primary lock
+ Joe
+             5: $2            5:                       5:
+                                                                           c:write      Committed data present; stores the Bigtable
+1. Initial state: Joe’s account contains $2 dollars, Bob’s $10.                         timestamp of the data
+                                                                           c:data       Stores the data itself
+             7:$3             7: I am primary          7:
+ Bob         6:               6:                       6: data @ 5         c:notify     Hint: observers may need to run
+             5: $10           5:                       5:
+             6:               6:                       6: data @ 5
+                                                                           c:ack O      Observer “O” has run ; stores start timestamp
+ Joe                                                                                    of successful last run
+             5: $2            5:                       5:
+
+2. The transfer transaction begins by locking Bob’s account               Figure 5: The columns in the Bigtable representation of a Per-
+balance by writing the lock column. This lock is the primary              colator column named “c.”
+for the transaction. The transaction also writes data at its start
+timestamp, 7.                                                             mit, the system could mistakenly commit two transac-
+                                                                          tions that should have conflicted. The lock service must
+             7: $3            7: I am primary          7:                 provide high throughput; thousands of machines will be
+ Bob         6:               6:                       6: data @ 5        requesting locks simultaneously. The lock service should
+             5: $10           5:                       5:                 also be low-latency; each Get() operation requires read-
+             7: $9            7: primary @ Bob.bal     7:
+ Joe         6:               6:                       6: data @ 5        ing locks in addition to data, and we prefer to minimize
+             5: $2            5:                       5:                 this latency. Given these requirements, the lock server
+                                                                          will need to be replicated (to survive failure), distributed
+3. The transaction now locks Joe’s account and writes Joe’s new
+balance (again, at the start timestamp). The lock is a secondary          and balanced (to handle load), and write to a persistent
+for the transaction and contains a reference to the primary lock          data store. Bigtable itself satisfies all of our requirements,
+(stored in row “Bob,” column “bal”); in case this lock is stranded        and so Percolator stores its locks in special in-memory
+due to a crash, a transaction that wishes to clean up the lock            columns in the same Bigtable that stores data and reads
+needs the location of the primary to synchronize the cleanup.
+                                                                          or modifies the locks in a Bigtable row transaction when
+             8:               8:                       8: data @ 7        accessing data in that row.
+ Bob
+             7: $3            7:                       7:                    We’ll now consider the transaction protocol in more
+             6:               6:                       6: data @ 5        detail. Figure 6 shows the pseudocode for Percolator
+             5: $10           5:                       5:
+             7: $9            7: primary @ Bob.bal     7:
+                                                                          transactions, and Figure 4 shows the layout of Percolator
+ Joe         6:               6:                       6:data @ 5         data and metadata during the execution of a transaction.
+             5: $2            5:                       5:                 These various metadata columns used by the system are
+4. The transaction has now reached the commit point: it erases
+                                                                          described in Figure 5. The transaction’s constructor asks
+the primary lock and replaces it with a write record at a new             the timestamp oracle for a start timestamp (line 6), which
+timestamp (called the commit timestamp): 8. The write record              determines the consistent snapshot seen by Get(). Calls
+contains a pointer to the timestamp where the data is stored.             to Set() are buffered (line 7) until commit time. The ba-
+Future readers of the column “bal” in row “Bob” will now see the
+value $3.                                                                 sic approach for committing buffered writes is two-phase
+                                                                          commit, which is coordinated by the client. Transactions
+             8:               8:                       8: data @ 7
+                                                                          on different machines interact through row transactions
+             7: $3            7:                       7:                 on Bigtable tablet servers.
+ Bob
+             6:               6:                       6: data @ 5           In the first phase of commit (“prewrite”), we try to
+             5: $10           5:                       5:                 lock all the cells being written. (To handle client failure,
+             8:               8:                       8: data @ 7
+             7: $9            7:                       7:                 we designate one lock arbitrarily as the primary; we’ll
+ Joe                                                                      discuss this mechanism below.) The transaction reads
+             6:               6:                       6: data @ 5
+             5:$2             5:                       5:                 metadata to check for conflicts in each cell being writ-
+5. The transaction completes by adding write records and                  ten. There are two kinds of conflicting metadata: if the
+deleting locks at the secondary cells. In this case, there is only        transaction sees another write record after its start times-
+one secondary: Joe.                                                       tamp, it aborts (line 32); this is the write-write conflict
+                                                                          that snapshot isolation guards against. If the transaction
+Figure 4: This figure shows the Bigtable writes performed by              sees another lock at any timestamp, it also aborts (line
+a Percolator transaction that mutates two rows. The transaction
+transfers 7 dollars from Bob to Joe. Each Percolator column is            34). It’s possible that the other transaction is just being
+stored as 3 Bigtable columns: data, write metadata, and lock              slow to release its lock after having already committed
+metadata. Bigtable’s timestamp dimension is shown within each             below our start timestamp, but we consider this unlikely,
+cell; 12: “data” indicates that “data” has been written at Bigtable       so we abort. If there is no conflict, we write the lock and
+timestamp 12. Newly written data is shown in boldface.
+
+
+                                                                      4
+ 1   class Transaction {                                                          the data to each cell at the start timestamp (lines 36-38).
+ 2    struct Write { Row row; Column col; string value; };
+ 3    vector<Write> writes ;                                                         If no cells conflict, the transaction may commit and
+ 4    int start ts ;                                                              proceeds to the second phase. At the beginning of the
+ 5                                                                                second phase, the client obtains the commit timestamp
+ 6    Transaction() : start ts (oracle.GetTimestamp()) {}
+                                                                                  from the timestamp oracle (line 48). Then, at each cell
+ 7    void Set(Write w) { writes .push back(w); }
+ 8    bool Get(Row row, Column c, string* value) {                                (starting with the primary), the client releases its lock and
+ 9     while (true) {                                                             make its write visible to readers by replacing the lock
+10      bigtable::Txn T = bigtable::StartRowTransaction(row);                     with a write record. The write record indicates to read-
+11      // Check for locks that signal concurrent writes.
+12      if (T.Read(row, c+"lock", [0, start ts ])) {
+                                                                                  ers that committed data exists in this cell; it contains a
+13        // There is a pending lock; try to clean it and wait                    pointer to the start timestamp where readers can find the
+14        BackoffAndMaybeCleanupLock(row, c);                                     actual data. Once the primary’s write is visible (line 58),
+15        continue;                                                               the transaction must commit since it has made a write
+16      }
+17
+                                                                                  visible to readers.
+18       // Find the latest write below our start timestamp.                         A Get() operation first checks for a lock in the times-
+19       latest write = T.Read(row, c+"write", [0, start ts ]);                   tamp range [0, start timestamp], which is the range of
+20       if (!latest write.found()) return false; // no data
+                                                                                  timestamps visible in the transaction’s snapshot (line 12).
+21       int data ts = latest write.start timestamp();
+22       *value = T.Read(row, c+"data", [data ts, data ts]);                      If a lock is present, another transaction is concurrently
+23       return true;                                                             writing this cell, so the reading transaction must wait un-
+24      }                                                                         til the lock is released. If no conflicting lock is found,
+25     }
+26   // Prewrite tries to lock cell w, returning false in case of conflict.
+                                                                                  Get() reads the latest write record in that timestamp range
+27     bool Prewrite(Write w, Write primary) {                                    (line 19) and returns the data item corresponding to that
+28      Column c = w.col;                                                         write record (line 22).
+29      bigtable::Txn T = bigtable::StartRowTransaction(w.row);                      Transaction processing is complicated by the possibil-
+30
+31     // Abort on writes after our start timestamp . . .                         ity of client failure (tablet server failure does not affect
+32     if (T.Read(w.row, c+"write", [start ts , ∞])) return false;                the system since Bigtable guarantees that written locks
+33     // . . . or locks at any timestamp.                                        persist across tablet server failures). If a client fails while
+34     if (T.Read(w.row, c+"lock", [0, ∞])) return false;                         a transaction is being committed, locks will be left be-
+35
+36     T.Write(w.row, c+"data", start ts , w.value);                              hind. Percolator must clean up those locks or they will
+37     T.Write(w.row, c+"lock", start ts ,                                        cause future transactions to hang indefinitely. Percolator
+38         {primary.row, primary.col});     // The primary’s location.            takes a lazy approach to cleanup: when a transaction A
+39     return T.Commit();
+                                                                                  encounters a conflicting lock left behind by transaction
+40    }
+41    bool Commit() {                                                             B, A may determine that B has failed and erase its locks.
+42     Write primary = writes [0];                                                   It is very difficult for A to be perfectly confident in
+43     vector<Write> secondaries(writes .begin()+1, writes .end());               its judgment that B is failed; as a result we must avoid
+44     if (!Prewrite(primary, primary)) return false;
+45     for (Write w : secondaries)                                                a race between A cleaning up B’s transaction and a not-
+46       if (!Prewrite(w, primary)) return false;                                 actually-failed B committing the same transaction. Per-
+47                                                                                colator handles this by designating one cell in every
+48     int commit ts = oracle .GetTimestamp();                                    transaction as a synchronizing point for any commit or
+49
+50     // Commit primary first.                                                   cleanup operations. This cell’s lock is called the primary
+51     Write p = primary;                                                         lock. Both A and B agree on which lock is primary (the
+52     bigtable::Txn T = bigtable::StartRowTransaction(p.row);                    location of the primary is written into the locks at all
+53     if (!T.Read(p.row, p.col+"lock", [start ts , start ts ]))
+                                                                                  other cells). Performing either a cleanup or commit op-
+54       return false;      // aborted while working
+55     T.Write(p.row, p.col+"write", commit ts,                                   eration requires modifying the primary lock; since this
+56          start ts ); // Pointer to data written at start ts .                  modification is performed under a Bigtable row transac-
+57     T.Erase(p.row, p.col+"lock", commit ts);                                   tion, only one of the cleanup or commit operations will
+58     if (!T.Commit()) return false;         // commit point
+59
+                                                                                  succeed. Specifically: before B commits, it must check
+60     // Second phase: write out write records for secondary cells.              that it still holds the primary lock and replace it with a
+61     for (Write w : secondaries) {                                              write record. Before A erases B’s lock, A must check
+62       bigtable::Write(w.row, w.col+"write", commit ts, start ts );             the primary to ensure that B has not committed; if the
+63       bigtable::Erase(w.row, w.col+"lock", commit ts);
+64     }
+                                                                                  primary lock is still present, then it can safely erase the
+65     return true;                                                               lock.
+66    }                                                                              When a client crashes during the second phase of
+67   } // class Transaction
+                                                                                  commit, a transaction will be past the commit point
+        Figure 6: Pseudocode for Percolator transaction protocol.                 (it has written at least one write record) but will still
+
+
+                                                                              5
+have locks outstanding. We must perform roll-forward on              mitted at timestamp TW < TR ; we will show that R sees
+these transactions. A transaction that encounters a lock             W’s writes. Since TW < TR , we know that the times-
+can distinguish between the two cases by inspecting the              tamp oracle gave out TW before or in the same batch
+primary lock: if the primary lock has been replaced by a             as TR ; hence, W requested TW before R received TR .
+write record, the transaction which wrote the lock must              We know that R can’t do reads before receiving its start
+have committed and the lock must be rolled forward, oth-             timestamp TR and that W wrote locks before requesting
+erwise it should be rolled back (since we always commit              its commit timestamp TW . Therefore, the above property
+the primary first, we can be sure that it is safe to roll back       guarantees that W must have at least written all its locks
+if the primary is not committed). To roll forward, the               before R did any reads; R’s Get() will see either the fully-
+transaction performing the cleanup replaces the stranded             committed write record or the lock, in which case W will
+lock with a write record as the original transaction would           block until the lock is released. Either way, W’s write is
+have done.                                                           visible to R’s Get().
+   Since cleanup is synchronized on the primary lock, it             2.4   Notifications
+is safe to clean up locks held by live clients; however,
+this incurs a performance penalty since rollback forces                  Transactions let the user mutate the table while main-
+the transaction to abort. So, a transaction will not clean           taining invariants, but users also need a way to trigger
+up a lock unless it suspects that a lock belongs to a dead           and run the transactions. In Percolator, the user writes
+or stuck worker. Percolator uses simple mechanisms to                code (“observers”) to be triggered by changes to the ta-
+determine the liveness of another transaction. Running               ble, and we link all the observers into a binary running
+workers write a token into the Chubby lockservice [8]                alongside every tablet server in the system. Each ob-
+to indicate they belong to the system; other workers can             server registers a function and a set of columns with Per-
+use the existence of this token as a sign that the worker is         colator, and Percolator invokes the function after data is
+alive (the token is automatically deleted when the process           written to one of those columns in any row.
+exits). To handle a worker that is live, but not working,                Percolator applications are structured as a series of ob-
+we additionally write the wall time into the lock; a lock            servers; each observer completes a task and creates more
+that contains a too-old wall time will be cleaned up even            work for “downstream” observers by writing to the table.
+if the worker’s liveness token is valid. To handle long-             In our indexing system, a MapReduce loads crawled doc-
+running commit operations, workers periodically update               uments into Percolator by running loader transactions,
+this wall time while committing.                                     which trigger the document processor transaction to in-
+                                                                     dex the document (parse, extract links, etc.). The docu-
+2.3   Timestamps
+                                                                     ment processor transaction triggers further transactions
+   The timestamp oracle is a server that hands out times-            like clustering. The clustering transaction, in turn, trig-
+tamps in strictly increasing order. Since every transaction          gers transactions to export changed document clusters to
+requires contacting the timestamp oracle twice, this ser-            the serving system.
+vice must scale well. The oracle periodically allocates                  Notifications are similar to database triggers or events
+a range of timestamps by writing the highest allocated               in active databases [29], but unlike database triggers,
+timestamp to stable storage; given an allocated range of             they cannot be used to maintain database invariants. In
+timestamps, the oracle can satisfy future requests strictly          particular, the triggered observer runs in a separate trans-
+from memory. If the oracle restarts, the timestamps will             action from the triggering write, so the triggering write
+jump forward to the maximum allocated timestamp (but                 and the triggered observer’s writes are not atomic. No-
+will never go backwards). To save RPC overhead (at the               tifications are intended to help structure an incremental
+cost of increasing transaction latency) each Percolator              computation rather than to help maintain data integrity.
+worker batches timestamp requests across transactions                    This difference in semantics and intent makes observer
+by maintaining only one pending RPC to the oracle. As                behavior much easier to understand than the complex se-
+the oracle becomes more loaded, the batching naturally               mantics of overlapping triggers. Percolator applications
+increases to compensate. Batching increases the scalabil-            consist of very few observers — the Google indexing
+ity of the oracle but does not affect the timestamp guar-            system has roughly 10 observers. Each observer is ex-
+antees. Our oracle serves around 2 million timestamps                plicitly constructed in the main() of the worker binary,
+per second from a single machine.                                    so it is clear what observers are active. It is possible for
+   The transaction protocol uses strictly increasing times-          several observers to observe the same column, but we
+tamps to guarantee that Get() returns all committed                  avoid this feature so it is clear what observer will run
+writes before the transaction’s start timestamp. To see              when a particular column is written. Users do need to be
+how it provides this guarantee, consider a transaction R             wary about infinite cycles of notifications, but Percolator
+reading at timestamp TR and a transaction W that com-                does nothing to prevent this; the user typically constructs
+
+
+                                                                 6
+a series of observers to avoid infinite cycles.                      table to scan by first picking a random Bigtable tablet,
+   We do provide one guarantee: at most one observer’s               then picking a random key in the tablet, and finally scan-
+transaction will commit for each change of an observed               ning the table from that position. Since each worker is
+column. The converse is not true, however: multiple                  scanning a random region of the table, we worry about
+writes to an observed column may cause the correspond-               two workers running observers on the same row con-
+ing observer to be invoked only once. We call this feature           currently. While this behavior will not cause correctness
+message collapsing, since it helps avoid computation by              problems due to the transactional nature of notifications,
+amortizing the cost of responding to many notifications.             it is inefficient. To avoid this, each worker acquires a lock
+For example, it is sufficient for http://google.com                  from a lightweight lock service before scanning the row.
+to be reprocessed periodically rather than every time we             This lock server need not persist state since it is advisory
+discover a new link pointing to it.                                  and thus is very scalable.
+   To provide these semantics for notifications, each ob-                The random-scanning approach requires one addi-
+served column has an accompanying “acknowledgment”                   tional tweak: when it was first deployed we noticed that
+column for each observer, containing the latest start                scanning threads would tend to clump together in a few
+timestamp at which the observer ran. When the observed               regions of the table, effectively reducing the parallelism
+column is written, Percolator starts a transaction to pro-           of the scan. This phenomenon is commonly seen in pub-
+cess the notification. The transaction reads the observed            lic transportation systems where it is known as “platoon-
+column and its corresponding acknowledgment column.                  ing” or “bus clumping” and occurs when a bus is slowed
+If the observed column was written after its last acknowl-           down (perhaps by traffic or slow loading). Since the num-
+edgment, then we run the observer and set the acknowl-               ber of passengers at each stop grows with time, loading
+edgment column to our start timestamp. Otherwise, the                delays become even worse, further slowing the bus. Si-
+observer has already been run, so we do not run it again.            multaneously, any bus behind the slow bus speeds up
+Note that if Percolator accidentally starts two transac-             as it needs to load fewer passengers at each stop. The
+tions concurrently for a particular notification, they will          result is a clump of buses arriving simultaneously at a
+both see the dirty notification and run the observer, but            stop [19]. Our scanning threads behaved analogously: a
+one will abort because they will conflict on the acknowl-            thread that was running observers slowed down while
+edgment column. We promise that at most one observer                 threads “behind” it quickly skipped past the now-clean
+will commit for each notification.                                   rows to clump with the lead thread and failed to pass
+   To implement notifications, Percolator needs to effi-             the lead thread because the clump of threads overloaded
+ciently find dirty cells with observers that need to be run.         tablet servers. To solve this problem, we modified our
+This search is complicated by the fact that notifications            system in a way that public transportation systems can-
+are rare: our table has trillions of cells, but, if the system       not: when a scanning thread discovers that it is scanning
+is keeping up with applied load, there will only be mil-             the same row as another thread, it chooses a new random
+lions of notifications. Additionally, observer code is run           location in the table to scan. To further the transporta-
+on a large number of client processes distributed across a           tion analogy, the buses (scanner threads) in our city avoid
+collection of machines, meaning that this search for dirty           clumping by teleporting themselves to a random stop (lo-
+cells must be distributed.                                           cation in the table) if they get too close to the bus in front
+   To identify dirty cells, Percolator maintains a special           of them.
+“notify” Bigtable column, containing an entry for each                   Finally, experience with notifications led us to intro-
+dirty cell. When a transaction writes an observed cell,              duce a lighter-weight but semantically weaker notifica-
+it also sets the corresponding notify cell. The workers              tion mechanism. We found that when many duplicates of
+perform a distributed scan over the notify column to find            the same page were processed concurrently, each trans-
+dirty cells. After the observer is triggered and the transac-        action would conflict trying to trigger reprocessing of the
+tion commits, we remove the notify cell. Since the notify            same duplicate cluster. This led us to devise a way to no-
+column is just a Bigtable column, not a Percolator col-              tify a cell without the possibility of transactional conflict.
+umn, it has no transactional properties and serves only as           We implement this weak notification by writing only to
+a hint to the scanner to check the acknowledgment col-               the Bigtable “notify” column. To preserve the transac-
+umn to determine if the observer should be run.                      tional semantics of the rest of Percolator, we restrict these
+   To make this scan efficient, Percolator stores the notify         weak notifications to a special type of column that can-
+column in a separate Bigtable locality group so that scan-           not be written, only notified. The weaker semantics also
+ning over the column requires reading only the millions              mean that multiple observers may run and commit as a
+of dirty cells rather than the trillions of total data cells.        result of a single weak notification (though the system
+Each Percolator worker dedicates several threads to the              tries to minimize this occurrence). This has become an
+scan. For each thread, the worker chooses a portion of the           important feature for managing conflicts; if an observer
+
+
+                                                                 7
+frequently conflicts on a hotspot, it often helps to break       experience with thread-per-request was, on the whole,
+it into two observers connected by a non-transactional           positive: application code is simple, we achieve good uti-
+notification on the hotspot.                                     lization on many-core machines, and crash debugging is
+                                                                 simplified by meaningful and complete stack traces. We
+2.5   Discussion
+                                                                 encountered fewer race conditions in application code
+   One of the inefficiencies of Percolator relative to a         than we feared. The biggest drawbacks of the approach
+MapReduce-based system is the number of RPCs sent                were scalability issues in the Linux kernel and Google
+per work-unit. While MapReduce does a single large               infrastructure related to high thread counts. Our in-house
+read to GFS and obtains all of the data for 10s or 100s          kernel development team was able to deploy fixes to ad-
+of web pages, Percolator performs around 50 individual           dress the kernel issues.
+Bigtable operations to process a single document.
+                                                                 3     Evaluation
+   One source of additional RPCs occurs during commit.
+When writing a lock, we must do a read-modify-write                 Percolator lies somewhere in the performance space
+operation requiring two Bigtable RPCs: one to read for           between MapReduce and DBMSs. For example, because
+conflicting locks or writes and another to write the new         Percolator is a distributed system, it uses far more re-
+lock. To reduce this overhead, we modified the Bigtable          sources to process a fixed amount of data than a tradi-
+API by adding conditional mutations which implements             tional DBMS would; this is the cost of its scalability.
+the read-modify-write step in a single RPC. Many con-            Compared to MapReduce, Percolator can process data
+ditional mutations destined for the same tablet server           with far lower latency, but again, at the cost of additional
+can also be batched together into a single RPC to fur-           resources required to support random lookups. These are
+ther reduce the total number of RPCs we send. We create          engineering tradeoffs which are difficult to quantify: how
+batches by delaying lock operations for several seconds          much of an efficiency loss is too much to pay for the abil-
+to collect them into batches. Because locks are acquired         ity to add capacity endlessly simply by purchasing more
+in parallel, this adds only a few seconds to the latency         machines? Or: how does one trade off the reduction in
+of each transaction; we compensate for the additional la-        development time provided by a layered system against
+tency with greater parallelism. Batching also increases          the corresponding decrease in efficiency?
+the time window in which conflicts may occur, but in our            In this section we attempt to answer some of these
+low-contention environment this has not proved to be a           questions by first comparing Percolator to batch pro-
+problem.                                                         cessing systems via our experiences with converting
+   We also perform the same batching when reading from           a MapReduce-based indexing pipeline to use Percola-
+the table: every read operation is delayed to give it a          tor. We’ll also evaluate Percolator with microbench-
+chance to form a batch with other reads to the same              marks and a synthetic workload based on the well-known
+tablet server. This delays each read, potentially greatly        TPC-E benchmark [1]; this test will give us a chance to
+increasing transaction latency. A final optimization miti-       evaluate the scalability and efficiency of Percolator rela-
+gates this effect, however: prefetching. Prefetching takes       tive to Bigtable and DBMSs.
+advantage of the fact that reading two or more values               All of the experiments in this section are run on a sub-
+in the same row is essentially the same cost as reading          set of the servers in a Google data center. The servers run
+one value. In either case, Bigtable must read the entire         the Linux operating system on x86 processors; each ma-
+SSTable block from the file system and decompress it.            chine is connected to several commodity SATA drives.
+Percolator attempts to predict, each time a column is
+                                                                 3.1    Converting from MapReduce
+read, what other columns in a row will be read later in
+the transaction. This prediction is made based on past be-          We built Percolator to create Google’s large “base”
+havior. Prefetching, combined with a cache of items that         index, a task previously performed by MapReduce. In
+have already been read, reduces the number of Bigtable           our previous system, each day we crawled several billion
+reads the system would otherwise do by a factor of 10.           documents and fed them along with a repository of ex-
+   Early in the implementation of Percolator, we decided         isting documents through a series of 100 MapReduces.
+to make all API calls blocking and rely on running thou-         The result was an index which answered user queries.
+sands of threads per machine to provide enough par-              Though not all 100 MapReduces were on the critical path
+allelism to maintain good CPU utilization. We chose              for every document, the organization of the system as a
+this thread-per-request model mainly to make application         series of MapReduces meant that each document spent
+code easier to write, compared to the event-driven model.        2-3 days being indexed before it could be returned as a
+Forcing users to bundle up their state each of the (many)        search result.
+times they fetched a data item from the table would have            The Percolator-based indexing system (known as Caf-
+made application development much more difficult. Our            feine [25]), crawls the same number of documents,
+
+                                                             8
+but we feed each document through Percolator as it                                                Mapreduce
+                                                                                                  Percolator
+is crawled. The immediate advantage, and main design                                       2500
+
+
+goal, of Caffeine is a reduction in latency: the median
+
+
+                                                                  Clustering latency (s)
+                                                                                           2000
+document moves through Caffeine over 100x faster than
+the previous system. This latency improvement grows as                                     1500
+
+the system becomes more complex: adding a new clus-
+                                                                                           1000
+tering phase to the Percolator-based system requires an
+extra lookup for each document rather an extra scan over                                   500
+the repository. Additional clustering phases can also be
+implemented in the same transaction rather than in an-                                        0
+                                                                                                     10%            20%              30%             40%     50%
+other MapReduce; this simplification is one reason the                                              Crawl rate (Percentage of repository updated per hour)
+
+number of observers in Caffeine (10) is far smaller than
+the number of MapReduces in the previous system (100).            Figure 7: Median document clustering delay for Percolator
+This organization also allows for the possibility of per-         (dashed line) and MapReduce (solid line). For MapReduce, all
+                                                                  documents finish processing at the same time and error bars
+forming additional processing on only a subset of the             represent the min, median, and max of three runs of the clus-
+repository without rescanning the entire repository.              tering MapReduce. For Percolator, we are able to measure the
+   Adding additional clustering phases isn’t free in an in-       delay of individual documents, so the error bars represent the
+                                                                  5th- and 95th-percentile delay on a per-document level.
+cremental system: more resources are required to make
+sure the system keeps up with the input, but this is still        MapReduce, random lookups are awkward and costly.
+an improvement over batch processing systems where no             On the other hand, Caffeine developers need to reason
+amount of resources can overcome delays introduced by             about concurrency where it did not exist in the MapRe-
+stragglers in an additional pass over the repository. Caf-        duce paradigm. Transactions help deal with this concur-
+feine is essentially immune to stragglers that were a seri-       rency, but can’t fully eliminate the added complexity.
+ous problem in our batch-based indexing system because               To quantify the benefits of moving from MapRe-
+the bulk of the processing does not get held up by a few          duce to Percolator, we created a synthetic benchmark
+very slow operations. The radically-lower latency of the          that clusters newly crawled documents against a billion-
+new system also enables us to remove the rigid distinc-           document repository to remove duplicates in much the
+tions between large, slow-to-update indexes and smaller,          same way Google’s indexing pipeline operates. Docu-
+more rapidly updated indexes. Because Percolator frees            ments are clustered by three clustering keys. In a real sys-
+us from needing to process the repository each time we            tem, the clustering keys would be properties of the docu-
+index documents, we can also make it larger: Caffeine’s           ment like redirect target or content hash, but in this exper-
+document collection is currently 3x larger than the previ-        iment we selected them uniformly at random from a col-
+ous system’s and is limited only by available disk space.         lection of 750M possible keys. The average cluster in our
+   Compared to the system it replaced, Caffeine uses              synthetic repository contains 3.3 documents, and 93% of
+roughly twice as many resources to process the same               the documents are in a non-singleton cluster. This dis-
+crawl rate. However, Caffeine makes good use of the ex-           tribution of keys exercises the clustering logic, but does
+tra resources. If we were to run the old indexing system          not expose it to the few extremely large clusters we have
+with twice as many resources, we could either increase            seen in practice. These clusters only affect the latency
+the index size or reduce latency by at most a factor of two       tail and not the results we present here. In the Percola-
+(but not do both). On the other hand, if Caffeine were run        tor clustering implementation, each crawled document is
+with half the resources, it would not be able to process as       immediately written to the repository to be clustered by
+many documents per day as the old system (but the doc-            an observer. The observer maintains an index table for
+uments it did produce would have much lower latency).             each clustering key and compares the document against
+   The new system is also easier to operate. Caffeine has         each index to determine if it is a duplicate (an elabora-
+far fewer moving parts: we run tablet servers, Percola-           tion of Figure 2). MapReduce implements clustering of
+tor workers, and chunkservers. In the old system, each of         continually arriving documents by repeatedly running a
+a hundred different MapReduces needed to be individ-              sequence of three clustering MapReduces (one for each
+ually configured and could independently fail. Also, the          clustering key). The sequence of three MapReduces pro-
+“peaky” nature of the MapReduce workload made it hard             cesses the entire repository and any crawled documents
+to fully utilize the resources of a datacenter compared to        that accumulated while the previous three were running.
+Percolator’s much smoother resource usage.                           This experiment simulates clustering documents
+   The simplicity of writing straight-line code and the           crawled at a uniform rate. Whether MapReduce or Perco-
+ability to do random lookups into the repository makes            lator performs better under this metric is a function of the
+developing new features for Percolator easy. Under                how frequently documents are crawled (the crawl rate)
+
+
+                                                              9
+and the repository size. We explore this space by fixing                                Bigtable     Percolator     Relative
+the size of the repository and varying the rate at which                    Read/s       15513         14590         0.94
+new documents arrive, expressed as a percentage of the                      Write/s      31003          7232         0.23
+repository crawled per hour. In a practical system, a very           Figure 8: The overhead of Percolator operations relative to
+small percentage of the repository would be crawled per              Bigtable. Write overhead is due to additional operations Percola-
+                                                                     tor needs to check for conflicts.
+hour: there are over 1 trillion web pages on the web (and
+ideally in an indexing system’s repository), far too many            glers, so the growth in processing time (and thus cluster-
+to crawl a reasonable fraction of in a single day. When              ing latency) is only weakly correlated to crawl rate at low
+the new input is a small fraction of the repository (low             crawl rates. The 6 percent crawl rate, for example, only
+crawl rate), we expect Percolator to outperform MapRe-               adds 150GB to a 1TB data set; the extra time to process
+duce since MapReduce must map over the (large) repos-                150GB is in the noise. The latency of Percolator is rela-
+itory to cluster the (small) batch of new documents while            tively unchanged as the crawl rate grows until it suddenly
+Percolator does work proportional only to the small batch            increases to effectively infinity at a crawl rate of 40%
+of newly arrived documents (a lookup in up to three in-              per hour. At this point, Percolator saturates the resources
+dex tables per document). At very large crawl rates where            of the test cluster, is no longer able to keep up with the
+the number of newly crawled documents approaches the                 crawl rate, and begins building an unbounded queue of
+size of the repository, MapReduce will perform better                unprocessed documents. The dotted asymptote at 40%
+than Percolator. This cross-over occurs because stream-              is an extrapolation of Percolator’s performance beyond
+ing data from disk is much cheaper, per byte, than per-              this breaking point. MapReduce is subject to the same
+forming random lookups. At the cross-over the total cost             effect: eventually crawled documents accumulate faster
+of the lookups required to cluster the new documents un-             than MapReduce is able to cluster them, and the batch
+der Percolator equals the cost to stream the documents               size will grow without bound in subsequent runs. In this
+and the repository through MapReduce. At crawl rates                 particular configuration, however, MapReduce can sus-
+higher than that, one is better off using MapReduce.                 tain crawl rates in excess of 100% (the dotted line, again,
+   We ran this benchmark on 240 machines and measured                extrapolates performance).
+the median delay between when a document is crawled                     These results show that Percolator can process docu-
+and when it is clustered. Figure 7 plots the median la-              ments at orders of magnitude better latency than MapRe-
+tency of document processing for both implementations                duce in the regime where we expect real systems to op-
+as a function of crawl rate. When the crawl rate is low,             erate (single-digit crawl rates).
+Percolator clusters documents faster than MapReduce as
+                                                                     3.2   Microbenchmarks
+expected; this scenario is illustrated by the leftmost pair
+of points which correspond to crawling 1 percent of doc-                In this section, we determine the cost of the trans-
+uments per hour. MapReduce requires approximately 20                 actional semantics provided by Percolator. In these ex-
+minutes to cluster the documents because it takes 20                 periments, we compare Percolator to a “raw” Bigtable.
+minutes just to process the repository through the three             We are only interested in the relative performance
+MapReduces (the effect of the few newly crawled doc-                 of Bigtable and Percolator since any improvement in
+uments on the runtime is negligible). This results in an             Bigtable performance will translate directly into an im-
+average delay between crawling a document and cluster-               provement in Percolator performance. Figure 8 shows
+ing of around 30 minutes: a random document waits 10                 the performance of Percolator and raw Bigtable running
+minutes after being crawled for the previous sequence of             against a single tablet server. All data was in the tablet
+MapReduces to finish and then spends 20 minutes be-                  server’s cache during the experiments and Percolator’s
+ing processed by the three MapReduces. Percolator, on                batching optimizations were disabled.
+the other hand, finds a newly loaded document and pro-                  As expected, Percolator introduces overhead relative
+cesses it in two seconds on average, or about 1000x faster           to Bigtable. We first measure the number of random
+than MapReduce. The two seconds includes the time to                 writes that the two systems can perform. In the case of
+find the dirty notification and run the transaction that per-        Percolator, we execute transactions that write a single
+forms the clustering. Note that this 1000x latency im-               cell and then commit; this represents the worst case for
+provement could be made arbitrarily large by increasing              Percolator overhead. When doing a write, Percolator in-
+the size of the repository.                                          curs roughly a factor of four overhead on this benchmark.
+   As the crawl rate increases, MapReduce’s processing               This is the result of the extra operations Percolator re-
+time grows correspondingly. Ideally, it would be propor-             quires for commit beyond the single write that Bigtable
+tional to the combined size of the repository and the input          issues: a read to check for locks, a write to add the lock,
+which grows with the crawl rate. In practice, the running            and a second write to remove the lock record. The read,
+time of a small MapReduce like this is limited by strag-             in particular, is more expensive than a write and accounts
+
+
+                                                                10
+                                                                         12000
+for most of the overhead. In this test, the limiting fac-
+tor was the performance of the tablet server, so the addi-               10000
+
+tional overhead of fetching timestamps is not measured.
+                                                                          8000
+We also tested random reads: Percolator performs a sin-
+gle Bigtable operation per read, but that read operation           TPS    6000
+
+is somewhat more complex than the raw Bigtable oper-
+ation (the Percolator read looks at metadata columns in                   4000
+
+
+addition to data columns).                                                2000
+
+3.3   Synthetic Workload
+                                                                            0
+                                                                                 0       5000             10000             15000
+   To evaluate Percolator on a more realistic work-                                               cores
+
+load, we implemented a synthetic benchmark based on
+TPC-E [1]. This isn’t the ideal benchmark for Percola-             Figure 9: Transaction rate on a TPC-E-like benchmark as a func-
+tor since TPC-E is designed for OLTP systems, and a                tion of cores used. The dotted line shows linear scaling.
+number of Percolator’s tradeoffs impact desirable prop-            usage in CPU cores since that is the limiting resource
+erties of OLTP systems (the latency of conflicting trans-          in our experimental environment. We were able to pro-
+actions, for example). TPC-E is a widely recognized and            cure a small number of machines for testing, but our
+understood benchmark, however, and it allows us to un-             test Bigtable cell shares the disk resources of a much
+derstand the cost of our system against more traditional           larger production cluster. As a result, disk bandwidth
+databases.                                                         is not a factor in the system’s performance. In this ex-
+   TPC-E simulates a brokerage firm with customers who             periment, we configured the benchmark with increasing
+perform trades, market search, and account inquiries.              numbers of customers and measured both the achieved
+The brokerage submits trade orders to a market ex-                 performance and the number of cores used by all parts
+change, which executes the trade and updates broker and            of the system including cores used for background main-
+customer state. The benchmark measures the number of               tenance such as Bigtable compactions. The relationship
+trades executed. On average, each customer performs a              between performance and resource usage is essentially
+trade once every 500 seconds, so the benchmark scales              linear across several orders of magnitude, from 11 cores
+by adding customers and associated data.                           to 15,000 cores.
+   TPC-E traditionally has three components – a cus-                  This experiment also provides an opportunity to mea-
+tomer emulator, a market emulator, and a DBMS run-                 sure the overheads in Percolator relative to a DBMS.
+ning stored SQL procedures. Since Percolator is a client           The fastest commercial TPC-E system today performs
+library running against Bigtable, our implementation is            3,183 tpsE using a single large shared-memory machine
+a combined customer/market emulator that calls into                with 64 Intel Nehalem cores with 2 hyperthreads per
+the Percolator library to perform operations against               core [33]. Our synthetic benchmark based on TPC-E per-
+Bigtable. Percolator provides a low-level Get/Set/iterator         forms 11,200 tps using 15,000 cores. This comparison
+API rather than a high-level SQL interface, so we created          is very rough: the Nehalem cores in the comparison ma-
+indexes and did all the ‘query planning’ by hand.                  chine are significantly faster than the cores in our test cell
+   Since Percolator is an incremental processing system            (small-scale testing on Nehalem processors shows that
+rather than an OLTP system, we don’t attempt to meet the           they are 20-30% faster per-thread compared to the cores
+TPC-E latency targets. Our average transaction latency is          in the test cluster). However, we estimate that Percola-
+2 to 5 seconds, but outliers can take several minutes. Out-        tor uses roughly 30 times more CPU per transaction than
+liers are caused by, for example, exponential backoff on           the benchmark system. On a cost-per-transaction basis,
+conflicts and Bigtable tablet unavailability. Finally, we          the gap is likely much less than 30 since our test clus-
+made a small modification to the TPC-E transactions. In            ter uses cheaper, commodity hardware compared to the
+TPC-E, each trade result increases the broker’s commis-            enterprise-class hardware in the reference machine.
+sion and increments his trade count. Each broker services             The conventional wisdom on implementing databases
+a hundred customers, so the average broker must be up-             is to “get close to the iron” and use hardware as directly
+dated once every 5 seconds, which causes repeated write            as possible since even operating system structures like
+conflicts in Percolator. In Percolator, we would imple-            disk caches and schedulers make it hard to implement
+ment this feature by writing the increment to a side table         an efficient database [32]. In Percolator we not only in-
+and periodically aggregating each broker’s increments;             terposed an operating system between our database and
+for the benchmark, we choose to simply omit this write.            the hardware, but also several layers of software and net-
+   Figure 9 shows how the resource usage of Percolator             work links. The conventional wisdom is correct: this ar-
+scales as demand increases. We will measure resource               rangement has a cost. There are substantial overheads in
+
+
+                                                              11
+                           60.0                                                            on the keys used to cluster documents; one of criticisms
+                                                                                           leveled by Stonebraker and DeWitt in their initial critique
+                           50.0                                                            of MapReduce [16] was that MapReduce did not support
+
+
+
+
+ Transactions per Second
+                                                                                           such indexes.
+                           40.0
+                                                                                              Several proposed modifications to MapReduce [18,
+                           30.0
+                                                                                           26, 35] reduce the cost of processing changes to a reposi-
+                                                                                           tory by allowing workers to randomly read a base repos-
+                           20.0                                                            itory while mapping over only newly arrived work. To
+                                                                                           implement clustering in these systems, we would likely
+                           10.0                                                            maintain a repository per clustering phase. Avoiding the
+                                                          TradeResult (tps)                need to re-map the entire repository would allow us to
+                            0.0                                                            make batches smaller, reducing latency. DryadInc [31]
+                                  16:20   16:40   17:00    17:20    17:40     18:00
+                                                                                           attacks the same problem by reusing identical portions
+                                                                                           of the computation from previous runs and allowing the
+            Figure 10: Recovery of tps after 33% tablet server mortality
+                                                                                           user to specify a merge function that combines new in-
+preparing requests to go on the wire, sending them, and                                    put with previous iterations’ outputs. These systems rep-
+processing them on a remote machine. To illustrate these                                   resent a middle-ground between mapping over the en-
+overheads in Percolator, consider the act of mutating the                                  tire repository using MapReduce and processing a single
+database. In a DBMS, this incurs a function call to store                                  document at a time with Percolator.
+the data in memory and a system call to force the log to                                      Databases satisfy many of the requirements of an
+hardware controlled RAID array. In Percolator, a client                                    incremental system: a RDBMS can make many inde-
+performing a transaction commit sends multiple RPCs                                        pendent and concurrent changes to a large corpus and
+to Bigtable, which commits the mutation by logging it                                      provides a flexible language for expressing computa-
+to 3 chunkservers, which make system calls to actually                                     tion (SQL). In fact, Percolator presents the user with
+flush the data to disk. Later, that same data will be com-                                 a database-like interface: it supports transactions, itera-
+pacted into minor and major sstables, each of which will                                   tors, and secondary indexes. While Percolator provides
+be again replicated to multiple chunkservers.                                              distributed transactions, it is by no means a full-fledged
+   The CPU inflation factor is the cost of our layering.                                   DBMS: it lacks a query language, for example, as well
+In exchange, we get scalability (our fastest result, though                                as full relational operations such as join. Percolator is
+not directly comparable to TPC-E, is more than 3x the                                      also designed to operate at much larger scales than exist-
+current official record [33]), and we inherit the useful                                   ing parallel databases and to deal better with failed ma-
+features of the systems we build upon, like resilience to                                  chines. Unlike Percolator, database systems tend to em-
+failures. To demonstrate the latter, we ran the benchmark                                  phasize latency over throughput since a human is often
+with 15 tablet servers and allowed the performance to                                      waiting for the results of a database query.
+stabilize. Figure 10 shows the performance of the system                                      The organization of data in Percolator mirrors that
+over time. The dip in performance at 17:09 corresponds                                     of shared-nothing parallel databases [7, 15, 4]. Data is
+to a failure event: we killed a third of the tablet servers.                               distributed across a number of commodity machines in
+Performance drops immediately after the failure event                                      shared-nothing fashion: the machines communicate only
+but recovers as the tablets are reloaded by other tablet                                   via explicit RPCs; no shared memory or shared disks are
+servers. We allowed the killed tablet servers to restart so                                used. Data stored by Percolator is partitioned by Bigtable
+performance eventually returns to the original level.                                      into tablets of contiguous rows which are distributed
+                                                                                           among machines; this mirrors the declustering performed
+4                          Related Work
+                                                                                           by parallel databases.
+   Batch processing systems like MapReduce [13, 22,                                           The transaction management of Percolator builds on a
+24] are well suited for efficiently transforming or analyz-                                long line of work on distributed transactions for database
+ing an entire corpus: these systems can simultaneously                                     systems. Percolator implements snapshot isolation [5] by
+use a large number of machines to process huge amounts                                     extending multi-version timestamp ordering [6] across a
+of data quickly. Despite this scalability, re-running a                                    distributed system using two-phase commit.
+MapReduce pipeline on each small batch of updates re-                                         An analogy can be drawn between the role of ob-
+sults in unacceptable latency and wasted work. Over-                                       servers in Percolator to incrementally move the system
+lapping or pipelining the adjacent stages can reduce la-                                   towards a “clean” state and the incremental maintenance
+tency [10], but straggler shards still set the minimum                                     of materialized views in traditional databases (see Gupta
+time to complete the pipeline. Percolator avoids the ex-                                   and Mumick [21] for a survey of the field). In practice,
+pense of repeated scans by, essentially, creating indexes                                  while some indexing tasks like clustering documents by
+
+
+                                                                                      12
+contents could be expressed in a form appropriate for in-              Several research systems have, like Percolator, ex-
+cremental view maintenance it would likely be hard to               tended distributed storage systems to include strong con-
+express the transformation of a raw document into an in-            sistency. Sinfonia [3] provides a transactional interface
+dexed document in such a form.                                      to a distributed repository. Earlier published versions of
+   The utility of parallel databases and, by extension,             Sinfonia [2] also offered a notification mechanism simi-
+a system like Percolator, has been questioned several               lar to the Percolator’s observer model. Sinfonia and Per-
+times [17] over their history. Hardware trends have, in             colator differ in their intended use: Sinfonia is designed
+the past, worked against parallel databases. CPUs have              to build distributed infrastructure while Percolator is in-
+become so much faster than disks that a few CPUs in                 tended to be used directly by applications (this probably
+a shared-memory machine can drive enough disk heads                 explains why Sinfonia’s authors dropped its notification
+to service required loads without the complexity of dis-            mechanism). Additionally, Sinfonia’s mini-transactions
+tributed transactions: the top TPC-E benchmark results              have limited semantics compared to the transactions pro-
+today are achieved on large shared-memory machines                  vided by RDBMSs or Percolator: the user must specify
+connected to a SAN. This trend is beginning to reverse              a list of items to compare, read, and write prior to issu-
+itself, however, as the enormous datasets like those Per-           ing the transaction. The mini-transactions are sufficient
+colator is intended to process become far too large for a           to create a wide variety of infrastructure but could be
+single shared-memory machine to handle. These datasets              limiting for application builders.
+require a distributed solution that can scale to 1000s of              CloudTPS [34], like Percolator, builds an ACID-
+machines, while existing parallel databases can utilize             compliant datastore on top of a distributed storage sys-
+only 100s of machines [30]. Percolator provides a sys-              tem (HBase [23] or Bigtable). Percolator and CloudTPS
+tem that is scalable enough for Internet-sized datasets by          systems differ in design, however: the transaction man-
+sacrificing some (but not all) of the flexibility and low-          agement layer of CloudTPS is handled by an interme-
+latency of parallel databases.                                      diate layer of servers called local transaction managers
+   Distributed storage systems like Bigtable have the               that cache mutations before they are persisted to the un-
+scalability and fault-tolerance properties of MapReduce             derlying distributed storage system. By contrast, Perco-
+but provide a more natural abstraction for storing a repos-         lator uses clients, directly communicating with Bigtable,
+itory. Using a distributed storage system allows for low-           to coordinate transaction management. The focus of the
+latency updates since the system can change state by mu-            systems is also different: CloudTPS is intended to be a
+tating the repository rather than rewriting it. However,            backend for a website and, as such, has a stronger focus
+Percolator is a data transformation system, not only a              on latency and partition tolerance than Percolator.
+data storage system: it provides a way to structure com-               ElasTraS [12], a transactional data store, is architec-
+putation to transform that data. In contrast, systems like          turally similar to Percolator; the Owning Transaction
+Dynamo [14], Bigtable, and PNUTS [11] provide highly                Managers in ElasTraS are essentially tablet servers. Un-
+available data storage without the attendant mechanisms             like Percolator, ElasTraS offers limited transactional se-
+of transformation. These systems can also be grouped                mantics (Sinfonia-like mini-transactions) when dynami-
+with the NoSQL databases (MongoDB [27], to name one                 cally partitioning the dataset and has no support for struc-
+of many): both offer higher performance and scale better            turing computation.
+than traditional databases, but provide weaker semantics.
+                                                                    5   Conclusion and Future Work
+   Percolator extends Bigtable with multi-row, dis-
+tributed transactions, and it provides the observer inter-             We have built and deployed Percolator and it has been
+face to allow applications to be structured around notifi-          used to produce Google’s websearch index since April,
+cations of changed data. We considered building the new             2010. The system achieved the goals we set for reducing
+indexing system directly on Bigtable, but the complexity            the latency of indexing a single document with an accept-
+of reasoning about concurrent state modification without            able increase in resource usage compared to the previous
+the aid of strong consistency was daunting. Percolator              indexing system.
+does not inherit all of Bigtable’s features: it has limited            The TPC-E results suggest a promising direction for
+support for replication of tables across data centers, for          future investigation. We chose an architecture that scales
+example. Since Bigtable’s cross data center replication             linearly over many orders of magnitude on commodity
+strategy is consistent only on a per-tablet basis, replica-         machines, but we’ve seen that this costs a significant 30-
+tion is likely to break invariants between writes in a dis-         fold overhead compared to traditional database architec-
+tributed transaction. Unlike Dynamo and PNUTS which                 tures. We are very interested in exploring this tradeoff
+serve responses to users, Percolator is willing to accept           and characterizing the nature of this overhead: how much
+the lower availability of a single data center in return for        is fundamental to distributed storage systems, and how
+stricter consistency.                                               much can be optimized away?
+
+                                                               13
+Acknowledgments                                                               [16] D E W ITT, D., AND S TONEBRAKER , M.          MapReduce: A
+                                                                                   major step backwards.      http://databasecolumn.vertica.com/
+   Percolator could not have been built without the assis-                         database-innovation/mapreduce-a-major-step-backwards/.
+tance of many individuals and teams. We are especially                        [17] D E W ITT, D. J., AND G RAY, J. Parallel database systems: the
+grateful to the members of the indexing team, our pri-                             future of database processing or a passing fad? SIGMOD Rec.
+mary users, and the developers of the many pieces of in-                           19, 4 (1990), 104–112.
+frastructure who never failed to improve their services to                    [18] E KANAYAKE , J., L I , H., Z HANG , B., G UNARATHNE , T., BAE ,
+                                                                                   S.-H., Q IU , J., AND F OX , G. Twister: A runtime for iterative
+meet our increasingly large demands.                                               MapReduce. In The First International Workshop on MapReduce
+References                                                                         and its Applications (2010).
+                                                                              [19] G ERSHENSON , C., AND P INEDA , L. A. Why does public trans-
+ [1] TPC benchmark E standard specification version 1.9.0. Tech.
+                                                                                   port not arrive on time? The pervasiveness of equal headway in-
+     rep., Transaction Processing Performance Council, September
+                                                                                   stability. PLoS ONE 4, 10 (10 2009).
+     2009.
+                                                                              [20] G HEMAWAT, S., G OBIOFF , H., AND L EUNG , S.-T. The Google
+ [2] AGUILERA , M. K., K ARAMANOLIS , C., M ERCHANT, A.,
+                                                                                   file system. vol. 37, pp. 29–43.
+     S HAH , M., AND V EITCH , A. Building distributed applications
+     using Sinfonia. Tech. rep., Hewlett-Packard Labs, 2006.                  [21] G UPTA , A., AND M UMICK , I. S. Maintenance of materialized
+                                                                                   views: Problems, techniques, and applications, 1995.
+ [3] AGUILERA , M. K., M ERCHANT, A., S HAH , M., V EITCH , A.,
+     AND K ARAMANOLIS , C. Sinfonia: a new paradigm for building              [22] Hadoop. http://hadoop.apache.org/.
+     scalable distributed systems. In SOSP ’07 (2007), ACM, pp. 159–          [23] HBase. http://hbase.apache.org/.
+     174.
+                                                                              [24] I SARD , M., B UDIU , M., Y U , Y., B IRRELL , A., AND F ETTERLY,
+ [4] BARU , C., F ECTEAU , G., G OYAL , A., H SIAO , H.-I., J HIN -                D. Dryad: Distributed data-parallel programs from sequential
+     GRAN , A., PADMANABHAN , S., W ILSON , W., AND I H SIAO ,
+                                                                                   building blocks. In EuroSys ’07 (New York, NY, USA, 2007),
+     A. G. H. DB2 parallel edition, 1995.                                          ACM, pp. 59–72.
+ [5] B ERENSON , H., B ERNSTEIN , P., G RAY, J., M ELTON , J.,                [25] I YER , S., AND C UTTS , M. Help test some next-generation
+     O’N EIL , E., AND O’N EIL , P. A critique of ANSI SQL isola-                  infrstructure. http://googlewebmastercentral.blogspot.com/2009/
+     tion levels. In SIGMOD (New York, NY, USA, 1995), ACM,                        08/help-test-some-next-generation.html, August 2009.
+     pp. 1–10.
+                                                                              [26] L OGOTHETIS , D., O LSTON , C., R EED , B., W EBB , K. C., AND
+ [6] B ERNSTEIN , P. A., AND G OODMAN , N. Concurrency control                     YOCUM , K. Stateful bulk processing for incremental analytics.
+     in distributed database systems. ACM Computer Surveys 13, 2                   In SoCC ’10: Proceedings of the 1st ACM symposium on cloud
+     (1981), 185–221.                                                              computing (2010), pp. 51–62.
+ [7] B ORAL , H., A LEXANDER , W., C LAY, L., C OPELAND , G.,                 [27] MongoDB. http://mongodb.org/.
+     DANFORTH , S., F RANKLIN , M., H ART, B., S MITH , M., AND
+     VALDURIEZ , P. Prototyping Bubba, a highly parallel database             [28] PAGE , L., B RIN , S., M OTWANI , R., AND W INOGRAD , T. The
+     system. IEEE Transactions on Knowledge and Data Engineering                   PageRank citation ranking: Bringing order to the web. Tech. rep.,
+     2, 1 (1990), 4–24.                                                            Stanford Digital Library Technologies Project, 1998.
+ [8] B URROWS , M. The Chubby lock service for loosely-coupled                [29] PATON , N. W., AND D ÍAZ , O. Active database systems. ACM
+     distributed systems. In 7th OSDI (Nov. 2006).                                 Computing Surveys 31, 1 (1999), 63–103.
+ [9] C HANG , F., D EAN , J., G HEMAWAT, S., H SIEH , W. C., WAL -            [30] PAVLO , A., PAULSON , E., R ASIN , A., A BADI , D. J., D EWITT,
+     LACH , D. A., B URROWS , M., C HANDRA , T., F IKES , A., AND                  D. J., M ADDEN , S., AND S TONEBRAKER , M. A comparison of
+     G RUBER , R. E. Bigtable: A distributed storage system for struc-             approaches to large-scale data analysis. In SIGMOD ’09 (June
+     tured data. In 7th OSDI (Nov. 2006), pp. 205–218.                             2009), ACM.
+[10] C ONDIE , T., C ONWAY, N., A LVARO , P., AND H ELLERSTIEN ,              [31] P OPA , L., B UDIU , M., Y U , Y., AND I SARD , M. DryadInc:
+     J. M. MapReduce online. In 7th NSDI (2010).                                   Reusing work in large-scale computations. In USENIX workshop
+                                                                                   on Hot Topics in Cloud Computing (2009).
+[11] C OOPER , B. F., R AMAKRISHNAN , R., S RIVASTAVA , U., S IL -
+     BERSTEIN , A., B OHANNON , P., JACOBSEN , H.-A., P UZ , N.,              [32] S TONEBRAKER , M. Operating system support for database man-
+     W EAVER , D., AND Y ERNENI , R. PNUTS: Yahoo!’s hosted data                   agement. Communications of the ACM 24, 7 (1981), 412–418.
+     serving platform. In Proceedings of VLDB (2008).                         [33] NEC Express5800/A1080a-E TPC-E results. http://www.tpc.org/
+[12] DAS , S., AGRAWAL , D., AND A BBADI , A. E. ElasTraS: An                      tpce/results/tpce result detail.asp?id=110033001, Mar. 2010.
+     elastic transactional data store in the cloud. In USENIX HotCloud        [34] W EI , Z., P IERRE , G., AND C HI , C.-H. CloudTPS: Scalable
+     (June 2009).                                                                  transactions for Web applications in the cloud. Tech. Rep. IR-
+[13] D EAN , J., AND G HEMAWAT, S. MapReduce: Simplified data                      CS-053, Vrije Universiteit, Amsterdam, The Netherlands, Feb.
+     processing on large clusters. In 6th OSDI (Dec. 2004), pp. 137–               2010. http://www.globule.org/publi/CSTWAC ircs53.html.
+     150.                                                                     [35] Z AHARIA , M., C HOWDHURY, M., F RANKLIN , M., S HENKER ,
+[14] D E C ANDIA , G., H ASTORUN , D., JAMPANI , M., K AKULAPATI ,                 S., AND S TOICA , I. Spark: Cluster computing with working sets.
+     G., L AKSHMAN , A., P ILCHIN , A., S IVASUBRAMANIAN , S.,                     In 2nd USENIX workshop on Hot Topics in Cloud Computing
+     VOSSHALL , P., AND VOGELS , W. Dynamo: Amazon’s highly                        (2010).
+     available key-value store. In SOSP ’07 (2007), pp. 205–220.
+[15] D EWITT, D., G HANDEHARIZADEH , S., S CHNEIDER , D.,
+     B RICKER , A., H SIAO , H.-I., AND R ASMUSSEN , R. The gamma
+     database machine project. IEEE Transactions on Knowledge and
+     Data Engineering 2 (1990), 44–62.
+
+
+                                                                         14
+

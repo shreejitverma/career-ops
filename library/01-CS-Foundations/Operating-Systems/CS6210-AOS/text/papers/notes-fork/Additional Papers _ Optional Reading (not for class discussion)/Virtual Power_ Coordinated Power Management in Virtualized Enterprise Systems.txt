@@ -1,0 +1,1073 @@
+              VirtualPower: Coordinated Power Management in
+                       Virtualized Enterprise Systems
+
+                                   Ripal Nathuji                                                         Karsten Schwan
+                     CERCS Research Center                                                           CERCS Research Center
+           School of Electrical and Computer Engineering                                               College of Computing
+                  Georgia Institute of Technology                                                  Georgia Institute of Technology
+                         Atlanta, GA 30032                                                              Atlanta, GA 30032
+                        rnathuji@ece.gatech.edu                                                     schwan@cc.gatech.edu
+
+ABSTRACT                                                                                   General Terms
+Power management has become increasingly necessary in                                      Design, Experimentation, Management
+large-scale datacenters to address costs and limitations in
+cooling or power delivery. This paper explores how to inte-                                Keywords
+grate power management mechanisms and policies with the
+                                                                                           Power management, Virtualization
+virtualization technologies being actively deployed in these
+environments. The goals of the proposed VirtualPower ap-
+proach to online power management are (i) to support the                                   1. INTRODUCTION
+isolated and independent operation assumed by guest vir-                                      The necessity of power management in computing sys-
+tual machines (VMs) running on virtualized platforms and                                   tems has become increasingly evident in both mobile and
+(ii) to make it possible to control and globally coordinate                                enterprise environments. Limitations in battery capacities
+the effects of the diverse power management policies ap-                                   and demands for longer device lifetimes have motivated re-
+plied by these VMs to virtualized resources. To attain these                               search for mobile and embedded systems [12, 34, 37, 38].
+goals, VirtualPower extends to guest VMs ‘soft’ versions of                                For server systems, online management is important for two
+the hardware power states for which their policies are de-                                 significant reasons. First, there are power delivery and cool-
+signed. The resulting technical challenge is to appropri-                                  ing limitations in datacenter environments that result from
+ately map VM-level updates made to soft power states to                                    meeting the ever increasing performance and scalability de-
+actual changes in the states or in the allocation of underlying                            mands of enterprise applications with a combination of tech-
+virtualized hardware. An implementation of VirtualPower                                    nological advances like increased densities, small form factor
+Management (VPM) for the Xen hypervisor addresses this                                     blade servers, and software methods for server consolidation
+challenge by provision of multiple system-level abstractions                               through virtualization. Here, the nearly 60 Amps per rack
+including VPM states, channels, mechanisms, and rules. Ex-                                 currently provisioned in datacenters could become a bot-
+perimental evaluations on modern multicore platforms high-                                 tleneck for high density configurations, even if the related
+light resulting improvements in online power management                                    cooling issues can be solved [33]. Online methods for min-
+capabilities, including minimization of power consumption                                  imizing power consumption and, when necessary, enforcing
+with little or no performance penalties and the ability to                                 limits on rack power draws can help deal with such bottle-
+throttle power consumption while still meeting application                                 necks. A second motivation for online power management
+requirements. Finally, coordination of online methods for                                  is the cost of power and cooling capabilities in datacenters.
+server consolidation with VPM management techniques in                                     A datacenter consisting of 30,000 square feet and consum-
+heterogeneous server systems is shown to provide up to 34%                                 ing 10MW, for instance, requires an accompanying cooling
+improvements in power consumption.                                                         system that costs from $2-$5 million [25]. The yearly cost
+                                                                                           of running this cooling infrastructure can reach up to $4-$8
+Categories and Subject Descriptors                                                         million [33].
+                                                                                              To manage the power properties of server systems, re-
+C.0 [Computer Systems Organization]: General—Sys-                                          searchers have considered issues that include managing ther-
+tem architectures; D.4.7 [Operating Systems]: Organiza-                                    mal events [25] and utilizing hardware management support
+tion and Design; K.6.4 [Management of Computing and                                        like processor frequency scaling for power budgeting [10,
+Information Systems]: System Management                                                    33]. An aspect of future datacenter environments not ad-
+                                                                                           dressed by previous work, however, is the proliferation of
+                                                                                           virtualization techniques into the enterprise domain. Specif-
+                                                                                           ically, the growing capabilities of hardware support for vir-
+Permission to make digital or hard copies of all or part of this work for                  tualization [28] and of software solutions like Xen [4] or
+personal or classroom use is granted without fee provided that copies are                  VMware [36] have made it easier to flexibly use datacen-
+not made or distributed for profit or commercial advantage and that copies
+bear this notice and the full citation on the first page. To copy otherwise, to
+                                                                                           ter resources for applications [3]. The resulting interplay of
+republish, to post on servers or to redistribute to lists, requires prior specific         power management and virtualization may be formulated
+permission and/or a fee.                                                                   more precisely as follows:
+SOSP’07, October 14–17, 2007, Stevenson, Washington, USA.
+Copyright 2007 ACM 978-1-59593-591-5/07/0010 ...$5.00.                                       1. ‘Soft’ and ‘Hard’ power scaling – Virtualization creates
+
+
+
+                                                                                     265
+                                                                                     255
+     new possibilities for scaling the allocation of physical          VPM channels as ‘hints’ for assigning actual shadow VPM
+     resources to guest virtual machines (VMs), both us-               states for guest VM resources, a control relationship we term
+     ing ‘soft’ techniques that exploit a hypervisor’s ability         state-based guidance. Finally, VPM rules are based on a rich
+     to limit hardware usage by guests, and ‘hard’ tech-               set of underlying VPM mechanisms that provide a uniform
+     niques that leverage underlying hardware support such             basis for implementing management methods across hetero-
+     as processor frequency scaling. To be effective, virtu-           geneous hardware platforms.
+     alization layer power management must exploit both of                The implementation of VirtualPower with the Xen hyper-
+     these methods.                                                    visor significantly extends the infrastructure’s power man-
+                                                                       agement capabilities. On this basis, this paper’s contribu-
+  2. Independence and coordination – Guest VMs are de-                 tions include: (1) an experimental study of power manage-
+     signed to execute their own, independent OS- and/or               ment and its implications in virtualized systems, (2) the use
+     application-specific methods for power management.                of VPM channels and states to obtain application-specific
+     For example, the Linux operating system allows for                power/performance tradeoffs for representative enterprise ap-
+     dynamic voltage and frequency scaling (DVFS) of the               plications, (3) the definition and evaluation of multiple man-
+     processor, where governing policies can be loaded into            agement actuators in the form of our VPM mechanisms, and
+     the kernel or executed in userspace daemons. Applica-             (4) the evaluation of VirtualPower with sets of rules that
+     tion specific policies that can address real-time work-           jointly implement a tiered policy-driven approach to online
+     loads [30, 31] or meet application requirements with              power management. Experimental evaluations are based on
+     minimum power consumption [11] can then be inte-                  micro-benchmarks, the RUBiS enterprise application, and
+     grated. From these facts, it is clear that a necessary            transactional workloads. Using VPM rules that implement
+     element of power management is the need to coordinate             representative power management policies, measured results
+     between VM-level solutions and global goals that con-             show improvements of up to 31% in the active power con-
+     cern platform-, rack-, and then datacenter-level power            sumption of underlying computing platforms. They also
+     consumption.                                                      demonstrate VirtualPower’s abilities to perform QoS-aware
+                                                                       power throttling and to exploit the consolidation capabilities
+  3. Flexibility in management – Modern datacenters that
+                                                                       inherent in modern multicore platforms. Moreover, when
+     utilize virtualization often house multiple generations
+                                                                       using the tiered VPM rule components for managing VMs
+     of equipment with different attributes and manage-
+                                                                       across heterogeneous platforms, we reduce power consump-
+     ment capabilities [26], and deploy a variety of applica-
+                                                                       tion up to 17% by exploiting power management heterogene-
+     tions that have distinct requirements expressed by Ser-
+                                                                       ity and up to 34% by performing runtime consolidation onto
+     vice Level Agreements (SLAs). These traits dictate the
+                                                                       more power-efficient hardware. Finally, VirtualPower en-
+     use of diverse dynamic management policies. There-
+                                                                       ables future work on management policies and mechanisms
+     fore, to effectively address virtualized environments it
+                                                                       that can extend across multiple devices and/or separately
+     is important to give administrators the flexibility to
+                                                                       manageable platform components like memory, can take into
+     provide their own power management policies.
+                                                                       account additional properties like thermal events [15], and
+                                                                       can address the multiple machines, racks, and enclosures
+   The VirtualPower approach to power management pre-
+                                                                       found in modern datacenters.
+sented in this paper can exploit both hardware power scaling
+                                                                          The remainder of this paper is organized as follows. Sec-
+and software-based methods for controlling the power con-
+                                                                       tion 2 reviews related work. This is followed by a discussion
+sumption of underlying platforms. Its power management
+                                                                       in Section 3 on how virtualization impacts power manage-
+actions take into account guest VMs’ independent power
+                                                                       ment and the resulting technical challenges. Section 4 out-
+management policies, and can coordinate across multiple
+                                                                       lines the components of the VirtualPower architecture and
+such policies to attain desired global objectives. Effective
+                                                                       describes the manner in which they address these challenges.
+for both fully and para-virtualized guests, VirtualPower’s
+                                                                       After describing experimental methodology in Section 5, we
+abstractions and methods may be summarized as follows.
+                                                                       evaluate the viability of soft scaling as a power management
+First, to permit guest VMs to run their own, independent
+                                                                       mechanism in Section 6, and the performance of coordinated
+power management methods, VirtualPower exports a rich
+                                                                       policy-based management with VirtualPower in Section 7.
+set of virtualized (i.e., ‘soft’) power states, termed Virtu-
+                                                                       Conclusions and future work are reviewed in Section 8.
+alPower Management states – VPM states. Guest VM-level
+power management policies, then, observe and act upon
+these states when carrying out their management actions.               2. RELATED WORK
+Second, coordination is based on the fact that independent                Managing power and thermal issues has been addressed
+VM-level management policies change power states via priv-             extensively for single platforms, particularly their proces-
+ileged actions that, for example, modify model-specific reg-           sor components. Brooks and Martinosi propose mechanisms
+isters (MSRs) in hardware. VirtualPower can leverage the               to enforce thermal thresholds on the processor [5]. For
+fact that these events are trapped by the hypervisor to cre-           memory-intensive workloads, dynamic voltage and frequency
+ate an abstraction of VPM channels. These channels de-                 scaling (DVFS) during memory-bound phases of execution
+liver guest VM power management actions as a set of ‘soft’             has been shown to provide power savings with minimal per-
+state updates that can be used for application-aware man-              formance impact. Solutions based on this premise include
+agement at the virtualization layer. Third, VirtualPower en-           hardware-based methods [23] and OS-level techniques that
+ables flexibility by encoding the actual power management              set processor modes based on predicted application behav-
+actions carried out by the infrastructure as VPM rules, pro-           ior [18]. Power budgeting of SMP systems with a perfor-
+vided by hardware vendors and/or system administrators.                mance loss minimization objective has also been implemented
+VPM rules treat the ‘soft’ VPM state changes conveyed by               via CPU throttling [20]. VirtualPower leverages the invest-
+
+
+
+                                                                 266
+                                                                 256
+ments in application-specific power management represented
+by these approaches by encouraging their use, rather than
+replacing them, in virtualized systems.
+   In high performance settings, energy savings can be ob-
+tained for parallel programs during their communication pe-
+riods using hardware frequency scaling capabilities in clus-
+ters [24]. For server systems, Chase et al. discuss how to
+reduce power consumption in datacenters by turning servers
+on and off based on demand [6]. Identifying the need for
+disk power management in datacenters, support for energy-
+efficient disk arrays has been extended [39]. Incorporating
+temperature awareness into workload placement in datacen-
+ters was proposed by Moore et al. [25], along with emula-                   Figure 1: Scalable Enterprise Infrastructure.
+tion environments for investigating the thermal implications
+of power management [15]. Researchers have also investi-
+gated using such cluster-level reconfiguration in conjunction              Power management directly threatens the independence
+with DVFS [8], or by using spare servers [32] to improve the            and performance isolation properties of virtualization tech-
+thermal and power properties of enterprise systems. Other               nologies. First, how can guest VMs realize the goals of their
+methods have enforced power budgets by allocating power in
+                                                                        application-specific power management policies when there
+a non-uniform manner across nodes [10], at the granularity              is a disassociation between the virtual resources they are
+of blade enclosures [33], or even amongst virtual machines              managing and the physical resources actually being used?
+using energy accounting capabilities [35]. The experimental             Here, a specific issue is that guest machines may have in-
+evaluations performed in this paper show that global man-               consistent views of the management capabilities of the un-
+agement policies like those above are easily realized with
+                                                                        derlying resources they are trying to manage, particularly
+appropriate VPM rules based on VirtualPower’s rich set of
+                                                                        in the presence of VM migration. Second, in datacenter
+power control mechanisms.                                               settings, inconsistencies are aggravated by the need to fre-
+   In datacenter environments, an important attribute of on-            quently update platforms, to replace them to deal with fail-
+line power management is its ability to deal with hardware              ures, or to add new platforms for capacity increases. A
+heterogeneity. This is evident from prior work on man-                  natural outcome of such changes is increased heterogene-
+agement extensions for heterogeneous multicore architec-
+                                                                        ity, with respect to platform power properties, performance
+tures [21] and in cluster environments, the latter proposing            characteristics, and/or management capabilities. Isolation
+a scheduling approach for power control of processors with              and independence, however, demand that VMs’ power man-
+varying fixed frequencies and voltages [13]. In enterprise sys-         agement policies not be altered to deal with such changes.
+tems, intelligent methods for request distribution have lever-          The VirtualPower approach maintains the isolation and in-
+aged hardware heterogeneity to curtail power usage [16].                dependence properties of virtualization systems by exporting
+The ability to exploit heterogeneity in platform hardware
+                                                                        to VM-level management policies ‘soft’ VPM states, wherein
+and underlying power management capabilities for datacen-               guest machines have a consistent view of hardware manage-
+ters has also been investigated [26]. Experiments presented             ment capabilities regardless of the underlying set of physical
+in this paper demonstrate the importance of support for het-            resources. The implementation of the approach, then, per-
+erogeneity in the VirtualPower infrastructure and provide               forms state-based guidance to map changes to these soft
+further evidence of the utility of heterogeneity awareness in           states to changes in underlying hardware according to asso-
+power management techniques.
+                                                                        ciated VPM rules, as described further in Section 4.
+
+3.   MANAGING VIRTUALIZED SYSTEMS                                       3.2 Leveraging Guest VM Policies
+   This section discusses the impact of virtualization on the              The increasingly apparent need for power management
+power management landscape of enterprise systems. Of par-               has led to the implementation of system- and application-
+ticular interest are barriers to utilizing guest VM- or appli-          level policies that carefully balance hardware performance
+cation specific policies for enabling workload-aware manage-            states to attain application-specific notions of quality-of-
+ment in these environments. We identify such hurdles and                service (QoS). An example of such a policy is the onde-
+describe how VirtualPower is designed to overcome them.                 mand governor integrated into the Linux kernel. This pol-
+                                                                        icy scales the frequency of the processor based upon the
+3.1 Scalable Enterprise Environments                                    CPU utilization observed by the operating system and is
+   Desired benefits from virtualization include improved fault          effective for workloads with variations in processor utiliza-
+isolation and independence for guest VMs [4], performance               tion, such as web servers. Other management policies in-
+isolation [19], and the ease of seamless migration of VMs               clude those specific to real-time systems, where processors’
+across different physical machines [7]. Jointly, these permit           DVFS capabilities are used to reduce power consumption
+usage models in which VMs freely and dynamically share                  while still maintaining application deadlines [30, 31]. Since
+pools of platform and datacenter resources, as also consid-             VM-level management policies can meet application-specific
+ered in recent research on autonomic management [2, 14]                 QoS constraints, it is highly desirable to use them to man-
+and as indicative of next generation enterprise management              age the power/performance tradeoffs of modern computing
+environments. The goal, of course, is the delivery of flexi-            platforms. Giving these policies direct access to hardware
+ble and scalable enterprise infrastructures, as illustrated in          power management facilities, however, negates the notion
+Figure 1.                                                               of virtualized hardware resources. Moreover, direct access
+
+
+
+                                                                  267
+                                                                  257
+would threaten desired performance isolation properties, as            able cores significantly reduces the ability to utilize time
+evidenced on thermally sensitive multicore chips where a VM            domain multiplexing for reasons that include the following.
+increasing its frequency may heat up its core in a manner              Consider the use of DVFS to manage the processor com-
+that compromises another core’s ability to run at a speed              ponent of multicore platforms. Since the dynamic power
+sufficient for meetings its VM’s desired QoS. Worse, such              consumption of a core is proportional to the product of fre-
+actions might be malicious, as with a VM compromised by                quency and voltage squared, in order to obtain significant
+a power virus.                                                         energy or power savings, voltage scaling must be performed
+   VirtualPower responds to these challenges with an ap-               in conjunction with frequency scaling. In multicore pack-
+proach that takes advantage of the power management poli-              ages, however, even when the frequency of cores can be
+cies built into guest VMs, but interprets them as ‘hints’              scaled independently, there is only one voltage rail into the
+rather than executable commands. These hints are acquired              package from the motherboard. Therefore, the voltage is
+by exploiting the ACPI [17] interface for power management             constrained by the highest frequency of any core in the pack-
+provided by modern platforms. When guest VMs attempt                   age. As shown in Figure 2, this restriction can significantly
+to perform privileged operations on this interface, current            limit the system-level benefits of hardware power manage-
+hypervisors ignore them, but VirtualPower intercepts them              ment, where power is only reduced by 4% when scaling fre-
+and maps them to VPM channels. These channels, in turn,                quency on only one processor, but is reduced by 19% when
+provide them as useful hints to VirtualPower’s VPM rules.              both are scaled at the same time. VirtualPower overcomes
+VPM rules may then use the ‘soft’ state requests that make             hardware limitations derived from resource sharing and lim-
+up these hints as inputs to localized power management                 ited opportunities for voltage scaling by providing mecha-
+and/or to global policies that coordinate across multiple              nisms for power management that go beyond mere reliance
+guest VMs and multiple machines. The combination of VPM                on hardware operating modes. These mechanisms include
+states and channels provides for coordinated power manage-             consolidation techniques and runtime changes to hypervisor-
+ment while maintaining VM independence.                                level scheduling. The outcome is a rich set of VPM mecha-
+                                                                       nisms for VPM rules that exploit both ‘soft’ and hard power
+3.3 Limitations of Hardware Management                                 scaling techniques.
+   An issue with utilizing hardware support for power man-
+agement in virtualized systems is that resources within a              4. VIRTUALPOWER ARCHITECTURE
+management domain may be shared by multiple guest VMs.
+For example, memory DIMMs that are accessible via the                     In keeping with common practice, VirtualPower does not
+same bus and/or share the same voltage plane may con-                  require modifications to guest operating systems. Further,
+tain memory that is allocated to many guests. This means               while implemented with the Xen [4] virtualization frame-
+that this component cannot be managed unless all guest ma-             work, the VirtualPower architecture and abstractions are
+chines desire reduced memory bandwidth via bus scaling, or             designed for the wide range of virtualization solutions cur-
+are currently not utilizing the DIMMs such that they can be            rently deployed or under development. Therefore, most of
+powered down. Similar limitations exist for disks that con-            its functionality resides as a controller in the driver domain,
+tain multiple partitions, each of which may be allocated to            termed Domain Zero (Dom0) in current systems, with only
+different guests. Any one partition can be power-managed               small changes required to the underlying virtual machine
+by placing the disk into a low power state only if all parti-          monitor or hypervisor. Specifically, VirtualPower’s monitor-
+tions can be placed into that state.                                   ing functionality is integrated into the hypervisor, whereas
+                                                                       its higher level mechanisms and policies (i.e., VPM mecha-
+                                                                       nisms and rules) reside in Dom0. As a result, policies have
+                                                                       easy access to CPU and device power states, and they can
+                                                                       take advantage of Dom0’s control plane functionality for cre-
+                                                                       ating guest virtual machines, migrating them, . . . etc.
+
+
+
+
+Figure 2: DVFS Limitations on a Dual Core Chip.
+
+
+  An approach to overcoming limitations for power man-
+aging shared resources is to use time domain multiplexing,             Figure 3: VirtualPower Management Architecture.
+which sets components to the hardware states that reflect
+the power management criteria of the currently executing
+VM. Unfortunately, this approach has two significant draw-                Figure 3 illustrates the VirtualPower architecture. Each
+backs. First, it can only be used if the transition time of            physical platform runs a hypervisor and associated Dom0.
+resources between management states is much smaller than               Guest VMs perform power management based upon the
+the scheduling time granularity used by the hypervisor. Sec-           ‘soft’ VPM states exported to them. VPM channels capture
+ond, even if this were the case, this approach is not promis-          guest VM power management requests, via updates to these
+ing in the context of multicore platforms. Here, the intent to         ‘soft’ states, in the hypervisor. This information is then
+concurrently execute a large number of guest VMs on avail-             passed to power management software components, com-
+
+
+
+                                                                 268
+                                                                 258
+posed of sets of VPM rules running in Dom0, which finally,              stored in the hypervisor using a cyclic buffer from which
+use VPM mechanisms to actually carry out management                     VPM rules may retrieve it. The timing and frequency of
+decisions. As described further in Section 7, our current               retrievals depend upon whether the control algorithm being
+VPM rules implement a tiered policy approach: local PM-L                used requires polling or event-based retrieval techniques.
+policies perform actions corresponding to resources on lo-                 The implementation of VPM channels uses hypercalls and
+cal platforms, and a higher-level PM-G policy component                 Xen event channels. VirtualPower defines its own hyper-
+uses rules responsible for coordinating global decisions (e.g.,         call interface which can be used to perform a variety of
+VM migration). We next describe in more detail the VPM                  actions for VPM rules. The interface defines a VPM_POLL
+states, channels, and mechanism components that permit                  operation that allows VPM rules in Dom0 to query for VPM
+VPM rules to perform coordinated power management.                      events corresponding to a particular guest VM. VPM rules
+                                                                        can use this operation to periodically retrieve updates about
+4.1 VPM States                                                          the state changes desired by guest VMs. In addition, Vir-
+   It is important to leverage the substantial investments and          tualPower provides a Xen event channel that may be used
+knowledge about online power management embedded in                     if VPM rules desire immediate notification of desired state
+guest operating systems. Technically, this implies the need             changes by guest VMs. This is useful when timely responses
+to provide to the policies run by guest VMs what appears to             to VM behavior are necessary for balancing power manage-
+be a richly manageable set of underlying resources, even if             ment with performance requirements.
+the hardware platform does not actually provide the differ-
+ent power states being exported. In heterogeneous hardware              4.3 VPM Mechanisms
+environments, for instance, a guest machine with sophisti-                VPM mechanisms are the base level support for online
+cated power management policies may initially be deployed               power management by VPM rules. They provide uniform
+on hardware that does not support power management and                  ways of dealing with the diversity of underlying platform
+later be migrated to manageable components. VirtualPower                power management options. The mechanisms supported
+is designed to permit guest VM policies to run in both sys-             by VirtualPower include hardware scaling, soft scaling, and
+tems, by exporting to them ‘soft’ VPM states and then us-               consolidation.
+ing appropriate VPM rules and VPM mechanisms to real-
+ize them. These VPM states need not reflect the actual                  Hardware Scaling.
+operating points (i.e., Px states [17]) supported by under-                Hardware scaling capabilities vary across different plat-
+lying hardware, but instead, they consist of a set of per-              form and device architectures. Moreover, whether or not
+formance states made available by VirtualPower for use by               such scaling is possible or effective depends on VM-level
+VMs’ application-specific management policies. This is im-              resource sharing (e.g., VMs running across multiple cores
+plemented by simply defining these ‘soft’ states in the rel-            in multicore platforms). The VPM mechanism supporting
+evant portions of the ACPI tables created for guest VMs.                hardware scaling is straightforward, permitting VPM rules
+In addition, for management flexibility, VM-level changes to            to set the hardware states to be used during the execution of
+‘soft’ VPM states are disassociated from the assignment of              a particular guest VM via a VPM_SET_PSTATE operation on
+shadow VPM states to actual resources by VPM rules.                     the VirtualPower hypercall interface. Of course, the actual
+   In exporting VPM states, a limitation is imposed by the              rules that decide upon such state changes can be non-trivial.
+fact that the ACPI interface specification defines a maxi-              For example, policy rules must determine whether or not
+mum of sixteen Px states for a device, thereby limiting the             a set of hardware performance states for VMs can create
+number of possible soft states available for each manage-               conflicts due to resource sharing. In the particular case of
+able component. We do not consider this an issue because,               processor DVFS management, such conflicts are handled by
+in general, most devices, such as processors, only support              hardware that ensures that the voltage provided to the chip
+a small number of performance states. Therefore, even in                is sufficient for the core running at the highest frequency.
+heterogeneous environments where one must define a set of
+VPM states that allows VMs to provide useful hints across               Soft Scaling.
+a range of machines, there is sufficient ability to define a               Hardware scaling is not always possible, or it may provide
+rich set of VPM states that express the performance scaling             only small power benefits, as shown in our earlier example
+capabilities of multiple physical platforms.                            of utilizing DVFS on multicore chips. In response, we intro-
+                                                                        duce the notion of ‘soft’ resource scaling, which uses resource
+4.2 VPM Channels                                                        scheduling to emulate the performance loss of the hardware
+   VPM channels are the abstraction via which guest VMs                 scaling action that would otherwise be performed. For pro-
+provide input on power management to VPM rules, as il-                  cessor management, this entails modifying the hypervisor’s
+lustrated in Figure 3. Since hardware power management                  scheduling attributes for a VM to emulate the VM’s desired
+is privileged, whenever guests attempt to execute such op-              performance mode. For instance, if a VM has requested
+erations, they are trapped by the hypervisor, whereupon                 scaling a core to half of its previous performance state, then
+VirtualPower re-packages them as VPM events made avail-                 with soft scaling, the hypervisor scheduler may reduce the
+able to the VPM rules in Dom0. In particular, the informa-              guest’s maximum time slice in a period by half. The nec-
+tion encapsulated by a VPM event includes a timestamp,                  essary adjustments to scheduling parameters are performed
+the ‘soft’ state set by the guest VM, and information re-               using a VPM_SET_SOFT operation with the VirtualPower hy-
+garding the actual performance state being provided to the              percall interface.
+guest when the request was made. The implementation of                     An obvious issue with soft scaling is that the performance
+VPM event information retrieval by VPM rules is an asyn-                degradation attained in this fashion may not accurately rep-
+chronous one, where VPM event information is temporarily                resent what the application would have observed from actual
+
+
+
+                                                                  269
+                                                                  259
+hardware scaling. For example, a guest VM may request a
+reduced processor frequency, because it expects to observe
+little or no performance degradation for its current memory-
+bound application workload. If soft scaling proportionally
+changes CPU allocation in response to such requests, the ap-
+plication would experience notable and unexpected levels of
+performance loss. Our implementation of soft scaling, there-
+fore, is carried out by VPM rules that operate with feedback
+loops based upon state-based guidance in which such degra-
+dation is observed, indirectly, by VM requests for increased                    Figure 4: Power Measurement Setup.
+performance states. This results in policies that dynami-
+cally tune to what extent, if any, soft scaling is applied to a
+physical resource.                                                      seen during experiments. Figure 4 summarizes our power
+   Soft scaling can result in substantial power benefits, for           measurement configuration.
+two reasons. First, there is the idle power management of
+resources. Components such as processors are achieving in-              5.2 Guest Applications and Policies
+creasingly substantive savings when idle compared to ac-                  Experiments are conducted with representative enterprise
+tive, even when active power management cannot provide                  workloads, using the RUBiS tiered web service application
+improvements. Thus, soft scaling is most effective when it              and using transactional loads. The distributed components
+results in processors being idle for some time (i.e., no VMs            of these applications are instantiated in their own virtual
+currently running on any of their threads). Second, addi-               machines, with each VM mapped to a single virtual proces-
+tional savings may be derived from appropriately managing               sor. The different workload characteristics of these codes,
+soft scaling across multiple resources, by coordinating their           along with the varying VM-level policies which drive their
+concurrent use [27] and/or by use of consolidation.                     management, present interesting challenges to VirtualPower’s
+                                                                        management policies, as explained next.
+Consolidation.
+   When soft scaling multiple VMs for multiple resources,               Transactional Workloads.
+such as cores on a multicore chip, it becomes possible to                  Many backend services deployed in enterprise systems and
+share resources, perhaps to totally idle one core while fully           datacenters are of a transactional nature. For example, as
+using another one. An obvious first benefit from such re-               part of an ongoing collaboration with our corporate partner
+source consolidation is the substantial power improvements              Delta Air Lines, we have obtained workload traces from a
+derived from placing offloaded resources into their idle or             backend subsystem responsible for tracking operational rev-
+suspend states. An interesting second benefit is derived                enue earned from the services offered by the company [1].
+from resource heterogeneity. In particular, in datacenter               The backend operates by continually receiving, queuing, pro-
+environments, there likely exist physical resources that are            cessing, and then, emitting revenue-relevant events, with
+more power efficient for certain workloads or that are more             current incoming event rates at the level of thousands per
+amenable to online management. By combining soft scal-                  hour. Two interesting elements of these event traces are
+ing with VM re-mapping or migration (i.e., consolidation),              (1) that event queuing delays often outweigh actual event
+therefore, it is possible to map multiple ‘compatible’ in-              processing times and (2) that arrival rates vary significantly
+stances of virtual resources to appropriately efficient phys-           over the course of a day. For example, a large batch ar-
+ical resources. This dynamic migration capability is imple-             rival of events submitted every day at 4 AM EST creates
+mented using existing control interfaces in Dom0.                       queue lengths as high as 4000. From (1), it is clear that for
+                                                                        these types of applications, changes in the execution times of
+5.   EVALUATION METHODOLOGY                                             events due to power management may have negligible effect
+                                                                        on overall processing time, due to queuing delays. From (2),
+5.1 Experimental Setup                                                  it is evident that there exist possibilities for management to
+  Experimental evaluations of the VirtualPower manage-                  exploit changes in application behavior across larger time
+ment infrastructure use standard multicore server hardware.             scales.
+Our testbed consists of multiple dual core Pentium 4 ma-                   For transactional applications like these, the goal of back-
+chines, which are identical in terms of their hardware ca-              end servers is to process requests at rates that are suffi-
+pabilities and components. These machines have processors               ciently high to meet certain application-specific SLAs. For
+based upon the Intel Netburst microarchitecture, 3GB of                 the actual traces received from our corporate partner, these
+memory, gigabit network cards, and 80GB hard drives. In                 SLAs are dictated by revenue reporting requirements. More
+terms of manageability, they support two physical operating             generally, different transactional applications will have dif-
+modes for their processor cores: 3.2GHz and 2.8GHz.                     ferent performance requirements, and in addition, such re-
+  Power data is obtained using an Extech 380801 power an-               quirements may vary over time (e.g., due to changes in re-
+alyzer, which allows for out of band measurements via a                 porting requirements or when dynamic pricing methods are
+laptop, thereby avoiding undesirable measurement effects on             used). In all such cases, the principal performance metric
+the system under test. Power is measured ‘at the wall’, in              for a transactional service is whether it can run its trans-
+order to include the AC power consumption of the entire                 actions at some currently desired minimum processing rate.
+system. We obtain power traces at the maximum sampling                  For power management, this means that management poli-
+rate of 2Hz using the Extech device, then use these traces              cies can exploit the slack available between minimum de-
+to calculate offline the power consumption characteristics              sired rate and the current rate being observed. Accordingly,
+
+
+
+                                                                  270
+                                                                  260
+we define a simple VM-level power management policy that                 state of the VM to 1.6GHz to reduce the performance of the
+keeps track of ‘performance slack’ while also maintaining a              application by 50%. One method for doing this is to use the
+desired transaction execution rate. When slack is large, the             VirtualPower hypercall interface to schedule the vcpu with
+policy requests reduced processor frequencies, and if slack              half its original slice size and with the non-work-conserving
+becomes negative, it scales up the underlying processor’s                setting. Another method is to use hardware scaling in con-
+performance state. Experiments show that this simple con-                junction with soft scaling. In this example, a VPM rule can
+trol policy proves to effectively enforce a defined application-         specify a reduced physical frequency f l and simultaneously
+specific transaction processing rate. For purposes of experi-            soft scale the resource to 21 ∗ 3.2GHz
+                                                                                                            fl
+                                                                                                                 of its original amount.
+mentation, we use the well-known SPEC CPU2000 suite to
+create code modules that carry out computationally expen-
+sive transactions. These code modules are driven by vary-
+ing transaction rates and rate requirements. Future steps
+in this work will consider transactional computations using
+the Nutch open source search engine [29].
+
+Tiered Web Service Workloads (RUBiS).
+   RUBiS is a well-known tiered web service benchmark, im-
+plementing some of the basic functionality of an auction
+                                                                            (a) Performance Error          (b) Scaling Power Effects
+website, including selling, browsing, and bidding. We use
+a PHP-based two node configuration of RUBiS where there
+is a web server front end (Apache) connected to a database                       Figure 5: Soft Scaling Characteristics.
+backend (MySQL). Load is provided using a third client ma-
+chine. All of these nodes are connected via a gigabit Ether-
+net switch. Web service applications typically exhibit varia-               In Figures 5(a) and 5(b), we compare VPM rules that
+tions in processor utilization based on current request arrival          use 3.2GHz versus 2.8GHz as physical frequencies for real-
+rates from clients and on current request behaviors. This                izing the different VPM states less than 3.2GHz. In these
+characteristic can be exploited for power management via                 measurements, rules define VPM states so as to attain linear
+reactive policies that attempt to scale the processor to an ap-          performance reductions based on frequency for computation-
+propriate performance state based on current load statistics.            bound workloads. In other words, the 1.6GHz VPM state
+Since VM-level policies like Linux’s ondemand governor are               should provide half the performance of the 3.2GHz state.
+designed to exploit this fact, this is the application-specific          Figure 5(a) shows how actual measured performance degra-
+policy used in our experiments with the RUBiS VMs.                       dations are within a few percent of desired goals, thereby
+                                                                         demonstrating the viability of the approach. Errors are
+6.   VIABILITY OF SOFT SCALING                                           larger for the 2.8GHz physical frequency, but the implemen-
+                                                                         tation is designed to forego potential (slight) improvements
+   As described in Section 4.1, VPM states act to disassociate
+                                                                         in power to ensure ‘negative’ errors, that is, to attain perfor-
+the management actions of virtual machine policies from the
+                                                                         mance slightly better than would be expected from a strictly
+manageability support of underlying physical resources. Our
+                                                                         linear degradation. In Figure 5(b), we observe the power
+Pentium 4 based processors support two operating frequen-
+                                                                         tradeoffs between using only soft scaling versus using soft
+cies of 3.2GHz and 2.8GHz. With the use of VPM mecha-
+                                                                         and hard scaling simultaneously, for a single instance of the
+nisms, however, we can perform power management actions
+                                                                         computation-bound transactional application. From this fig-
+at the virtualization layer beyond just these two hardware
+                                                                         ure, the power benefits of soft scaling with either physical
+performance states, resulting in the export of five different
+                                                                         frequency are apparent, with increased power reductions of
+‘soft’ Px states (frequencies) to guest VMs. In particular,
+                                                                         up to 48W when the processor is running at 3.2GHz. Sum-
+guest VMs see frequency capabilities of 3.2GHz, 2.8 GHz,
+                                                                         marizing, these experiments establish (1) the viability of soft
+2.0 GHz, 1.6GHz, and 800MHz. When guest VMs attempt
+                                                                         scaling and perhaps more importantly, (2) the importance
+to set these states, it is up to VPM rules to map these re-
+                                                                         of simultaneously using soft and hard scaling to create the
+quests to actual changes (or not) of the shadow states they
+                                                                         rich set of VPM states desired by guest VMs and their ap-
+maintain. Changes applied to shadow states trigger changes
+                                                                         plications.
+in the Xen scheduler’s scheduling attributes and/or in un-
+derlying processor power states.
+   Experimental measurements of soft scaling presented in                         Table 1: VPM State Definitions.
+this paper use the Xen hypervisor’s earliest deadline first                             Hardware    Soft (Scheduler)
+(SEDF) scheduler, which allows for dynamic tuning of the                     VPM State    CPU    Work-conserving Slice
+amount of processing time allotted to a VM’s virtual CPU
+                                                                              3.2GHz     3.2GHz       Yes            -
+(vcpu). In addition, based on the SEDF parameters, the
+                                                                              2.8GHz     2.8GHz       Yes            -
+scheduler can be set to be work-conserving, or to limit CPU
+                                                                                         3.2GHz        No          88ms
+time in a non-work-conserving fashion. We take advantage
+                                                                              2.0GHz     2.8GHz        No          71ms
+of its non-work-conserving mode in order to use the sched-
+                                                                                         3.2GHz        No          63ms
+uler as a control actuator via the VPM soft scaling mecha-
+nism. For example, consider the case of a VM executing with                   1.6GHz     2.8GHz        No          57ms
+the physical processor at 3.2GHz and using work-conserving                               3.2GHz        No          50ms
+scheduling parameters. Based on VM power management                           800MHz     2.8GHz        No          29ms
+request information, VPM rules wish to set the shadow VPM                                3.2GHz        No          25ms
+
+
+
+                                                                   271
+                                                                   261
+                                                        WS                                                              DB                                                                WS                                                              DB
+                           0                                                               0                                                                 0                                                               0
+
+
+
+
+  Performance State (Px)                                          Performance State (Px)                                            Performance State (Px)                                          Performance State (Px)
+                           1                                                               1                                                                 1                                                               1
+
+                           2                                                               2                                                                 2                                                               2
+
+                           3                                                               3                                                                 3                                                               3
+
+                           4                                                               4                                                                 4                                                               4
+
+
+                               0   10   20       30     40   50                                0   10   20       30     40   50                                  0   10   20       30     40   50                                0   10   20       30     40   50
+                                             Time (s)                                                        Time (s)                                                          Time (s)                                                        Time (s)
+
+                                        (a) No Active Power Management                                                                                                          (b) Active Power Management
+
+                                             Figure 6: VPM Channel Feedback for State-Based Guidance with VirtualPower.
+
+
+
+   Table 1 lists the parameters used by VPM rules to de-                                                                                                of coordination: (1) across the different levels of abstraction
+fine VPM states. Each state can be implemented using only                                                                                               at which VM-level vs. virtualization layer policies run, and
+soft scaling or with a combined hardware and software scal-                                                                                             (2) across policies running on different platforms.
+ing approach. Experimentally, we find that the ‘slice’ def-
+initions for the 3.2GHz mode and for the hardware-scaled                                                                                                7.1 PM-L Policies: Platform Management
+version of the 2.8GHz mode are irrelevant because of their                                                                                                 The VirtualPower approach establishes an indirect feed-
+use of work-conserving scheduling. For the remaining states,                                                                                            back mechanism that permits power management at the vir-
+the slices correspond to periods of 100ms. A tradeoff when                                                                                              tualization level to take into account the desires of VM spe-
+using both soft and hard scaling is that reduced hardware                                                                                               cific management policies using state-based guidance. The
+frequencies imply larger allocation slices for VMs, as found                                                                                            existence of this desirable feedback loop is established with
+in Table 1. As seen later in our evaluations, the interest-                                                                                             traces of power management requests from the web server
+ing and somewhat counterintuitive outcome of this fact is                                                                                               (WS) and database (DB) VMs for our RUBiS workload in
+that for minimizing power consumption across multiple ma-                                                                                               Figure 6. Here, we denote VMs’ requests in terms of de-
+chines, it is sometimes necessary to implement VPM states                                                                                               sired Px states, where P0 is 3.2GHz, P1 is 2.8GHz, P2 is
+with higher hardware frequencies so that multiple vcpus can                                                                                             2.0GHz,. . . etc. Figure 6(a) shows the requests made by the
+be mapped to a single machine (i.e., to permit consolidation                                                                                            two VMs without active VirtualPower management. That
+for exploiting low idle/sleep power or power-efficient hard-                                                                                            is, VPM rules are disabled and do not perform any hard
+ware). For example, if two VMs are being set to the 1.6GHz                                                                                              or soft resource scaling. When active power management
+VPM state, using soft scaling alone at a hardware frequency                                                                                             is enabled and PM-L policies are run, a dramatic change
+of 3.2GHz, they each require 50% of a CPU allowing for                                                                                                  is seen in the request patterns of both VMs in Figure 6(b).
+consolidation, whereas if hardware scaling is used, the re-                                                                                             This demonstrates the interplay between active management
+quirement is 57% per VM. Since VirtualPower allows VPM                                                                                                  in the virtualization layer with the internal policies run by
+rules to define VPM states based upon hard and soft scal-                                                                                               guest VMs. In other words, the Figure visualizes perfor-
+ing mechanisms as they see fit, such dynamic, coordinated                                                                                               mance feedback data communicated from VMs to the virtu-
+management is easily realized with our approach.                                                                                                        alization layer power management. We next evaluate how
+                                                                                                                                                        this indirect feedback loop can be used for effective, coordi-
+7.                         POLICY BASED COORDINATION                                                                                                    nated platform- and system-level power management.
+   The VirtualPower infrastructure can be used to imple-                                                                                                   A simple virtualization-level policy is one that attempts to
+ment complex management policies. We demonstrate this                                                                                                   minimize power consumption while maintaining the desired
+fact with hierarchical power management policies [10]. These                                                                                            performance of an application, the latter expressed via the
+are comprised of local policies (PM-L) running on each phys-                                                                                            VM’s power management requests. We term this policy PM-
+ical system and driven by local guest VM and platform pa-                                                                                               Lmin . An alternative useful local policy is one that throttles
+rameters, coordinated by global policies (PM-G) with knowl-                                                                                             power consumption for certain periods of time, perhaps due
+edge about rack- or blade-level characteristics and require-                                                                                            to thermal events or transient power delivery issues [5, 6].
+ments. Specifically, PM-L policies obtain VMs’ desired power                                                                                            PM-Lthrottle is a power throttling policy that attempts to
+states via VPM channels and use state-based guidance to                                                                                                 maintain average power consumption at some desired level.
+determine suitable local shadow VPM states. The higher                                                                                                  Finally, to address changes in request behavior experienced
+level PM-G policies use the ‘consolidation’ VPM mecha-                                                                                                  for the transactional loads explained earlier, a third useful
+nism based on information about the shadow VPM states                                                                                                   local policy, termed PM-Lplan , is one that trades off poten-
+assigned to VMs by PM-L policies and the platforms on                                                                                                   tial short term reductions in power usage with longer term
+which they run (e.g., rack or blade enclosures). One objec-                                                                                             gains enabled by planning based on monitoring historical
+tive of these experiments is to evaluate VirtualPower’s abil-                                                                                           trends in power management request behavior. We next
+ity to run diverse rules with different and varying goals while                                                                                         experiment with these policies.
+exercising the multiple VPM mechanisms presented to these
+rules. Goals sought by the VPM rules policies demonstrated                                                                                              Minimizing Power in the Presence of QoS Constraints.
+include power minimization and power throttling/limiting,
+the latter designed to enforce limits on blade- or rack-level                                                                                             A common objective for power management policies is
+power draws, perhaps triggered by thermal events. Another                                                                                               to minimize execution time power consumption while main-
+objective is to demonstrate, experimentally, the importance                                                                                             taining the quality of service (QoS) required by applications.
+
+
+
+                                                                                                                                  272
+                                                                                                                                  262
+As outlined in Section 4, VirtualPower attains this goal by                  presentation purposes, the processing rate values are nor-
+observing and reacting to guest VMs’ management requests.                    malized by the rate that requires the highest (i.e., 3.2GHz)
+Using combined hard and soft scaling to export a set of five                 power state on our Pentium 4 machine. Figure 8(a) de-
+virtual frequency states to guest VMs, the experimental re-                  picts the measured average power consumption of a single
+sults shown here demonstrate that the PM-Lmin VPM rule                       instance of the transactional VM. Also shown are compar-
+successfully assigns suitable shadow VPM states to meet a                    ative results attained with a non-VirtualPower-enabled sys-
+VM’s QoS goals while also reducing its power consumption.                    tem, where the guest VM’s performance state is always set
+Power management behavior with this policy is depicted in                    to the maximum. These measurements establish that our
+Figure 7, where the straightforward ‘mapping’ version of the                 approach can capture and then effectively use VM-specific
+PM-Lmin policy reacts to a change request by a VM by sim-                    power/performance tradeoffs via its VPM channels and mech-
+ply making the appropriate change to some corresponding                      anisms. In fact, with VirtualPower, we see power benefits
+shadow state.                                                                of up to 31% for transactional VMs that require reduced
+                                                                             performance (i.e., they execute transactions with low QoS
+                       210                                                   requirements). The diminishing returns seen with decreased
+                       200                                                   desired rate/throughput are because the soft scaling VPM
+                       190                                                   mechanism reduces active power consumption linearly, but
+                       180                                                   is limited by the idle power consumption of the platform.
+           Power (W)
+                       170
+                                                                                Figure 8(b) depicts measurements with two backend trans-
+                       160
+                       150
+                                                                             actional VMs that both run on the same dual core platform.
+                       140                                                   The purpose is to understand whether and to what extent
+                       130                                                   simple policies like ‘mapping’ PM-Lmin can reduce power
+                       120                                                   consumption in the presence of multiple VMs with possibly
+                             0 100 200 300 400 500 600 700 800 900
+                                                                             different individual performance requirements. With VM-
+                                           Time (s)
+                                                                             level performance requirements expressed as ‘rate mixes’ in
+                                                                             the figure, it is apparent that with performance slack, the
+Figure 7: Power Trace of Transactional Application.
+                                                                             mapping PM-L policy again successfully reduces execution
+                                                                             time power consumption. Moreover, the policy recognizes
+                                                                             and successfully exploits the differences in VM-level perfor-
+   The power trace in Figure 7 measured for the transac-                     mance needs.
+tional application is obtained from an experiment in which
+the VPM state for the application is initialized to its maxi-
+mum (or 3.2GHz). The VM-level policy determines whether
+or not a scaling request should be made between transaction
+executions. These decision points can be seen in the figure
+where the power consumption drops for a very small pe-
+riod of time. We observe that over time, the VM issues
+several frequency reduction requests since there is slack be-
+tween its performance and the necessary computation power
+to maintain its required processing rate. When such slack                           (a) Performance            (b) Power Consumption
+is depleted, the system scales the computational resources
+back up to an appropriate performance level, in response to
+subsequent VM-issued management requests. Via this feed-                            Figure 9: RUBiS Experimental Results.
+back loop, the PM-L policy is able to provide desired levels
+of performance for the transactional VM across all experi-
+ments run in this series.                                                       Realistic web service applications have behaviors that are
+                                                                             more complex than those of the transactional codes we have
+                                                                             evaluated so far. To experiment with these, we use the
+                                                                             tiered RUBiS application, running its web server (WS) and
+                                                                             database (DB) virtual machines on separate physical ma-
+                                                                             chines, with a PM-L policy executing in each Dom0. Again
+                                                                             using the ‘mapping’ PM-Lmin policy, we measure the result-
+                                                                             ing performance, in terms of requests served per second, and
+                                                                             power consumption for various client loads in Figure 9 (each
+                                                                             load class normalized by comparative measurement of the
+ (a) Single Transaction VM                   (b) Two Transaction VMs         “policy off” case). Interestingly, while this policy is able to
+                                                                             limit total performance impact to within 5% across all loads,
+                                                                             its power savings aren’t appreciably better than the perfor-
+Figure 8: Transactional Application Power Results.                           mance degradation being experienced. This is because the
+                                                                             ondemand governor used by the RUBiS VMs is extremely
+                                                                             reactive, as shown in Figure 6. A simple ‘mapping’ PM-L
+  An analysis of the power reduction capabilities of the                     policy that carries out each of these requests can be inef-
+‘mapping’ PM-Lmin policy used with transactional appli-                      ficient, because it is unable to capitalize on periods of low
+cations is shown in Figure 8. The effectiveness of this pol-                 utilization. A better policy for applications like these is an
+icy is measured with varying rate requirements, where for                    averaging “Avg” PM-Lmin policy, which smooths the VPM
+
+
+
+                                                                       273
+                                                                       263
+state request pattern observed from the RUBiS VMs. Our
+                                                                                    Fetches/sec                                                 Power (W)
+implementation of this policy polls for VM power manage-                                                                                  165
+                                                                                                                                          150
+                                                                                                                                                                                                     315
+                                                                                                                                                                                                     300
+                                                                                     180                                                        310
+ment requests received on VPM channels, once per second                              160
+                                                                                     140
+                                                                                                                                          135
+                                                                                                                                          120   290                                                  285
+                                                                                                                                                                                                     270
+                                                                                     120                                                  105   270
+from Dom0. If a VM has made any requests, an averaging                               100
+                                                                                      80                                                        250
+                                                                                                                                                                                                     255
+
+                                                                                                                                      0                                                          0
+function is used along with the current VPM state of the VM                                0    1     2                  3
+                                                                                                                             2
+                                                                                                                                  1                   0    1     2                  3
+                                                                                                                                                                                        2
+                                                                                                                                                                                             1
+                                                                                                             3   4   4           DB Px state                            3   4   4           DB Px state
+to determine a new suitable state. Otherwise, if the shadow                                    WS Px state                                                WS Px state
+
+VPM state of the VM does not match the last received re-
+quest, the VPM state is shifted towards the last request                                       (a) Performance                                  (b) Power Consumption
+by one performance state. Figure 9 shows that this policy
+provides similar performance characteristics to the mapping                                         Figure 11: RUBiS Management.
+approach, but reduces power consumption further, by up to
+4%. Overall, we conclude that our VirtualPower infrastruc-
+ture allows power minimization policies to effectively reduce
+power within application specific performance requirements                      the figure, we see that with RUBiS, power savings scale with
+for all of our experimental workloads.                                          performance degradation with the first few VPM states (P0-
+                                                                                P2). Within this range, an up to 9% performance degra-
+Power Throttling with VPM Mechanisms.                                           dation can be traded for a 10% power reduction. If PM-
+   In modern datacenters, there is a need for policies that                     Lthrottle needs to limit power beyond this, then performance
+can limit the average power consumption of a system, per-                       drops by as much as 45% for an up to 20% reduction in
+haps in response to some temporary event like a reduction                       power. This nonlinearity exists because for distributed ap-
+in cooling or power delivery capabilities, or in order to ad-                   plications like RUBiS, their end-to-end performance metrics
+here to a global power provisioning strategy [9]. Ongoing                       can be significantly affected by local performance degrada-
+industry research is developing system support for power                        tions. These experiments demonstrate, for a single applica-
+consumption monitoring that can be used as feedback for                         tion, the effects of coordinated, multi-machine power man-
+such policies [22, 33]. Unfortunately, current platforms like                   agement.
+our dual core Pentium 4 systems have limited performance
+states for this type of management. Soft scaling corrects
+this deficiency, and it makes it possible to construct policies
+like PM-Lthrottle , which we describe and evaluate next.
+
+
+                 Power (W)
+                                                                  240
+                 240                                              220
+                 220                                              200
+                 200                                              180
+                 180
+                 160                                              160
+                 140
+                                                                0
+                       0                                     1
+                             1                            2
+                                   2      3           3
+                           VM0 Px state
+                                              4   4        VM1 Px state           Figure 12: Non-uniform VPM State Allocation.
+
+
+
+ Figure 10: Transactional Workload Management.                                     Our final measurements in this set of experiments go be-
+                                                                                yond coordinating across multiple machines to also demon-
+                                                                                strate the importance of coordination across multiple VM
+   Consider a single dual core platform executing two trans-                    policies, specifically, in order to attain some global goal,
+actional VMs. Each of these VMs can be assigned a static                        such as limiting a server’s total power consumption to about
+Px state independently, by setting its shadow VPM state                         180W. Consider two guests VM0 and VM1 with different
+in the hypervisor. Figure 10 provides the associated power                      power/performance tradeoffs, expressed by the commands
+consumption trends. An interesting observation from this                        they issue to their respective VPM channels. A “fair”, ap-
+figure is that there is a significant power reduction when                      plication unaware approach to throttling the machine would
+both VMs are set to VPM states of P1 or less, compared                          divide the power budget uniformly and execute both VMs
+to either of them running at P0. Particularly, the power                        at the P2 VPM state. On the other hand, if VM0 needs to
+consumption of both VMs at P1 is 8% less than with one                          process transactions at a normalized rate of 0.8 while VM1
+VM at P0 and the other at P4. This is because for our                           requires only a rate of 0.25, then when executing at P2, VM0
+platform, voltage scaling can only be performed on the dual                     will try to upscale its frequency, since its performance is too
+core package if both cores are scaled down. A more general                      low to maintain its desired transaction rate. At the same
+observation from this figure is that soft scaling substantially                 time, VM1 will attempt to down-scale its processor. With
+improves power limiting capabilities: hardware scaling alone                    the workload-awareness enabled by VirtualPower, a coordi-
+provides up to 20% throttling capability, while soft scaling                    nation policy can exploit information about VM desires to
+extends to up to 40%. These results again highlight the need                    determine that the first VM can run at P1, while the sec-
+to utilize both hard and soft scaling in conjunction for effec-                 ond can run at P4. Although both assignments observe the
+tive management.                                                                180W power limit, Figure 12 shows how the non-uniform
+   Next, we again consider the RUBiS setup with two ma-                         VirtualPower allocation provides adequate performance for
+chines in Figure 11. If the power of both machines is limited                   both VMs, while a uniform allocation overprovisions VM1
+simultaneously such as in a rack or enclosure setting, from                     and causes VM0 to underperform.
+
+
+
+                                                                          274
+                                                                          264
+VirtualPower Enabled Power Planning.                                           consolidation mechanism. It is a well-known concept, of
+   As a final example of a PM-L policy that can benefit from                   course, that consolidation can be used to minimize the num-
+the VirtualPower system, we briefly consider how power                         ber of currently active resources so that standby and sleep
+management requests observed from VMs can be used to                           states can be used. The new capability provided by Virtu-
+create power management plans based on predicted behav-                        alPower is that aggressive soft scheduling based on observed
+ior. For example, an observation about the traces from Delta                   VM-level management requests can be used to substantially
+Air Line’s enterprise subsystem is that a large batch of re-                   improve consolidation-based power management. In addi-
+quests arrives for processing at the same time every day. By                   tion, we show that a PM-G policy that combines consolida-
+tracking power management requests associated with these                       tion with migration can perform power efficient allocations
+events, a PM-Lplan policy can make more appropriate de-                        in heterogeneous environments.
+cisions than other policies. To highlight how this type of
+policy is enabled by the VPM architecture, we next describe
+a PM-Lplan that attempts to throttle power consumption to
+180W on a machine over some time period.
+
+
+                       180       No Plan
+                                    Plan
+                       170
+
+
+
+           Power (W)
+                       160
+
+                       150
+
+                       140
+
+                       130
+                                                                                   Figure 14: Consolidation with Sleep States.
+                       120
+                             0     200     400     600 800   1000 1200
+                                                 Time (s)
+
+
+ Figure 13: Power Tradeoffs of a Planning Policy.                              Soft Scale-Enabled Consolidation.
+                                                                                  To understand the benefits of consolidation, particularly
+                                                                               in multicore machines, consider Figure 14. The figure pro-
+   Consider the ‘mapping’ PM-Lmin policy explained earlier.                    vides power measurements of two Pentium 4 machines when
+This policy is ‘aggressive’ in that each VM is treated inde-                   there are two transactional VMs, each with the same desired
+pendently and scaled down as much as possible. A global                        processing rate. Both machines run the mapping PM-Lmin
+planning policy, however, may wish to limit scaledown in                       policy described earlier. The figure compares the measured
+order to complete all existing transactions prior to the large                 power consumption of the two machines when the VMs are
+batch arrival, particularly when multiple VMs are involved.                    on separate physical machines vs. being consolidated onto
+Figure 13 depicts measurements of an illustrative example                      one multicore machine vs. the projected power consump-
+in which a large batch job arrives after 700 seconds. The                      tion when there is consolidation and when the idle platform
+“no plan” approach illustrates what happens if the minimal                     is shut down or placed into a low power sleep/standby state
+VPM state corresponding to each VM’s currently desired                         (which we assume consumes close to zero power). We see
+QoS is assigned to each machine. With this approach, ini-                      from the figure that at high processing rates (i.e., high VPM
+tial power consumption is low, just under 140W. In order                       states), there is an up to 10% power improvement derived
+to provide adequate performance when the second VM re-                         from consolidation. This is due to the power characteristics
+ceives requests, power exceeds the desired throttling point.                   of the multicore chips where when one core is being highly
+Therefore, the policy would have to reduce the VPM state                       utilized, from a global power perspective, it is better to use
+of one or both VMs, thereby violating their performance                        the second core on the same chip. At lower request rates,
+requirements. On the other hand, using past VM request                         however, we see that the only significant power reduction
+behavior, a planning policy can predict the future high de-                    stems from the act of placing the unused resources, in this
+mand experienced by the second VM, and preemptively pro-                       case a machine, into a low power/off state.
+vide additional performance to the first VM, so that it may                       A VirtualPower-enabled system can aggressively exploit
+complete its transactions. In Figure 13, the “plan” results                    the power characteristics of multicore chips. Specifically,
+show that the throttling point is maintained using this ap-                    by monitoring lower level PM-L policies, a PM-G policy can
+proach. This illustration underlines that infrastructures like                 determine whether and when soft scaled VMs should be con-
+VirtualPower must be able to run diverse and rich policies,                    solidated. In our implementation, PM-L policies spawn com-
+including those that require past observation and/or use pre-                  munication threads that listen for information requests from
+dictive techniques.                                                            PM-G policies. Upon a request, PM-L policies respond with
+                                                                               a list of guest domains currently executing and the shadow
+7.2 PM-G Policies: Global Coordination                                         VPM states used to run them. The PM-G policy can then
+  Coordination across multiple local policies has already                      act based upon its knowledge about the use of shadow VPM
+been recognized as an important element of any manage-                         states on some set of machines. Given the definition of our
+ment infrastructure. A specifically interesting case for power                 VPM states, of particular interest are VMs that run at states
+management is that global policies can exploit the ever-                       P3 and P4 for long durations. An illustrative example is
+increasing efficiency in idle, standby, and sleep power sought                 one in which four transactional VMs with normalized de-
+and attained by hardware vendors, by using VirtualPower’s                      sired processing rates of 0.4 are deployed onto two physical
+
+
+
+                                                                         275
+                                                                         265
+machines. Table 2 provides the power consumption of these               workloads consume 180W, but they consume 218W on a
+machines under various configurations.                                  platform without hardware management support. This con-
+                                                                        stitutes a 17% reduction in power. It is clear therefore, that
+                                                                        in the context of VirtualPower-enabled consolidation, PM-G
+Table 2: Managing Two Machines with Four VMs.                           policies can and should be designed to intelligently leverage
+  Configuration                         Power (W)                       hardware manageable components whenever permitted by
+  Two VMs per machine (no PM)             490W                          VMs’ performance requirements.
+  Two VMs per machine (PM-Lmin )          318W
+  Consolidated with 1 idle machine        362W                          Resource Heterogeneity Exploitation with VPM States.
+  Consolidated with 1 sleep/off machine   242W
+                                                                          The final results shown in this paper concern aggressive
+   The scenario illustrates several interesting facts. First,           consolidation to exploit heterogeneity in the power and per-
+when consolidating all four VMs onto one machine, these                 formance tradeoffs of datacenter platforms. In particular,
+machines are set to run at P3, or the 1.6GHz VPM state.                 we include in our experimental setup a dual core platform
+The implementation of this state reduces the sizes of VM                using Intel’s new Core microarchitecture, and we enable live
+slices by setting the physical frequency of the two cores to            VM migration as one of the VPM mechanisms offered to
+3.2GHz (rather than the lower 2.8GHz). This implementa-                 VPM rules. In this setup and for the transactional VMs
+tion of the VPM state consumes more power, but it also                  used in our work, migration time is measured to be, on av-
+allows for improved power consumption from a global per-                erage, 8.5 seconds when the machine is executing two VMs,
+spective (i.e., due to consolidation and the associated effi-           and 4.4 seconds when there is only one VM.
+cient use of sleep power). Indeed, we see from Table 2 that
+power consumption increases under consolidation, compared                                      600
+to two active machines managed by PM-Lmin policies, until
+                                                                                               550
+the idle machine is placed into a sleep mode which provides a
+24% reduction in power consumption across both machines.
+                                                                                   Power (W)
+                                                                                               500
+
+
+Exploiting Heterogeneity in Power Management.                                                  450
+
+   Upgrade cycles and cost considerations are causing in-                                      400
+creased levels of platform heterogeneity in datacenter envi-
+ronments. Even within a platform and processor generation,                                     350
+                                                                                                     0   50   100     150 200   250   300
+there may be differences between components. In particu-                                                            Time (s)
+lar, due to fabrication issues, it is becoming necessary to bin
+processors into different groups based on their frequency and              Figure 16: Consolidation with Heterogeneity.
+management capabilities. Therefore, our next experimental
+scenario considers the heterogeneity case in which there are
+some machines that support hardware scaling, while others                  The experiment deploys four transactional VMs with nor-
+do not. In our testbed, this simply involves treating some              malized rate requirements of 1.0, two on each dual core Pen-
+of our Pentium machines as non-scalable. Figure 15 shows                tium 4 machine. All machines run a PM-Lmin policy, and
+how this fact can affect the power consumption of one of our            there is a PM-G policy whose goal is to maximize usage
+transactional VMs. With varying processing rates, we see                of the Core microarchitecture-based system since it is quite
+from the figure that the benefits of hardware scaling support           power efficient and also provides significant performance. In
+can be significant, up to 8%, especially for application VMs            fact, it consumes around 140W when running both cores as
+that can be executed at reduced VPM states.                             compared to the 240W used by the Pentium based machines.
+                                                                        Moreover, it can execute transactions at roughly 2.4 times
+                                                                        the rate of the older machines.
+                                                                           The PM-G policy begins by offloading two VMs from one
+                                                                        of the P4 platforms and onto the Core microarchitecture-
+                                                                        based platform. Due to the improved performance expe-
+                                                                        rienced by the VMs after migration, they request reduced
+                                                                        performance states. The ability to obtain these hints trans-
+                                                                        parently across these heterogeneous platforms highlights the
+                                                                        benefits of our VPM state abstraction for VM policies. Over
+                                                                        time, the PM-G policy detects that the PM-Lmin policy
+                                                                        running on the Core microarchitecture machine has reduced
+                                                                        allocations to the existing VMs, freeing up room for addi-
+   Figure 15: Power Management Heterogeneity.                           tional consolidation. As shown by the experiment’s power
+                                                                        trace in Figure 16, this causes a chain of migrations. Here,
+                                                                        the Pentium machines are not powered down or placed into
+  VM consolidation and migration are important methods                  sleep states, but instead, continue to consume idle power.
+for dealing with PM heterogeneity. To illustrate, consider              Nonetheless, we observe power savings of almost 200W, or
+three transactional VMs with normalized performance re-                 34%, by allowing for extensive use of the more power-efficient
+quirements of 0.4 running on a single machine. On a plat-               resources when all four VMs are finally migrated. This
+form with hardware scaling and a PM-Lmin policy, these                  experimental scenario highlights the ability of the Virtu-
+
+
+
+                                                                  276
+                                                                  266
+alPower infrastructure to support complex policy strategies                Fellowship. Extensive exposure to modern multicore plat-
+that leverage heterogeneity, as well as the ability of its VPM             forms and virtualization technologies at Intel Corporation
+channels and VPM states to provide seamless coordination                   have been invaluable to our research, including discussions
+across systems and migration activities.                                   with Intel personnel, most notably Eugene Gorbatov and
+                                                                           Rob Knauerhase. We also acknowledge additional inputs
+8.   CONCLUSIONS AND FUTURE WORK                                           and support from Dilma Da Silva and Freeman Rawson at
+                                                                           IBM. Finally, we would like to thank Intel Corporation for
+   Power management has become an important problem                        their generous donation of resources and platforms used to
+in enterprise systems, where costs as well as limitations                  perform this work. Ripal Nathuji was awarded an SOSP
+in cooling and power delivery have made it necessary to                    student travel scholarship, supported by Infosys, to present
+extend active power management support into these envi-                    this paper at the conference.
+ronments. At the same time, end users are deploying new
+methods for system virtualization, to benefit from their iso-
+lation properties and/or from the increased levels of flexibil-
+                                                                           10. REFERENCES
+ity derived from server consolidation. Our research has ex-                 [1] S. Agarwala, F. Alegre, K. Schwan, and
+tended virtualization solutions to support rich and effective                   J. Mehalingham. E2eprof: Automated end-to-end
+policies for active power management. The VirtualPower                          performance management for enterprise systems. In
+infrastructure presented in this work advocates two basic                       Proceedings of the IEEE/IFIP International
+ideas: (1) to present guest virtual machines with what ap-                      Conference on Dependable Systems and Networks
+pears to be a rich set of ‘soft’ power states accessible to                     (DSN), June 2007.
+their application-specific policies, termed VPM states, and                 [2] J. Almeida, V. Almeida, D. Ardagna, C. Francalanci,
+then (2) to use the state changes requested by VMs as in-                       and M. Trubian. Resource management in the
+puts to virtualization-level management policies. These in-                     autonomic service-oriented architecture. In
+clude local policies architected to efficiently use specific plat-              Proceedings of the IEEE International Conference on
+forms and their power management capabilities, coupled                          Autonomic Computing (ICAC), June 2006.
+with global policies that consider goals derived from entire                [3] Amazon Elastic Compute Cloud.
+applications running across multiple machines and/or de-                        http://aws.amazon.com/ec2.
+rived from global constraints, such as blade- or rack-level                 [4] P. Barham, B. Dragovic, K. Fraser, S. Hand,
+limitations on maximum power consumption. Extensive ex-                         T. Harris, A. Ho, R. Neugebauer, I. Pratt, and
+perimentation with multiple processors, including the new                       A. Warfield. Xen and the art of virtualization. In
+power-efficient Intel Core microarchitecture, demonstrate the                   Proceedings of the ACM Symposium on Operating
+benefits of active power management with VirtualPower as                        Systems Principles (SOSP), 2003.
+well as the suitability of VirtualPower’s abstractions of VPM               [5] D. Brooks and M. Martonosi. Dynamic thermal
+states, channels, mechanisms, and rules. They also demon-                       management for high-performance microprocessors. In
+strate that with the state-based guidance approach to ac-                       Proceedings of the 7th International Symposium on
+tive power management realized in VirtualPower, it is possi-                    High-Performance Computer Architecture (HPCA),
+ble to capture and respond to the application-specific power                    January 2001.
+management desires and policies implemented in guest vir-                   [6] J. Chase, D. Anderson, P. Thakar, A. Vahdat, and
+tual machines without any need for application specificity                      R. Doyle. Managing energy and server resources in
+at the virtualization level. Experimental evaluations also                      hosting centers. In Proceedings of the 18th Symposium
+show substantial benefits derived from VirtualPower’s use                       on Operating Systems Principles (SOSP), 2001.
+(i.e., with improvements in power consumption of up to 34%                  [7] C. Clark, K. Fraser, S. Hand, J. G. Hansen, E. Jul,
+without appreciable losses in performance).                                     C. Limpach, I. Pratt, and A. Warfield. Live migration
+   Our future work will extend the VirtualPower infrastruc-                     of virtual machines. In Proceedings of the 2nd
+ture across multiple dimensions. One of these is to include                     ACM/USENIX Symposium on Networked Systems
+abstractions and mechanism support for VM-specific power                        Design and Implementation (NSDI), May 2005.
+throttling and power allocation. The idea is to ensure ‘fair’               [8] E. N. Elnozahy, M. Kistler, and R. Rajamony.
+power allocations across different VMs. An outcome of such                      Energy-efficient server clusters. In Proceedings of the
+fairness would be the ability to prevent power viruses from                     Workshop on Power-Aware Computing Systems,
+damaging machine performance. Another set of extensions                         February 2002.
+will consider the potential performance and thus, power de-
+                                                                            [9] X. Fan, W.-D. Weber, and L. Barroso. Power
+pendencies in applications like RUBiS, where often, it is
+                                                                                provisioning for a warehouse-sized computer. In
+only certain application components in certain VMs that
+                                                                                Proceedings of the International Symposium on
+critically affect application performance. Runtime methods
+                                                                                Computer Architecture (ISCA), June 2007.
+for identifying these via VirtualPower’s state-based guidance
+                                                                           [10] M. Femal and V. Freeh. Boosting data center
+approach would permit downscaling of all but the most im-
+                                                                                performance through non-uniform power allocation. In
+portant VMs for these applications.
+                                                                                Proceedings of the IEEE International Conference on
+                                                                                Autonomic Computing (ICAC), 2005.
+9.   ACKNOWLEDGMENTS                                                       [11] K. Flautner and T. Mudge. Vertigo: Automatic
+  We thank the anonymous reviewers and our shepherd,                            performance-setting for linux. In Proceedings of the
+Mendel Rosenblum, for their feedback on improving this pa-                      Symposium on Operating Systems Design and
+per. This work has been supported by an NSF ITR award                           Implementation (OSDI), 2002.
+and by Intel Corporation via an Intel Foundation Student                   [12] J. Flinn and M. Satyanarayanan. Energy-aware
+
+
+
+                                                                     277
+                                                                     267
+     adaptation for mobile applications. In Proceedings of               placement in data centers. In Proceedings of the
+     the Symposium on Operating Systems Principles                       USENIX Annual Technical Conference, June 2005.
+     (SOSP), December 1999.                                         [26] R. Nathuji, C. Isci, and E. Gorbatov. Exploiting
+[13] S. Ghiasi, T. Keller, and F. Rawson. Scheduling for                 platform heterogeneity for power efficient data centers.
+     heterogeneous processors in server systems. In                      In Proceedings of the IEEE International Conference
+     Proceedings of the International Conference on                      on Autonomic Computing (ICAC), June 2007.
+     Computing Frontiers, 2005.                                     [27] R. Nathuji and K. Schwan. Reducing system level
+[14] S. Graupner, R. Konig, V. Machiraju, J. Pruyne,                     power consumption for mobile and embedded
+     A. Sahai, and A. V. Moorsel. Impact of virtualization               platforms. In Proceedings of the International
+     on management systems. Technical report,                            Conference on Architecture of Computing Systems
+     Hewlett-Packard Labs, 2003.                                         (ARCS), March 2005.
+[15] T. Heath, A. P. Centeno, P. George, L. Ramos,                  [28] G. Neiger, A. Santoni, F. Leung, D. Rodgers, and
+     Y. Jaluria, and R. Bianchini. Mercury and freon:                    R. Uhlig. Intel virtualization technology: Hardware
+     Temperature emulation and management in server                      support for efficient processor virtualization. In Intel
+     systems. In Proceedings of the International                        Technology Journal
+     Conference on Architectural Support for Programming                 (http://www.intel.com/technology/itj/2006/v10i3/),
+     Languages and Operating Systems (ASPLOS),                           August 2006.
+     October 2006.                                                  [29] Nutch. http://lucene.apache.org/nutch.
+[16] T. Heath, B. Diniz, E. V. Carrera, W. Meira Jr., and           [30] P. Pillai and K. Shin. Real-time dynamic voltage
+     R. Bianchini. Energy conservation in heterogeneous                  scaling for low-power embedded operating systems. In
+     server clusters. In Proceedings of the 10th Symposium               Proceedings of the 18th ACM Symposium on Operating
+     on Principles and Practice of Parallel Programming                  Systems Principles (SOSP), October 2001.
+     (PPoPP), 2005.                                                 [31] C. Poellabauer, L. Singleton, and K. Schwan.
+[17] Hewlett-Packard, Intel, Microsoft, Phoenix, and                     Feedback-based dynamic frequency scaling for
+     Toshiba. Advanced configuration and power interface                 memory-bound real-time applications. In Proceedings
+     specification. http://www.acpi.info, September 2004.                of the 11th Real-Time and Embedded Technology and
+[18] C. Isci, G. Contreras, and M. Martonosi. Live, runtime              Applications Symposium (RTAS), March 2005.
+     phase monitoring and prediction on real systems with           [32] K. Rajamani and C. Lefurgy. On evaluating
+     application to dynamic power management. In                         request-distribution schemes for saving energy in
+     Proceedings of the 39th International Symposium on                  server clusters. In Proceedings of the IEEE
+     Microarchitecture (MICRO-39), December 2006.                        International Symposium on Performance Analysis of
+[19] Y. Koh, R. Knauerhase, P. Brett, M. Bowman,                         Systems and Software (ISPASS), March 2003.
+     Z. Wen, and C. Pu. An analysis of performance                  [33] P. Ranganathan, P. Leech, D. Irwin, and J. Chase.
+     interference effects in virtual environments. In                    Ensemble-level power management for dense blade
+     Proceedings of the IEEE International Symposium on                  servers. In Proceedings of the International Symposium
+     Performance Analysis of Systems and Software                        on Computer Architecture (ISCA), 2006.
+     (ISPASS), 2007.                                                [34] B. Seshasayee, R. Nathuji, and K. Schwan.
+[20] R. Kotla, S. Ghiasi, T. Keller, and F. Rawson.                      Energy-aware mobile service overlays: Cooperative
+     Scheduling processor voltage and frequency in server                dynamic power management in distributed mobile
+     and cluster systems. In Proceedings of the Workshop                 systems. In Proceedings of the IEEE International
+     on High-Performance, Power-Aware Computing                          Conference on Autonomic Computing (ICAC), 2007.
+     (HP-PAC), 2005.                                                [35] J. Stoess, C. Lang, and F. Bellosa. Energy
+[21] R. Kumar, D. Tullsen, P. Ranganathan, N. Jouppi,                    management for hypervisor-based virtual machines. In
+     and K. Farkas. Single-isa heterogeneous multi-core                  Proceedings of the USENIX Annual Technical
+     architectures for multithreaded workload performance.               Conference, June 2007.
+     In Proceedings of the International Symposium on               [36] J. Sugerman, G. Venkitachalam, and B.-H. Lim.
+     Computer Architecture (ISCA), June 2004.                            Virtualizing i/o devices on vmware workstation’s
+[22] C. Lefurgy, X. Wang, and M. Ware. Server-level power                hosted virtual machine monitor. In Proceedings of the
+     control. In Proceedings of the IEEE International                   USENIX Annual Technical Conference, 2001.
+     Conference on Autonomic Computing (ICAC), June                 [37] W. Yuan and K. Nahrstedt. Energy-efficient soft
+     2007.                                                               real-time cpu scheduling for mobile multimedia
+[23] H. Li, C. Cher, T. Vijaykumar, and K. Roy. Vsv:                     systems. In Proceedings of the ACM Symposium on
+     L2-miss-driven variable supply-voltage scaling for low              Operating Systems Principles (SOSP), 2003.
+     power. In Proceedings of the IEEE International                [38] H. Zeng, C. Ellis, A. Lebeck, and A. Vahdat.
+     Symposium on Microarchitecture (MICRO-36),                          Currentcy: A unifying abstraction for expressing
+     December 2003.                                                      energy management policies. In Proceedings of the
+[24] M. Lim, V. Freeh, and D. Lowenthal. Adaptive,                       USENIX Annual Technical Conference, June 2003.
+     transparent frequency and voltage scaling of                   [39] Q. Zhu, Z. Chen, L. Tan, Y. Zhou, K. Keeton, and
+     communication phases in mpi programs. In                            J. Wilkes. Hibernator: Helping disk arrays sleep
+     IEEE/ACM Supercomputing, November 2006.                             through the winter. In Proceedings of the 20th ACM
+[25] J. Moore, J. Chase, P. Ranganathan, and R. Sharma.                  Symposium on Operating Systems Principles (SOSP),
+     Making scheduling cool: Temperature-aware workload                  October 2005.
+
+
+
+                                                              278
+                                                              268
+

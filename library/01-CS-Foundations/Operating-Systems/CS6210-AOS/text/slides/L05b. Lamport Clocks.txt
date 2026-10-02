@@ -1,0 +1,110 @@
+Advanced OS                             L05b. Lamport Clocks                  Mohamed Ameen Amer
+
+
+
+
+L05b. Lamport Clocks
+
+Introduction:
+•   Each node in a distributed system knows:
+    -  Its own events.
+    -  Its communication events.
+•   Lamport’s logical clocks:
+    -  The idea here is that we need to associate a time stamp with each event in the entire distributed
+       system.
+    -  We’ll have a local clock (counter) attached to each process. The time stamp would be the
+       counter value.
+    -  The counter value is monotonically increasing.
+    -  The time stamp of communication events will be either the counter value of the sender process
+       or the receiver process whichever greater.
+
+
+Logical Clock Conditions:
+•   If we have two events 𝑎 and 𝑏 in the same process 𝑖, then 𝐶𝑖 (𝑎) < 𝐶𝑖 (𝑏).
+•   If we have a communication event between event 𝑎 on process 𝑖 and event 𝑑 on process 𝑗 then:
+    -   𝐶𝑖 (𝑎) < 𝐶𝑗 (𝑑)
+    -   𝐶𝑗 (𝑎) = max⁡(𝐶𝑖 (𝑎) + +, 𝐶𝑗 )
+•   If we have two concurrent events 𝑏 and 𝑑, then the time stamps will be arbitrary.
+•   This means that Lamport Clocks gives us a partial order of all the events happening on the
+    distributed system.
+
+
+Lamport Total Order:
+•   If we have two events 𝑎 process 𝑖 and 𝑏 on process 𝑗, and we can to assert that 𝑎 is totally ordered
+    ahead of 𝑏
+    (𝑎 ⇒ 𝑏) if and only if:
+    -   𝐶𝑖 (𝑎) < 𝐶𝑗 (𝑑) or
+    -   𝐶𝑖 (𝑎) = 𝐶𝑗 (𝑑) and 𝑃𝑖 ≪ 𝑃𝑗 , where (≪) is and arbitrary well-known condition to break the tie
+        (e.g. the greater the process ID the higher the order).
+•   Once we get the total order, time stamps are meaningless.
+
+
+
+
+Page | 1
+Advanced OS                             L05b. Lamport Clocks                  Mohamed Ameen Amer
+
+
+Distributed Mutual Exclusion (ME) Lock Algorithm:
+•   In a distributed system, we don’t have a shared memory to facilitate lock implementation. So we’ll
+    use Lamport Clocks to implement a lock.
+•   Every process will have a queue data structure ordered by the “Happened Before” relationship.
+•    Any process that needs to acquire the lock will send a message to all the other processes with its
+    time stamp as the request time.
+•   Each other process will put the request in its queue, and then acknowledges the request.
+•   If we have a tie (Two processes sent the same time stamp), we break it by giving priority to the
+    process with higher ID.
+•   A process knows that it has the lock if:
+    -   Its request is on top of the queue.
+    -   It has already received acknowledges from the other processes.
+•   Whenever a process wants to release a lock, it sends an unlock message to all other processes.
+•   When the other processes receive the unlock message, they remove the sending process entry from
+    their queues.
+•   The algorithm assumptions:
+    -   Message arrive in order.
+    -   There’s no message loss.
+    -   The queues are totally ordered.
+•   Message complexity:
+    -   𝑁 − 1 request messages.
+    -   𝑁 − 1 acknowledge messages.
+    -   𝑁 − 1 unlock messages.
+    -   𝑇𝑜𝑡𝑎𝑙 = 3(𝑁 − 1).
+    -   Can we do better?
+        If a process 𝑖 lock request precedes another process 𝑗 request in the queue, we can defer the
+        acknowledgement of 𝑖 and use the unlock message itself as an acknowledgement for 𝑗.
+
+
+Lamport Physical Clock:
+•   In real world scenarios, the logical clock might be drifting of the real time due to anomalies in the
+    logical clocks.
+•   We can say the event 𝑎 happened before event 𝑏 in real time (𝑎⁡ ⟼ 𝑏) if:
+    -   𝐶𝑖 (𝑎) < 𝐶𝑖 (𝑏)
+    -   Physical conditions:
+        1. PC1: Bound on individual clock drift:
+                                              𝑑𝐶𝑖 (𝑡)
+                                            (         − 1) < 𝑘⁡⁡⁡∀𝑖;⁡(𝑘 ≪ 1)
+                                               𝑑𝑡
+        2. PC2: Bound on mutual drift:
+                                                ∀𝑖, 𝑗:⁡𝐶𝑖 (𝑡) − 𝐶𝑗 (𝑡) ≪ 𝜖
+
+
+Page | 2
+Advanced OS                            L05b. Lamport Clocks       Mohamed Ameen Amer
+
+
+•   IPC time and clock drift:
+        -   If 𝜇 is the lower bound on IPC, to avoid anomalies
+            when:
+                                   𝑎𝑖 ⟼ 𝑏𝑖
+                   (𝑡
+            1. 𝐶𝑖 + 𝜇) − 𝐶𝑗    (𝑡) >0
+            2. 𝐶𝑖 (𝑡 + 𝜇) − 𝐶𝑖 (𝑡) > 𝜇(1 − 𝑘)
+            Using equations 1 and 2, and bound 𝜖 on mutual
+            drift:
+                                                  𝜇 ≥ 𝜖⁄(1 − 𝑘)
+
+
+
+
+Page | 3
+

@@ -1,0 +1,916 @@
+IEEE TRANSACTIONS ON PARALLEL A N D DISTRIBUTED S Y S E M S . \‘OL. 1. NO 7 . FEBKlJARY I Y Y 3                                             131
+
+
+
+
+       Using Processor-Cache Affinity Information in
+        Shared-Memory Multiprocessor Scheduling
+                    Mark    s. Squillante, Menibcr. IEEE, and Edward D. Lazowska, Senior Member, IEEE
+
+
+   Abstract-In a shared-memory multiprocessor system, it ma!                     The affinity of a specific task for a particular processor may
+be more efficient to schedule a task on one processor than on                arise from many sources. For example, the affinity may be
+another if relevant data already resides in a particular processor’s         based on how fast the task can run on a particular processor
+cache. In this paper we study the effects of this type of proces-
+sor affinity. We make the observation that tasks continuously                in an environment of heterogeneous processors. Scheduling
+alternate between executing at a processor and releasing this                problems of this type have received considerable attention
+processor due to I/O, synchronization, quantum expiration, or                i n the literature; e.g., see [5], [9], [12]. These studies have
+preemption. These factors suggest that ignoring processor-cache              produced exact and approximate algorithms to optimize a
+affinity, which is typically the case in existing multiprocessor             variety of performance metrics under a variety of conditions.
+operating systems, can degrade performance. On the other hand,
+fixing tasks to run on specific processors may not be an appro-              They have also provided insight and understanding of basic
+priate alternative due to the potential load imbalance and the               principles that underlie the performance of scheduling policies
+transitory nature of processor-cache affinity.                               in these environments.
+   We formulate queueing network models of different abstract                    Another form of processor affinity concerns the resources
+scheduling policies, spanning the range from ignoring affinity to            associated with the processors. For example, each processor
+fixing tasks on processors. These models are solved via Mean
+Value Analysis, where possible, and by simulation otherwise. An              may have a set of resources available to it and each task
+analytic cache model is developed and used in these schedul-                 must execute on a processor that is associated with the set
+ing models to include the effects of an initial burst of cache               of resources it requires. In this environment, the goal of
+misses experienced by tasks when they return to a processor                  the scheduler is to optimize some performance metric while
+for execution. A mean-value technique is also developed and                  satisfying the constraints imposed by the system. This class of
+used in the scheduling models to include the effects of increased
+bus traffic due to these bursts of cache misses. In comparing                scheduling problems has also received considerable attention
+the different policies, our analysis shows that exploiting even              in the literature; e.g., see [5], [6], [28].
+the simplest forms of processor-cache affinity can potentially                   A third form of processor affinity is based on the contents
+provide significant improvements over ignoring this affinity. On             of processor caches. Specifically, it may be more efficient in
+the other hand, scheduling decisions cannot be based solely on               a shared-memory multiprocessor system to schedule a task
+processor-cache affinity else other scheduling criteria, such as
+fairness, will be sacrificed. We show that only a small amount of            o n a particular processor than on any other if relevant data
+affinity information needs to be maintained for each task, and               already resides in the processor’s cache. This type of processor
+demonstrate the importance of having a policy that adapts its                affinity. which is particularly interesting because it is time-
+behavior to changes in system load. Given the insights provided              dependent, has received far less attention. Moreover, most
+by our analysis, we develop a variety of practical scheduling                current multiprocessor operating systems have implemented
+policies ranging from simple management of local queues to
+augmenting a priority discipline with affinity information.                  schedulers that use simple priority schemes which completely
+                                                                             ignore processor-cache affinity; examples include Mach [ 11,
+ Index Terms-Cache, performance analysis, queueing network                   Digital Equipment Corporation’s experimental Topaz system
+models, scheduling, shared-memory multiprocessors.
+                                                                             [21], and Sequent’s DYNIX [22].
+                                                                                 The typical behavior of tasks in computer systems suggests
+                          I. INTRODUCTION                                    that ignoring processor-cache affinity may have significant per-
+
+I  N a shared-memory multiprocessor sy\tem, it may be more
+   efficient to schedule a task on one processor than on
+another. Using such processor affinity information in shared-
+                                                                             formance implications. Tasks continuously alternate between
+                                                                             executing at some processor and releasing this processor. The
+                                                                             processor may be released to perform 1/0 or synchroniza-
+memory multiprocessor scheduling can improve performance.                    tion operations, in which cases the task is not eligible for
+particularly if this information is inexpemive to obtain and                 scheduling until the operation is completed, or because of
+exploit.                                                                     quantum expiration or preemption, in which cases the task
+                                                                             is suspended to allow execution of another task. When the
+                                                                             task returns for execution and is scheduled on a processor,
+  Manuscript received April 3 , 1990; reviscd Februar) IO. 1991.
+  M. S. Squillante is with the IBM Thomas J. Watson R c s ~ a r c hCenter.   it experiences an initial burst of cache misses. The duration
+Yorktown Heights, NY 10598. Part of this work was performed \shile he        of this burst depends, in part, upon the number of blocks
+was a graduate student at the University of Washington, Seattle, WA.         belonging to the task that are already loaded in the processor’s
+  E. D. Lazowska is with the Department of Computer Science and Engl-
+neering, FR-35. University of Washington, Seattle, WA 98195.                 cache. Given current increases in cache sizes, a significant
+  IEEE Log Number 9204621.                                                   portion of a task’s working set may reside in the cache of a
+I32                                             IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS. VOL. 4. NO. 2, FEBRUARY 1993
+
+
+
+particular processor. With continuing increases in the relative      processor is not significantly affected by the reload transient,
+cost of a cache miss [lo], disregarding this cache reload time       and exploiting processor-cache affinity will have little or no
+in scheduling decisions may cause significant increases in the       performance benefit. Our objective in this section is simply to
+execution times of individual tasks. Performance degradation         show that the cache reload time in existing systems can be
+in the system as a whole is also likely because of the               significant. Although the relative cost of the reload transient
+increased bus traffic due to cache misses. This effect may be        depends upon many factors, including the task footprint size,
+compounded by an increased number of cache invalidations             the task computing demand per visit to the multiprocessor
+due to the modification of a task’s data still resident in another   and the system architecture, we present the results of a few
+processor’s cache.                                                   simple measurements to show that these reload penalties can
+   One simple approach to alleviate this problem is to fix           be large.
+tasks to run on specific processors. This approach has serious          All of the measurements presented in this section were
+limitations, however. The performance degradation due to the         obtained by experimentation on a Sequent Symmetry [16].
+resulting load imbalance can be significant. Furthermore, the        These experiments were written in the C++ programming
+benefit of rescheduling a task on the processor where it most        language [20] and used the PRESTO runtime system [4],
+recently executed decreases with time, due to eventual cache-        which was modified to storehestore the contents of floating-
+block replacements.                                                  point registers during a context switch and to bind a DYNIX
+   In this paper we analyze these issues of processor-cache          process to a processor. The application used in our experiments
+affinity, with the objective of providing a better understanding     is composed of a set of tasks, each of which is implemented
+of this form of processor affinity in shared-memory multipro-        as a PRESTO thread. A task repeatedly references each block
+cessor environments. We first demonstrate that cache reloading       of its private “data” footprint (in addition to instruction ref-
+can have a significant effect on the time a task spends at a         erences), performing some minor computations and releasing
+processor. We then formulate queueing network models of              the processor. The measure of interest is the mean time to
+different abstract scheduling policies, which span the range         execute a task per visit to a processor.
+from ignoring affinity to fixing tasks on processors. Mean               Our first set of results considers the cache reloading time. In
+Value Analysis [ 131, bounding techniques and discrete-event         Fig. 1 we compare the mean execution time of a single task, as
+simulation are used to evaluate these models and compare the         a function of the footprint size, for the cases of starting with a
+effectiveness of the various policies. An analytic cache model       warm and cold cache. Both cases are run on a single processor,
+is developed and used in these scheduling models to include          and the cache footprint is referenced via reads. In the warm
+the effects of cache reloading. We also develop a simple mean-       cache case, the task returns immediately after releasing the
+value technique to represent the effects of increased bus traffic    processor, whereas the cache is flushed between task visits
+due to cache reloading. Our analysis illustrates and quantifies      in the cold cache case. The curves plotted in Fig. 1 clearly
+the potentially considerable benefit of exploiting processor-        show that the cache reloading time can be significant. In the
+cache affinity in shared-memory multiprocessor scheduling.           worst case considered, cache reloading causes a 69% increase
+Furthermore, our analysis illustrates the benefits and limita-       in the task execution time. Beyond this point, i.e., for larger
+tions of the different abstract scheduling policies considered,      footprint sizes, the significance of cache reloading begins to
+ shows that only a small amount of affinity information needs to     decrease somewhat as the task starts to replace portions of its
+be maintained for each task, and demonstrates the importance         own footprint.
+of having a policy that adapts its behavior to changes in                The above measurements actually understate the effects
+system load. Given the insights provided by our analysis, we         of cache-reload transients because they do not include bus
+develop a variety of practical scheduling policies ranging from       interference and write invalidations due to false data sharing.
+simple management of local queues to augmenting a priority           To consider these effects, we compare the mean execution
+ discipline with affinity information.                               time of multiple tasks running on a single processor with an
+                                                                     equivalent workload on multiple processors. Our results are
+                                                                     plotted in Fig. 2. In both cases, the cache footprint is referenced
+                   11. PROBLEMMOTIVATION                             via writes. The tasks in the single processor case will execute
+   When a task is scheduled to run on a processor, it initially      with a warm cache (since the tasks always execute at the same
+experiences a large number of cache misses as its working            processor. and the task footprints considered are small enough
+set is brought from main memory into the cache. Using the             to allow them to essentially remain in the cache), whereas the
+terminology of Thiebaut and Stone [24], we refer to the              tasks in the multiple processor case will typically run with
+time delay of this initial burst of misses as the cache-reload       a cold cache (since the tasks essentially do not execute at a
+transient and we call the group of cache blocks in active use         processor where they recently ran) and will experience the
+by a task its footprint in the cache.                                 effects of bus interference and write invalidations (since the
+   We have suggested that the cache-reload transient can be a         footprint is referenced via writes). To eliminate any effects
+significant factor, and that its significance will increase in the    due to contention for the PRESTO scheduling queue, each
+future. In fact, a key assumption of our analysis is that the time    task spins in a null loop for a random amount of time
+required to load a task footprint in the cache is not negligible.     before releasing the processor. The measures plotted in Fig. 2
+However, one might still believe that this is a secondary             demonstrate even more forcefully that the cache reloading time
+effect. If this is true, then the time a task spends at the           can be significant.
+SQUILLANTE A ND LAZOWSKA USING PROCESSOR-CACHE AFFINITY INFORMATION IN SHARED-MEMORY MULTIPROCESSOR SCHEDULING                                    133
+
+
+                10   -
+
+                9-
+
+
+
+
+   Mean                                                                                               M proressors          non-schedrlahle
+
+
+    Ta5k
+                                                                                                           Fig. 3.   System model
+  Execution
+
+                                     /                                                                      111. THEMODELS
+  (millisecs)
+                                                                                       We consider two formal models in our study of processor-
+                                                                                     cache affinity. The first is a queueing network model that
+                                                                                     represents the general multiprocessor system. The second is
+                                                                                     an analytic model of a processor's cache and is used within
+                                                                                     the system model to compute the expected initial burst of cache
+                                                                                     misses experienced by a task when it returns to a processor
+                                                                                     for execution.
+                       I         I                 I                      I     I
+                     1cm       I500              ?ax)               2500      1ooo
+                                                                                     A . The System Model
+                                 "Data'' Footprint S i x (cache blocks)
+                                                                                        Our model of system behavior is that tasks alternate be-
+  Fig. 1.       Comparison of cache reloading times for warm and cold starts         tween executing at one of the processors and releasing this
+                                                                                     processor due to IiO, synchronization, quantum expiration,
+                                                                                     or preemption. Note that we are focusing on a micro level
+                7
+                                                                                     of scheduling, i.e., within a multiprogramming level. Such a
+                                                                                     system is modeled naturally by a closed queueing network
+                                                                                     1131.
+                6                                                                       Our system model, depicted in Fig. 3, consists of two
+                                                                                     service centers. The first is a multiple server queueing center,
+                                                                                     i.e., the center can service up to a fixed number of tasks
+  Mean
+                5                                                                    simultaneously, and represents the multiprocessor composed
+                                                                                     of ill identical processors. We refer to the queue of this center
+   Task
+                                                                                     as the ready queue because it contains those tasks that are
+ Execution                                                                           ready to execute but are waiting for an available processor.
+  Time                                                                               The second center is an infinite cupacity server, i.e., there is
+ (mdlisecs)                                                                          no queueing because all tasks are serviced simultaneously, and
+                3                                                                    represents the time spent by tasks while nonschedulable.
+                                                                                        We consider a single customer class, i.e., all tasks are
+                                                                                     assumed to be identical. Let LVdenote the number of tasks
+                                                                                     in, or the population of, the model. The scheduling policy
+                2
+                                                                                     defines the manner in which tasks are removed from the ready
+                                                                                     queue; the policies we consider are defined in Section IV. The
+                                                                                     computing demands of tasks per visit to the multiprocessor
+                1
+                                                                                     are assumed to be independent and identically distributed as
+                     500                        I MX)                         IS00
+                                                                                     exponential random variables with mean D. Tasks become
+                                 'Dam"Footprini S17e (cachc block\)                  nonschedulable (due to I/O, synchronization, quantum ex-
+Fig. 2.       Comparison of cache reloading times for warm and cold starts,          piration, or preemption) for random periods of time which
+                 including bus interference and write invalidation\.                 are assumed to be independent and exponentially distributed
+                                                                                     with mean Z . Because the stationary distribution of a product
+   The measurement results presented in this section clearly                         form network is insensitive to service distributions at infinite
+show that the time required to load a task footprint in the                          capacity servers, we expect that the exponential assumption
+cache can be a considerable factor, even in contemporary                             for nonschedulable periods is not critical to our results. By
+conservative multiprocessors such as the Sequent Symmetry.                           further assuming exponential computing demands, we are able
+Furthermore, we expect this factor to become even more                               to obtain analytically tractable results. Moreover, given the
+significant on newer architectures as cache sizes and the                            body of experience indicating that the accuracy of queueing
+relative cost of a cache miss continue to rise.                                      network models is extremely robust with respect to violations
+134                                             IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 4, NO. 2, FEBRUARY 1993
+
+
+
+of separability assumptions (especially regarding throughput        the number of task A blocks, in a random set, that are replaced
+values) [13], we expect our results to be sufficiently accurate     by the execution of task B . Assuming LRU replacement of
+to be of general interest, particularly given the objectives of     cache blocks within a set, the probability distribution of V is
+this paper.                                                         given by
+   Studies of cache miss behavior, such as [26] and [27], show
+that cache misses tend to occur in bursts which are situated            Pr [V = i ] = Pr [ X , = i ]Pr [ X , = K ]
+between relatively long periods virtually free of misses. Note                          + P r [X,4 = i + 11Pr [ X , = K - 11
+that this behavior is similar and related to phase transitions                          + . . . +P r [ X . ~ = K ] P r [ X g = i ]
+between working sets [7], and that it can be relatively easy to                          K
+detect transitions between distinct footprints. For these reasons
+we assume that each task is operating within a particular
+                                                                                     =         Pr [x,= jl Pr [x,= K      + i - j ] , (3)
+                                                                                         3=i
+footprint phase, i.e., phase transitions are not considered
+directly. We note, however, that tasks in the midst of a            for 1 5 i 5 K , where X A and X B are random variables
+footprint transition phase (as well as new tasks and tasks whose    denoting the number of blocks in a set belonging to tasks
+footprints have been replaced) can be marked as such and used       A and B , respectively, and their distributions are as given
+to reduce anticipated load balance problems in real systems.        above for X . The average number of reload misses that task
+                                                                    A experiences when it regains control of the processor is
+B. The Cache Model                                                  therefore equal to
+
+   The cache-reload transient experienced by a task when                                 F - S ( E [ X A l - E[VI)                   (4)
+it returns to a processor for execution depends upon the
+portion of its footprint already loaded in the processor’s          where E[X,4]denotes the expectation of X A and E[V]denotes
+cache. With current increases in cache sizes, and since tasks       the expectation of V. We note that a similar equation for this
+may be nonschedulable for relatively short periods of time,         case was independently derived by Agarwal, Horowitz, and
+this fraction could be quite large. However, as more tasks          Hennessy [ 2 ] .
+execute at the processor before the task returns, this fraction        Instead of focusing on the number of blocks replaced by
+is decreased and therefore the reload transient experienced by      a single task, we consider the number of blocks replaced
+the task increases. To illustrate and quantify this behavior,       by Z tasks that execute during the absence of task A . We
+we developed a cache model that computes a task’s expected          assume that these I tasks are unique and that they execute
+cache-reload miss ratio, i.e., the portion of a task’s footprint    long enough to load their footprints in the cache. (Note that
+that must be reloaded when it returns to a processor for            any violation of these assumptions will only decrease task
+execution, as a function of the number of tasks that have           A’s cache-reload transient, thus increasing its affinity for the
+executed on the processor since the task of interest last           processor of interest.) Let X , , 1 5 i 5 Z, be the random
+executed there. Our model is an extension of the cache model        variable denoting the number of blocks in a set belonging
+by Thiebaut and Stone [24].                                                                            +     +       +
+                                                                    to task i , and define WI = X I X2 . . . X I . Due to the
+   The Thiebaut and Stone model is based on the notion of           independence of the X 2 ’ s ,the probability distribution of W I is
+a task’s footprint in the cache (the group of cache blocks in       given by the convolution of their distributions. Assuming that
+active use by the task). Assuming that each set is equally          the X , ’s are identically distributed and that this distribution is
+likely to be the destination of a block, and letting S denote       as given above, the distribution of WI is more precisely given
+the number of sets in the cache, the probability p that a single    by the I-fold convolution of the distribution of X with itself.
+reference is to set j is equal to l / S . Further assuming that        We now define VI to be the random variable denoting the
+successive references to the cache are independent, the number      number of task A blocks, in a random set, that are replaced by
+of blocks assigned to a random set is binomially distributed.       the execution of I intervening tasks. We assume that all tasks
+Therefore, if we let X be the random variable denoting the          are identical, thus the sizes of their footprints are equal, and
+number of blocks in a set that are part of a task’s footprint,      we use F to denote the size of a task’s footprint in the cache.
+the probability distribution of X is given by                       The probability distribution of VI is then given by (3), where
+                                                                    X B is replaced by Wl. and the average number of reload
+                                                                    misses that task A experiences when it regains control of the
+                                                                    processor is given by (4), where V is replaced by VI. The
+ for 0 5 i 5 K - 1 and                                              cache-reload miss ratio experienced by task A, as a function
+                                                                    of the number of intervening tasks I , is given by
+
+
+
+where K is the set associativity of the cache and F is the size      We refer to R(Z) as the cache-reload miss ratio function.
+of the task’s footprint.                                               The solid curves in Fig. 4 illustrate the expected cache-
+   Consider the situation where the execution of a task A is        reload miss ratio, as a function of the number of intervening
+followed by the execution of a task B , which is followed by        tasks that are scheduled, for a 4-way set associative cache with
+the execution of task A . Let V be the random variable denoting     8K sets. Similarly, the dotted curves are for an equivalently
+SQUILLANTE AND LAZOWSKA: USING PROCESSOR-CACHE AFFINITY INFORMATION I N SHARED-MEMORY MULTIPROCESSOR SCHFDULING                               135
+
+
+
+                                                                          last executed there). Maintaining consistency with the previous
+                                                                          section, we assume these per-visit processing demands to be
+                                                                          independent and identically distributed as exponential random
+                                                                          variables.
+
+                                                                          C. Bus Interference
+                                                                                  The above equation for the mean time spent at the multipro-
+    Expected                                                                   cessor by a task, during a single visit, ignores bus interference.
+   Cache-Reload                                             .... .....         In this section we describe a simple mean-value technique to
+                                                                               include in our system model the effects of bus interference
+    Miss Rauo
+                                                                   .....       due to cache-reload transients. Similar approaches have been
+                                                                               used elsewhere, e.g., [ 2 5 ] .
+                                                                   . . ~ ~ _
+                                                                                  Our method consists of inflating the cache-reload transient
+                                                                               by the average bus utilization. We ignore bus traffic due to the
+                                                                               execution of tasks, and only consider that due to the reloading
+                                                                               of task footprints in system caches. We note that the former
+                                                                               basically affects all of the scheduling policies in a similar
+                                                                               manner, inflating the time a task spends at the multiprocessor
+                                                                               by a certain amount. The additional cost of bus interference
+                                Number of Intenening Task5
+                                                                               due to cache-reload transients, however, depends heavily upon
+                                                                               the scheduling policy employed and is therefore of primary
+Fig. 4. Expected cache-reload miss ratio for a 4 w a y (?-way) set associative interest in our study. Thus, the mean time a task spends in
+                        cache with 8 K (16K) sets.                             service per visit to the multiprocessor is revised to be
+                                                                                                              C'R(/)
+                                                                                                     D+-                                     (7)
+large cache with a set associativity of 2. A key observation                                                1-    c;,,,,
+is that the reload miss ratio increases rapidly with increasing
+                                                                          where U,,,,, is the average bus utilization and the other
+numbers of intervening tasks. This suggests that there may
+                                                                          variables are as defined previously.
+be considerable benefit in exploiting processor-cache affinity
+                                                                             If the processor never becomes idle, then the average time
+in multiprocessor scheduling if the opportunity arises after
+                                                                          between bursts of bus activity due to the reloading of task
+only a relatively small number of intervening tasks have been
+scheduled on the processor, but that this benefit decreases
+                                                                                             +
+                                                                          footprints is C R D , where R is the mean cache-reload miss
+                                                                          ratio. Hence, the mean total time between successive initiations
+rapidly.
+                                                                          of bus activity by a processor to reload task footprints is
+   Numerous validation studies by Thiebaut and Stone show
+                                                                          estimated as
+excellent agreement between their cache model and obser-
+vations based on program-address traces, with the only ex-                                              CR+D
+ceptions being instances where the model overestimated the                                                 (/<PC1
+
+cache-reload transient due to a greater clustering of reference5          where Lr,Illl is the mean utilization of a processor. Since the
+than assumed by the model [24], [19], [23]. These results                 average duration of these bursts on the bus is fbaCR, where
+together with our additional assumptions suggest that, with               ,fb,, denotes the fraction of the reload transient that reflects
+the exception of certain pathological cases, any inaccuracies in          bus activity, the portion of time each processor uses the bus
+our cache model will tend to yield larger task reload transients          is approximated by
+than realized in practice. We therefore expect our model to be
+sufficiently accurate, noting that any bias in our miss ratio
+                                                                                                      Sba C R l ! p I ,                      (8)
+function is inclined to understate the benefit of exploiting                                            CR+D              '
+
+
+processor-cache affinity information in scheduling decisions.               Bus utilization is estimated as the product of the number
+   Given the expected cache-reload miss ratio function pro-               of processors in the system and the fraction of time each
+vided by our cache model, we can augment our system model                 processor uses the bus. Using (8) yields
+to more accurately reflect the time a task spends at the
+multiprocessor. Assuming that the average time required to
+                                                                                                                                             (9)
+reload an entire task footprint in the cache is C'. the mean
+time a task spends in service per visit to the multiprocessor     Since the equation for C i h l l R is in terms of the unknown
+is given by                                                    quantities R and Ucpn, the scheduling models are solved
+                               +
+                         D CR(r)                           (6)
+                                                               iteratively. We initially set U~,l,,s  to zero and solve the model
+                                                               using (7). The model solution yields values for R and Ucpllr
+where D is the task's inherent computing demand and C R ( / ) which are used to obtain a new value for UbuSvia (9). The
+is the cache-reload transient (7 denotes the number of tasks model is solved again using this new value for UblLS.This
+that have executed on the processor since the task of interest iterative procedure continues until the difference between the
+136                                            IEEE TRANSACTIONS ON PARALLEL A N D DISTRIBUTED SYSTEMS. VOL. 4. NO. 2, FEBRUARY 1993
+
+
+
+U,,, value of an iteration and that of the previous iteration is    D. Minimum Intervening (MI)
+small, or until the bus becomes saturated.                             The Minimum Intervening ( M I ) scheduling policy attempts
+   The only remaining detail to discuss is choosing an ap-          to schedule the task with the greatest affinity for a processor
+propriate value for f b a . Actual values for .fbn depend upon      whenever a scheduling decision has to be made. When a
+the specific system being considered; of particular importance      processor becomes idle, M I computes, for each task .7: on
+are the characteristics of the caches and main memory, the          the ready queue, the number of tasks executed since 5 last
+processing speed of the processors, and the bus protocol.           executed there. It then runs the task with the minimum value.
+However, our objective is to demonstrate, in a general fashion,     When a task arrives at the ready queue and idle processors
+the effects on system performance of increased bus traffic          exist, it is given to the processor for which the task has the
+due to cache-reload transients. Moreover, the larger the value      greatest affinity.
+for f b a , the more significant the degradation in performance
+due to reload transients. For these reasons, we do not want
+                                                                    E. Limited Minimum Intervening (LMI)
+to overestimate the effects of increased bus activity; i.e., we
+would rather err on the side of underestimating this effect. We        The Limited Minimum Intervening ( L M I ) scheduling pol-
+therefore use the conservative value of 0.1 for f b n .             icy schedules in a manner similar to hdI, but limits the number
+                                                                    of processors for which a task maintains affinity information.
+                                                                    A task is ussociated with a processor if it maintains affinity
+               IV. THESCHEDULING
+                              POLICIES                              data for that processor; let A denote the number of processor
+   In this section we describe the six scheduling policies that     associations per task. When a processor becomes idle, L M I
+will be evaluated. As previously mentioned, these policies span     computes, for each associated task .I' on the ready queue,
+the range from ignoring affinity to fixing tasks on processors.     the number of tasks executed on that processor since n: last
+Each policy, with the exception of the first two policies to        executed there. If the queue contains associated tasks, L M I
+be described, updates the affinity information for a task after     runs the task with the minimum value. Otherwise, it executes
+completion of its service demand at a processor. It should be       the first task on the ready queue and, upon completion of the
+noted that these are abstract policies used to identify fruitful    service burst, replaces the task's worst processor association
+approaches; thus, unless noted otherwise, each of the policies      with an association to the processor on which the task just
+uses a single ready queue. Practical scheduling policies and        ran. When a task is placed on the ready queue and there are
+implementation issues are discussed in Section VI.                  idle processors, the task is given to the associated processor
+                                                                    with the greatest affinity for the task, if such a processor is
+                                                                    idle; otherwise, the task is given to an arbitrary nonassociated
+A . First Come First Served (FCFS)                                  processor in the manner described above.
+   The First Come First Served ( F C F S ) scheduling policy
+completely ignores a task's affinity for a particular processor.    F. Limited Minimum Intervening Routing (LMR)
+When a processor becomes idle, F C F S executes the task
+                                                                       The Limited Minimum Intervening Routing ( L M R ) policy
+at the head of the ready queue, and when a task becomes
+                                                                    is similar to LhdI except that the decision of where a task will
+schedulable F C F S places it at the tail of this queue.
+                                                                    execute is made when the task becomes schedulable instead
+                                                                    of when a processor becomes idle. When a task becomes
+B. Fixed Processor (FP)                                             schedulable, it is matched with the associated processor that
+  Under the Fixed Processor ( F P ) scheduling policy, each         currently has the minimum value for the following sum: the
+processor has a dedicated local queue and tasks are per-            number of intervening tasks plus the number of tasks on the
+manently assigned to these queues, i.e., the tasks are never        ready queue already matched with the processor. When a
+migrated to other processors. Thus the N tasks are evenly           processor becomes idle, LhPR runs the first matching task on
+divided among the M processors, and each processor works            the ready queue. If the queue does not contain a matching task,
+independently serving its N I M tasks in an F C F S manner.         L,ZdR executes the first task associated with the processor. If
+                                                                    this also fails, L M R runs the first task on the ready queue and,
+C. Last Processor (LP)                                              upon completion of the service burst, replaces the task's worst
+                                                                    processor association. This sequence of decisions is followed
+   The Last Processor ( L P ) scheduling policy attempts to         when a task is placed on an empty ready queue and there are
+use the simplest form of "intelligent" task affinity, namely        idle processors.
+scheduling a task where it last executed. When a processor
+becomes idle, it searches the ready queue for the first matching
+task, i.e., one that last executed there. If a matching task is                               V. RESULTS
+found, the processor runs it; otherwise, the processor executes        In this section we compare the performance of the schedul-
+the first task on the ready queue. When a task is placed on an      ing policies described in Section IV, within the context of the
+empty ready queue and there are idle processors, the matching       models of Section 111. The exact Mean Value Analysis (MVA)
+processor, if it is idle, is awakened and given the newly arrived   technique [13] in combination with our analytic cache model
+task; otherwise, one of the idle processors, chosen arbitrarily,    was used to solve the system model and obtain performance
+is given the task.                                                  measures for the F P policy; the convolution algorithm [15]
+SQUILLANTE AN D LAZOWSKA USING PROCESSOR-CACHE AFFINITY INFORMATION IN SHARED-MEMORY MULTIPROCESSOR SCHEDULING                                                          137
+
+
+
+was employed when numerical problems were encountered                     48 Tasks (h=JS)
+
+with MVA. Bounding techniques were used to obtain results
+under the F C F S and L P policies, although discrete-event
+simulation in combination with our cache model was used
+when these bounds were not tight. Performance measures for
+the remaining policies were obtained via the latter approach.
+When simulation was used, values were obtained within 4%
+of the mean at 98% confidence levels.
+   The performance measures considered in this paper are
+system throughput   (x),   mean task response time (T),     and the                          0   0.1   0.2   0.3 0.4 o s 0.6 0.7 0.8                 0.9   I
+second moment of task response time (T2).In this section, T                                                   Cache Fwtpnnl Reload Time (C)
+is plotted only when it illustrates information other than that           128 Tasks ( N = I W
+
+shown by the zy curves. Similarly, T2 is plotted only when                              32
+                                                                                                       ---+.-                                                  FP
+                                                                                                                   *--+.. *-.
+it is qualitatively different, or provides additional insights, for                     30                                    *--*-.                 f - - d P
+the policies under consideration. We initially ignore the effects
+of bus interference due to cache-reload transients, i.e., (6) is
+used for the mean time a task spends in service per visit to
+the multiprocessor, thus understating the benefits of exploiting
+processor-cache affinity. Results including these effects, i.e.,
+those obtained using (7), are presented in the final subsection.                        20        , , , L                      F           c          F             s
+
+We do not address the effects of cache invalidations due to
+                                                                                             0   0I    0.2   0.3   0.4   0.5       0.6   0.7   0.8   0.9   1
+task migration, but note that these factors can only argue more
+favorably for exploiting affinity information in scheduling                                                  Cache Fwipnni Reload Time (C)
+
+decisions.
+   Throughout this section the mean computing demand of               Fig. 5 . Throughput comparison of First Come First Served (FCFS), Last Pro-
+tasks per visit to the multiprocessor is normalized to one unit       ceswr (LP), and Fixed Processor (FP) for a 32 processor system (-11= 32).
+(i.e., D = l), the footprint size of each task is set to 1900 cache
+blocks, the remaining cache model parameters are as described         to the fact that there is considerable load imbalance under the
+in Section 111-B, and the values considered for the mean time         F P policy (i.e., tasks waiting at a busy processor while other
+required to load task footprints in the cache range from 0 to         processors are idle) and the cost of this imbalance outweighs
+D (i.e., 0 5 C: 5 1). The results presented in this section           the penalty for scheduling a task on a processor where its
+are for 32 processors (i.e., A f = 32) and tasks that spend an        footprint is not fully loaded. However, as C increases, the
+average amount of time nonschedulable that is equivalent to           penalty for scheduling a task on a processor where it has
+their mean per-visit computing time (i.e., 2 = 1). We present         little or no affinity outweighs the cost of load imbalance, and
+results here for various numbers of tasks (.V), since this is a       F P outperforms F C F S . Under heavy loads, F P outperforms
+critical parameter that reflects system load.                         F C F S at all but very small values of C . Since there are plenty
+    In addition to the parameters for the results presented here,     of tasks assigned to each of the processors under high load,
+different parameter values were studied. The effects of these         there is little or no load imbalance under the F P policy. (We
+parameters can be briefly summarized as follows. When h       i' or   note that although the F P curve appears to remain constant,
+Z is increased, and all other parameters are fixed, system load       it does decrease with increasing C.)
+is decreased and the results are similar to those presented for           Fig. 5 also illustrates the benefits of exploiting simple
+smaller populations. Similarly when M or 2 is decreased, the          processor affinity information in an intelligent but straight-
+load is increased and the results are similar to those presented      forward manner. Under light loads, L P performs essentially
+for larger populations. In the same vein, when the cache (resp.       identically to F C F S , which dominates F P for small values of
+footprint) size is increased (resp. decreased), and all other         C (the cache footprint reload time) due to the load imbalance
+parameters are fixed, the cache-reload transient experienced          problems of the F P policy. Under heavy loads, L P performs
+by tasks decreases; the cache-reload transient increases when         somewhat similarly to F P , which dominates F C F S for
+the direction of either of these parameters is reversed.              essentially all values of C due to the cache reload overhead
+                                                                      of the F C F S policy.
+A. Comparison of Scheduling Policies                                      Our next set of results considers M I , a greedy algorithm
+   Our first set of results, shown in Fig. 5. compares using no       that chooses the best task, based on the cache-reload transient
+affinity information (the F C F S policy), using a very simple        penalty, whenever a scheduling decision is made. M I makes
+form of processor affinity (the LP policy), and fixing tasks          locally optimal decisions. In Fig. 6 we add performance mea-
+to run on specific processors (the F P policy). These graphs          sures for the M I policy to those for the F C F S , L P , and F P
+clearly show the importance of including processor-cache              polices. These curves illustrate the benefits and limitations of
+affinity in scheduling decisions, particularly at higher system       using a greedy scheduling algorithm based solely on processor-
+loads. Under light loads, and when C (the cache footprint             cache affinity. Under light loads M I outperforms L P , and
+reload time) is not large, F C F S outperforms F P . This is due      the difference between these curves widens with increasing
+138                                                                   IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 4, NO. 2, FEBRUARY 1993
+
+
+      48 Tasks (N=48)                                                                     128 Tasks (N=128)
+
+
+
+
+                   I8 -
+                                                                                                                                                                      per task
+                   I6 -
+
+                                                                                                                                                                             4 assccitions
+                   I4        I     I     I     I     I     I     I     I     I    I
+
+
+                                                                                                                .~
+      128 Tasks (N=128)
+                                                                                                       18                    I     I     I     I     I     I     I    I
+                                                                                                            0   0.1   0.2   0.3   0.4   0.5   0.6   0.7   0.8   0.9   I
+
+
+
+
+                   :I LFCFS
+                   281 \
+                                                                                                                            Cache Fmipnni Reload Time (C)
+
+
+
+      Throughput 26                                                                      Fig. 7. T L comparison of Minimum Intervening (MI), Limited Minimum
+                                                                                         Intervening (LMI), Limited Minimum Intervening Routing (LMR), First Come
+                                                                                         First Served (FCFS), Last Processor (LP), and Fixed Processor (FP), for a 32
+          (X)                I     I     ,                                               Processor System (Alf= 32).
+
+                   20
+
+                   18                                                                    An unstable feedback causes some tasks to be indefinitely
+                        0   0.1   0.2   0.3   0.4   0.5   0.6   0.7   0.8   0.9   1      postponed at high loads.
+                                        Cache Foolpnnl Reload Tune (C )                     To address this problem we consider the L M R policy by
+                                                                                         comparing its performance measures with those of L M I . In
+Fig. 6. Throughput comparison of Minimum Intervening (MI), First Come                    general, L M R provides a lower p2 (e.g., see Fig. 7) and
+First Served (FCFS), Last Processor (LP), and Fixed Processor (FP) for a 32              similar first moment performance statistics, for the same values
+processor system (L!f = 32).
+                                                                                         of A . Under light loads, the two policies provide essentially
+C. These performance differences are due to the use of more                              identical values for X and T . This is due to the similar
+detailed affinity information under the M I policy. When load                            behavior of both policies when a processor, upon completion
+is heavy, M I offers a more modest advantage over L P .                                  of a task, fails to find a task associated with it on the ready
+   While M I outperforms L P , a disadvantage of the M I                                 queue, and when a task arrives at an empty ready queue and the
+policy is that it requires maintaining a large amount of                                 processor with the strongest affinity for the task is idle. Under
+affinity information for each task. We therefore consider the                            heavy loads, L M R performs slightly worse than L M I and
+L M I scheduling policy, which attempts to approximate M I                               this difference in performance increases with C. By delaying
+but limits the amount of affinity information maintained for                             scheduling decisions as long as possible, the L M I policy
+each task. As expected, the performance of L M I approaches                              realizes a lower cache-reload transient penalty; i.e., the best
+that of M I as the number of processor associations per                                  scheduling decision made when a task becomes schedulable
+task, A, approaches M . For this reason we do not plot                                   may no longer be the best decision when a processor needs
+L M I performance measures here, but instead summarize how                               to dispatch a task. These performance differences, however,
+rapidly L M I approaches M I with increasing A . Under light                             are negligible.
+loads, L M I with A = 8 is essentially identical to M I , and                               The effects of increasing system load beyond what has been
+the A = 4 case is not significantly different. The convergence                           presented thus far was also considered. As the population of
+is even more rapid under heavy loads, where L M I with                                   the model is increased, the effects presented above become
+A 2 2 is essentially equivalent to M I . We also note that                               magnified. However, as the system load continues to rise,
+L M I with A = 1 exhibits first moment results that are                                  the results illustrate significant performance degradation in
+essentially equivalent to those of LP. These results suggest                             all scheduling policies. When the load is very high, a large
+that the system only needs to maintain affinity information for                          number of tasks are executed at each processor before a task
+a small number of processors per task.                                                   returns to a processor, and therefore every task experiences
+   The M I and L M I policies both have the disadvantage that                            a large reload transient penalty. The greedy policies (i.e.,
+the variance in task response times is large relative to that                            M I and L M I ) do not exhibit as great a degradation in X
+of LP. This is illustrated in Fig. 7. A subset of the tasks                              and T as do the other policies, but there is a huge increase
+are receiving excellent service while other tasks are receiving                          in T 2 and a large number of tasks are never executed.
+poor service. This is due to the fact that M I makes locally                             These results emphasize the importance of limiting a system's
+optimal scheduling decisions based solely on the cache-reload                            multiprogramming level.
+transient penalty, and completely ignores fairness. The subset
+of tasks receiving excellent service are assigned to processors                          B. Inserting Idle Time
+shortly after becoming schedulable. The remaining tasks are                                 Each of the scheduling policies considered thus far, with
+executed only when none of the "favored" tasks are available.                            the exception of F P , is work conserving [ll],i.e., a processor
+SQUILLANTE AND LAZOWSKA: USING PROCESSOR-CACHE AFFINITY INFORMATION I N SHARED-MEMORY MULTIPROCESSOR SCHEDULING                                               139
+
+
+                                                                          48 Tprks (N=48)
+never remains idle when there are tasks waiting to be executed.
+In the results presented above, however, there are instances
+where it would be advantageous to have an idle processor
+pause, even though there are waiting tasks, until a task with
+reasonable affinity arrives; this is particularly the case when
+the reload transient penalty is large. As idle processors are
+inevitable in shared-memory multiprocessor environments due                                 0     0.1    0.2   0.3 0.4 0.5 0.6 0.7 0.8              0.9   I
+                                                                                                                Cache Fmprint Reload Time ( C )
+to factors such as the transient nature of system load and                64 Tusks (N=64)
+the variability of task service times, there is an important                                I
+
+scheduling tradeoff between keeping the workload balanced
+and adhering to processor affinities.
+   A n adaptive pause mechanism is needed that determines, as
+a function of system load and the cache-reload time, whether
+or not a processor should remain idle after completion of                                                            1.     9
+                                                                                                                           . :
+its last matching task on the ready queue. In this section
+we develop a very simple (abstract) version of such a pause
+mechanism, and present corresponding performance measures.                              7.41       I      I    I     I       i     ,   I     ,            I
+                                                                                            0     0.1    0.2   0.3 0.4 0.5 0.6 0.7 0.8              0.9   1
+Our objective here is solely to demonstrate the potential utility                                              Cache Footpnnt Reload Time ( C )
+                                                                          128 TPdlJ (N=l28)
+of an adaptive policy that determines the appropriate balance
+between the extremes of strictly sharing the workload among
+all processors and abiding by processor affinities blindly. We             lluoughplt
+                                                                                                                                  -*-=aaz
+refer the interested reader to the study presented in [18]for a                                                                               c;;P;,
+general investigation of this scheduling tradeoff.
+   A processor should not pause if the next task with rea-                                    0   0.1    0.2   0.3   0.4    0.5   0.6   0.7   0.8   0.9   1
+
+sonable affinity will arrive more than C units of time in                                                      Cache Footpnnl Reload Time ( C )
+                                                                                                        AM/     LP w~lhpause x LM/ (A =8) wllh pause
+the future, because in this case the processor could load the                                           * LM/(A=4)wtlhpause oLM/(A=2)w11hpause
+entire footprint of some task and start its execution before the
+arrival of a matching task (C is the cache footprint reload           Fig. 8. Throughput comparison of Last Processor (LP) with pause, Limited
+time). We can estimate the time for a task with affinity to           Minimum Intervening (LMI) with pause, Minimum Intervening (MI), and
+                                                                      Fixed Processor (FP) for a 32 processor system (A!f = 32).
+arrive as follows. Assuming that processor affinities are fairly
+evenly divided and that a processor has finished servicing
+its last matching task on the ready queue, there are roughly          causes this to occur more rapidly under light loads. As system
+N I M nonschedulable tasks with reasonable affinity for this          load increases somewhat the pause heuristic actually causes
+processor. The aggregate arrival rate of these tasks to the           L M I to outperform M I , as well as F P which always pauses.
+ready queue is their departure rate from the delay center, and        When A = 2 the curve essentially flattens and always remains
+is equal to ( N / M ) ( l / Z ) .Thus the expected time for a task    above the F P curve; this is due to the fact that pauses
+with affinity to arrive is ( M / N ) Z .This suggests the following   are terminated more quickly with "good" matches. As A is
+pause heuristic: when a processor completes its last matching         increased to 4, the graph immediately jumps above the M I
+task on the ready queue, it pauses if C 2 ( M / N ) Z :otherwise,     curve as soon as processors start to pause; by increasing A
+it runs the task at the head of the ready queue.                      further, pauses are terminated even sooner, again with "good"
+    Various (steady-state) studies were performed to determine        matches. When A is raised to 8, L M I continues to jump above
+ how long the pause period should be. Our results suggest             M I but degrades much more quickly with increasing G and
+ that there is no benefit in terminating a pause period, within       actually drops below L M I with A = 2 at high C ; this is
+ the context of our scheduling models, before a matching task         due to the fact that pauses are being terminated too quickly
+ arrives; i.e., if it is beneficial for a processor to pause then     with matches that are not as "good." Continuing to increase
+ the processor should wait until a matching task arrives. For         A causes L M I to perform more and more like M I . As load
+ this reason, we consider pauses that are terminated only by          increases further the L M I results for different values of A
+ the arrival of a matching task.                                      are identical, all performing slightly better than F P when C
+    Our simple pause heuristic can be easily added to the L P ,       is small and somewhat worse than F P otherwise.
+ L M I , and L M R policies. In Fig. 8 we plot performance               We also compared the performance measures for the modi-
+ measures for the modified L P and L M I policies, along with         fied L M R policy with those of modified L M I . As previously
+ those for the M I and F P policies. We note that our heuristic       described, the two policies provide essentially identical av-
+ achieves the desired effect. In particular, L P is equivalent to     erage performance before processors start to pause. When
+ F P once processors start to pause (compare Fig. 8 to Fig. 6).       processors start to pause, though, L M R performs somewhat
+ It is also worth noting the interesting interaction between          worse than L M I with identical values for A. This is due
+ L M I and the pause heuristic. Recall that the performance           to the lazy decision process under the L M I policy, which
+ of L M I approaches that of M I as the number of processor           causes it to realize a lower cache-reload transient penalty.
+ associations per task, A , approaches M . The added pause            We note, however, that these performance differences are
+140                                            IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED SYSTEMS, VOL. 4, NO. 2, FEBRUARY 1993
+
+
+
+relatively minor. Since an implementation of the L M I policy          48 Tasks ( N 4 )
+
+would be more expensive than an implementation of the L M R
+policy, and since L M R does not have the task response time
+variance problems of M I and L M I (see Fig. 7),use of L M R
+as a practical policy may be worth consideration (see Section                      16 -
+                                                                        Throughput I6
+VI-A).                                                                               14 -
+                                                                           (X)       12 -
+                                                                                     10 -
+                                                                                      8-
+C. Bus Interference                                                                   6-                                                                      ‘dP
+
+   The results presented thus far understate the benefits of                          4,
+                                                                                             I     I     I     I        I     ’        I     I     I     I         I
+exploiting processor-cache affinity in the sense that they ignore                           n     0.1   0.2   0.3 0.4 0.5       0.6 0.7 0.8             0.9    I
+                                                                                                               Cache Footprint Reload Time (C)
+the degradation in system performance that occurs because
+                                                                       128 Tasks W 1 2 8 )
+of the increased bus traffic due to cache reloading. We now
+briefly consider this additional factor, noting that a system
+with a very high bandwidth bus (or interconnection network)
+will probably, at best, exhibit performance similar to that
+presented in Section V-A, and that a system with a (nearly)             Throughput
+saturated bus can only benefit from using processor-cache
+                                                                            (XI
+affinity information in scheduling decisions. Our approach
+consists of inflating each task’s reload transient by dividing
+it by one minus the average bus utilization, thus reflecting                           4-
+delays attributable to bus interference. We ignore bus traffic                         n           1     T         l     I        I     I     I    l     I     I
+due to the execution of tasks, only considering that due to the                              n    0.1   0.2   0.3      0.4   0.5      0.6   0.7   0.8   0.9    I
+
+reloading of task footprints in system caches. A more detailed                                                Cache Fmtpnni Reload Time (C)
+description of our approach was given in Section 111-C.
+    Our main goal here is to demonstrate the extent to which        Fig. 9. Throughput comparison of First Come First Served (FCFS), Last
+performance degradation is magnified by the effects of bus              Processor (LP), and Fixed Processor (FP), including bus interference.
+interference. In Fig. 9 we plot performance measures for the
+F C F S , L P without pause, and F P policies. (The dotted
+curves illustrate the same performance measures when bus            of bus traffic. This is due to the small cache-reload overhead
+interference is ignored.) As expected, the added effects of         realized under the F P policy, and under the L P policy when
+increased bus traffic due to cache reloading degrades system        load is heavy.
+performance significantly. This is particularly the case with          The performance measures plotted in Fig. 9 demonstrate
+the F C F S policy, which ignores processor-cache affinities.       even more forcefully the importance of including processor-
+F C F S continues to dominate F P under light loads, due to         cache affinity in scheduling decisions. They also emphasize
+FP’s load imbalance problems, but the value of C (the cache         the point that exploiting even the simplest forms of processor
+footprint reload time) below which this occurs is reduced           affinity can provide significant improvements over ignoring
+considerably. System performance is affected more severely          affinity, particularly when load is heavy.
+as C increases and the bus becomes saturated under light
+load when C is greater than or equal to some saturation point
+between 0.8 and 0.9. Under heavy loads, the degradation in                                       VI. IMPLEMENTATION ISSUES
+performance is even more significant and the bus saturates             The results described in the previous section provide a better
+when C is greater than or equal to a point between 0.6 and          understanding of processor-cache affinity in shared-memory
+ 0.7. These effects are due to the large cache-reload transient     multiprocessor systems. In this section, we use these insights
+penalties, which are compounded by the resulting increase in        to develop practical scheduling policies that take advantage of
+ bus traffic, realized under the F C F S policy.                    available affinity information.
+    The differences between L P and F C F S are due to the             We divide our discussion of these scheduling policies into
+ fact that the L P policy lessens the realized cache-reload miss    two categories. The first class of policies, called queue-
+ ratio, and thus the effects of bus interference, and this effect   bused, considers the organization and use of data structures to
+ increases with C . When load is light, these differences are       incorporate processor-cache affinity in scheduling decisions.
+ not very significant because of the work conserving nature         The second class, called priority-bused, considers augmenting
+ of L P . Thus, under light load, L P suffers from problems         the system’s priority discipline with processor-cache affinity
+ similar to those of F C F S . We note, however, that these         information; including this information in the priority calcula-
+ problems with the L P policy can be reduced significantly with     tion allows the scheduler to balance a task’s affinity with other
+ the addition of the pause heuristic discussed in the previous      scheduling criteria. We note that combining these queue-based
+ subsection.                                                        and priority-based techniques in the system scheduling policy
+    The F P policy, as well as the L P policy under heavier         could be advantageous in many shared-memory multiprocessor
+ system loads, is not affected significantly by the added effects   environments.
+SQUILLANTE A N D LAZOWSKA: USING PROCESSOR-CACHE AFFINITY INFORMATION IN SHARED-MEMORY MULTIPROCESSOR SCHEDULING                    141
+
+
+
+A. Queue-Based Policies                                                state. The former provides additional degrees of freedom in the
+    The simplest queue-based scheduling policy is an imple-            priority queueing discipline via a set of variable parameters,
+mentation of a variation of the L P policy defined in Section          which are at the disposal of the designer to adjust relative task
+IV. Many existing shared-memory multiprocessor operating               waiting times.
+systems, such as Mach [l], make use of a global ready                     In each case, a simple and efficient mechanism is needed
+queue. This queue is used to store tasks without affinity for          to estimate a task’s cache-reload transient at a particular
+a particular processor, such as tasks that have not previously         processor. One simple approach is based on our cache model.
+executed and tasks that have lost their affinity for a processor       The system maintains the number of intervening tasks (or
+due to the replacement of their footprint or the transition to         the number of intervening task units, where the number
+a different footprint. In addition to the global queue, a local        of units per task is some measure of the task’s footprint
+queue is associated with each processor. When a task becomes           size) between task executions by incrementing a per-processor
+schedulable, it is placed at the end of the queue associated with      counter whenever a context switch occurs at a processor and
+the processor where it last executed. After servicing a task, the      having each task record this value when it leaves the processor.
+processor runs the task at the head of its local queue. When           The number of intervening tasks since a task executed at
+the processor’s queue is empty, it executes a task from the            a particular processor is simply the difference between the
+global ready queue. When this queue is also empty (or if its           processor’s current execution count and the value recorded by
+use is eliminated, e.g., see [17]), the processor can probe, in        the task when it last executed there. Given this value for a
+some fashion, the local queues of other processors and migrate         processor and task under consideration, the expected cache-
+a waiting task. If fairness is an issue, the policy could place        reload transient experienced by the task when it returns to the
+tasks on the global queue after a number of returns to a local         processor is computed via our cache model (see Section 111-B).
+queue. When system load is heavy, the scheduling policy could              This approach may underestimate a task’s affinity for a
+wait for a task to arrive, i.e., pause, if its local queue is empty.   particular processor due to the implicit assumption that the
+This would cause the policy to function like the F P policy            intervening tasks, as computed above, are unique. Further
+at heavy load, and by dynamically adjusting the scheduler’s            problems may be caused by the assumption that these tasks
+behavior with load the benefits of both L P and F P could be           execute long enough to load their entire footprint in the
+realized at relatively little runtime cost. A general study of         cache before relinquishing the processor. To eliminate these
+such adaptive scheduling policies is presented in [l8].                potential problems, the system could keep track of the number
+    As demonstrated by our results, even this simple scheduling        of cache-block replacements between task executions instead
+policy can potentially provide significant improvements over           of maintaining the number of intervening tasks. This can be
+ignoring affinity. However, some performance may be gained,            accomplished easily by incrementing a per-processor counter
+at the expense of some increases in complexity, by modifying           whenever a cache block is replaced at a processor, which
+the above policy to correspond to the L M R policy. Under              can be done while the block is being fetched from main
+this policy, a task is placed on one of A local queues after           memory, and having each task record this value when it leaves
+it becomes schedulable. If A = 1, the policy is identical to            the processor. Although this approach may be preferable to
+that described in the previous paragraph. Otherwise, the task           the one above, it will require a minor hardware modification
+is placed on the local queue of the associated processor for            in most systems. Given the support necessary to keep track
+which it has the greatest affinity. Since our results suggest           of the number of cache-block replacements at a processor,
+that A does not have to be very large, and because using too           the processor’s activity during the absence of a task can be
+large a value for A would be expensive and could have adverse           represented as the execution of a single program with footprint
+effects, values of A between two and four seem appropriate.             size equal to the difference between the processor’s current
+    In a multiprocessor environment where processors are clus-          replacement count and the value recorded by the task when it
+tered, i.e., a single ready queue is shared among a small               last executed there. Using this footprint parameter, the cache-
+ number of processors [ 141, an implementation of a variation of        reload transient experienced by the task when it returns to
+ the L M I policy, where A is set to the number of processors           the processor is estimated via the original Thiebaut and Stone
+ in a cluster, may be appropriate. This policy functions in the         cache model (see Section 111-B).
+ same manner as the above L P policy, with the exception that              Having the scheduler compute a task’s expected cache-
+ tasks return to the queue associated with the cluster where            reload transient at runtime in either of these ways would be
+ it last executed. Each priority queue is multi-linked, i.e., its       too expensive in most environments. Moreover, accurately
+elements are linked together in multiple ways, based on the             computing a task’s footprint size is nontrivial. Therefore
+ A different processor affinity orderings. When a processor             we pre-compute expected reload transients for a set of F T
+ finishes servicing a task, it runs a task from the head of its         different footprint sizes and a set of different replacement
+cluster’s queue as defined by its affinity ordering.                    counts or numbers of intervening tasks, depending upon which
+                                                                        of the above methods is employed. These results are stored in
+                                                                        a table, which we denote by TB,,, and used by the system
+B. Priority-Based Policies                                              scheduler at runtime. Let Nc,. denote the number of cache-
+   There are two basic classes of priority scheduling policies:         block replacements, or intervening tasks, since a task executed
+time-dependent and nontime-dependent. The latter is fairly              at a particular processor, and categorize each task as having
+static and is typically based on the type of task and its current       a footprint falling into one of the FT classes. To compute a
+142                                                   IEEE TRANSACTIONS ON PARALLEL AND DISTRIBUTED S Y S I t M S . \‘OL 4. NO. 2, FEBRUARY 1993
+
+
+
+task’s expected reload transient at a particular processor, the                    scheduling, with the goal of providing insight and under-
+table is indexed by N,, and the task’s footprint class f . We                      standing of basic principles that underlie this multiprocessor
+now describe the use of TB,, in practical priority disciplines.                    scheduling issue.
+   One example of time-dependent priority scheduling, called                          The results of several measurements on an existing system
+delay-cost scheduling, is due to Franaszek and Nelson [8].                         were first presented, demonstrating that cache reloading can
+This policy has been implemented and used successfully on                          have a significant effect on the time a task spends at a
+VM/HPO systems at the IBM T. J . Watson Research Center.                           processor. We designed several abstract scheduling policies,
+Delay-cost scheduling is characterized by its use of a priority                    which span the range from ignoring affinity to fixing tasks on
+function that includes jr,, the expected class / service time.                     processors, we formulated queueing network models of these
+and the time this class i task has spent in the system.                            policies. and we compared their effectiveness. A cache model
+Because the time spent at the processor by a task depends                          was developed and used in these scheduling models to include
+upon its cache-reload transient as well as its service demand,                     the effects of cache reloading. A simple mean-value technique
+affinity information is easily incorporated into the delay-cost                    was developed to include the effects of increased bus traffic
+                                                  +
+scheduling policy by replacing :E, with .E, TB,,,.(j.Sc,.)       in                due to cache reloading.
+the priority calculation.                                                              Our analysis illustrates and quantifies the potentially consid-
+   A nontime-dependent priority function is one defined by                         erable benefit of exploiting processor-cache affinity informa-
+some measurable task attribute(s) that does not include time                       tion in scheduling decisions. In particular, we show that under
+as a parameter. Let B P , ( x ) denote the base priority assigned                  contemporary scheduling policies, which completely ignore
+to a class z task in state :E. We can easily augment such                          processor-cache affinity, the cache-reload transient penalty
+a nontime-dependent priority with a function of the number                         may have a significant effect on both individual task per-
+of cache-block replacements, or intervening tasks, at the                          formance and system performance. and this effect increases
+processor of interest. Once again, we pre-compute the table                        with system load although eventually degrades at very high
+TB,, but instead of storing cache-reload transients, we store                       loads. When the analysis includes increased bus traffic due
+the corresponding reload miss ratios. We define, for each                          to cache reloading, the bus can actually become saturated as
+task class, the allowable range of increase in priority due to                     the large reload transient penalties are compounded by bus
+processor-cache affinity, and let R P , denote this range for                       interference. We also show that the other extreme of fixing
+tasks of class i. The priority of a class i task is then computed                   tasks to run on specific processors suffers from load balance
+              +
+as B P i ( z ) (1 - TB,,(P. N,,))RP,. Actual values for the                         problems under light loads. as expected. These and our other
+RPi’s will depend upon the intended system environment, and                        results demonstrate the importance of having a policy that
+may require experimentation. We also note that the effect of                       adapts its behavior to changes in system load.
+affinity could be adjusted with system load.                                           Our analysis also illustrates the benefits and limitations of
+    Finally, we consider the combined use of time-dependent                        policies that lie between the extremes of ignoring affinity and
+and nontime-dependent functions in priority calculations; such                      abiding by it blindly. A simple work conserving policy that
+a priority discipline is used, for example, in UNlX [3].Using                       attempts to schedule tasks where they last executed can po-
+the above notation, the priority of a task is computed via the                      tentially provide considerable performance improvements over
+                     +
+formula B P t ( x ) A G E ; ( t ) . where A G E , ( f ) is an uging                 ignoring affinity. Increasing the amount of affinity maintained
+function used to gradually increase the priority of class I                         for each task may further improve performance, but the benefit
+tasks waiting for service. To augment this discipline with                          gained decreases rapidly suggesting that only a small amount
+processor-cache affinity, we define a function .=IFFI.V I T ] ;( )                  of affinity information per task is needed. We also showed that
+that maps the expected reload transient of a class i task to                        greedy algorithms provide high throughputs and low response
+some priority factor in the same way that AGEz()maps                                times, but suffer from a high variance in task response times
+the waiting time of a class i task to a priority factor. This                       and even indefinite postponement under heavy loads.
+ affinity function is simply added to the existing priority                            The actual importance of using processor-cache affinity
+formula, i.e., the priority of a class i task is computed as                        information in shared-memory multiprocessor scheduling de-
+          +              +
+B P , ( x ) A G E ; ( t ) A F F I N I T E ’ , ( T ~ ~ . , , ( f . ~ ~ ; , , . ) ) . pends upon many factors. Preliminary studies, both at the IBM
+   The interaction between the aging and affinity functions is T. J. Watson Research Center and elsewhere, show that there
+important. If the aging function grows too slowly, fairness is are system architectures and workloads for which exploiting
+sacrificed. If the aging function grows too fast, task affinities processor-cache affinity provides significant improvements in
+will be effectively ignored. Similar arguments could be made performance, while there are others for which the use of this
+for the affinity function. There clearly needs to be a nice affinity will have little or no performance benefit. The key
+balance between these two functions. The proper balance point is to identify the class of applications that can benefit
+depends upon the intended system environment, and may from affinity scheduling, define the circumstances under which
+require experimentation.                                                            this benefit can be realized, and provide the scheduling policies
+                                                                                    with the ability to take advantage of this information when
+                                                                                    appropriate. Some of the important factors in making these
+                         VII. CONCLUSIONS                                           decisions are the size of processor caches, the locality of the
+   In this paper we explored the importance of using processor- task memory references, the size of the task footprint in the
+cache affinity information in shared-memory multiprocessor cache (i.e.. F ) , the ratio of the footprint loading time to the
+SQUILLANTE A N D LAZOWSKA: USING PROCESSOR-CACHE AFFINITY INFORMATION IN SHARED-MEMORY MULTIPROCESSOR SCHEDULING                                         143
+
+
+
+computing time of the task per visit to the multiprocessor (i.e.,             [ 181 M. S. Squillante and R. D. Nelson, “Analysis of task migration in shared-
+C / D ) , the time spent nonschedulable by the task between                         memory multiprocessor scheduling,” in Proc. ACM SICMETRICS Conf
+                                                                                    Measurement and Modeling of Comput. Syst., May 1991, pp. 143-155.
+processor visits (i.e., Z ) , and the system load.                            [ 191 H. S. Stone, personal communication, Nov. 1990.
+   Given the insights provided by our analysis, we suggested                  [20] B. Stroustrup, The C + + Programming Language. Reading, MA:
+                                                                                    Addison-Wesley, 1986.
+several practical scheduling policies that take advantage of                  1211 C. P. Thacker, L. C. Stewart, and E. H. Satterthwaite, Jr., “Firefly: A
+available affinity information, ranging from simple manage-                         multiprocessor workstation,” IEEE Trans. Comput., vol. C-37, no. 8,
+ment of local queues to augmenting a priority discipline with                       pp. 909-920, Aug. 1988.
+                                                                              1221 S. S. Thakkar, P. R. Gifford, and G. F. Fieland, “Balance: A shared mem-
+affinity information. Planned future research includes further                      ory multiprocessor system,” in Proc. Second Int. Conf Supercomput.,
+experimentation with various real workloads running under                           May 1987, pp. 1-9.
+implementations of some of these policies.                                    [23] D. Thiebaut, personal communication, June-Sept. 1989.
+                                                                              [24] D. Thiebaut and H. S. Stone, “Footprints in the cache,” ACM Trans.
+                                                                                    Comput. Syst., vol. 5 , no. 4, pp. 305-329, Nov. 1987.
+                        ACKNOWLEDGMENT                                        (2.51 M. K. Vernon, E. D. Lazowska, and J. Zahorjan, “An accurate and
+                                                                                    efficient performance analysis technique for multiprocessor snooping
+   We would like to thank H. Stone and D. Thiebaut for dis-                         cache-consistency protocols,” in Proc. The Fifteenth Annu. Int. Symp.
+                                                                                    Comput. Architecture, June 1988, pp. 308-315.
+cussions about their cache model, our extension of this model,
+                                                                              1261 J. Voldman and L. W. Hoevel, “The software-cache connection,” IBM
+and the use of these models in multiprocessor scheduling.                           J . Res. Develop., vol. 25, no. 6, pp. 877-893, Nov. 1981.
+We would also like to thank P. Flemming, A . Greenberg,                       [27] J. Voldman, B. Mandelbrot, L. W. Hoevel. J. Knight, and P. Rosenfeld,
+                                                                                    “Fractal nature of software-cache interaction,” IBM J . Res. Develop.,
+P. Heidelberger, S. Laha, R. Nelson, W.-H. Wang, and J.                             vol. 27. no. 2. pp. 164-170. Mar. 1983.
+Zahorjan for discussions about the research described in this                 [28] A. Weinrib and G. Copal, “Decentralized resource allocation for dis-
+paper. D. Eager, H. Stone, J. Zahorjan and the anonymous                            tributed systems,’‘ in Proc. INFOCOM, 1987.
+referees provided helpful comments on an earlier version of
+     paper.
+
+                            REFERENCES                                                                  M a r k S. Squillante (S’85-M’86) received the A.B.
+                                                                                                        (First Hons.) degree in mathematics from Wash-
+    M. Accetta, R. Baron, W. Bolosky, D. Golub. R. Rashid. A. Tevanian,                                 ington College, Chestertown, MD, in 1982, the
+    and M. Young, “Mach: A new kernel foundation for UNIX develop-                                      M.S. degree in computer science from Columbia
+    ment,” in Proc. USENIX Assoc. Summer Tech. Conf, June 1986, pp.                                     University, New York, NY, in 1985, and the Ph.D.
+    93-112.                                                                                             degree in computer science from the University of
+    A. Aganval, M. Horowitz, and J. Hennessy, “An analytic cache model,”                                Washington, Seattle, in 1990.
+    ACM Trans. Comput. Syst., vol. 7. no. 2, pp. 184-215, May 1989.                                        He has been a Research Staff Member at the
+    M. J. Bach, The Design of the UNIX Operating System. Englewood                                       IBM Thomas J. Watson Research Center, Yorktown
+    Cliffs, NJ: Prentice-Hall, 1986.                                                                     Heights, NY, since 1990 and an adjunct faculty
+    B. N. Bershad, E. D. Lazowska, and H. M. Levy, “PRESTO: A                                            member of the Department of Computer Science at
+    system for object-oriented parallel programming,” Sofiware: Practice      Columbia University, New York, NY, since 1991. The summers of 1988 and
+    andExperience, vol. 18, no. 8, pp. 713-732, Aug. 1988.                    1989 were also spent at the Watson Research Center in the Systems Theory and
+    R. W. Conway, W. L. Maxwell, and L. W. Miller. Theory of Scheduling.      Analysis group. From 1982 to 1985, he was a Member of the Technical Staff at
+    Reading, MA: Addison-Wesley, 1967.                                        Bell Telephone Laboratories, Murray Hill, NJ. His research interests concern
+    D. H. Craft, “Resource management in a decentralized system,” in Proc.    the design, analysis and theory of computer systems, including performance
+    Ninth ACM Symp. Oper. Syst. Principles, Oct. 1983, pp. 11 - 19.           modeling, scheduling algorithms, and distributed and parallel systems.
+    P. J. Denning, “Working sets past and present.” I€€€ Trans. Software         Dr. Squillante is a member of Tau Beta Pi, Omicron Delta Kappa, the
+    Eng., vol. SE-6, no. 1, pp. 64-84, Jan. 1980.                             Association for Computing Machinery, and the Operations Research Society
+    P. A. Franaszek and R. D. Nelson, “Delay cost scheduling for timeshar-    of America.
+    ing systems,’’ IBM Res. Rep. RC 13777 (#61800), June 19x8.
+    E. Horowitz and S. Sahni, “Exact and approximate algorithms for sched-
+    uling nonidentical processors,” J . ACM vol. 23. no. 2, pp. 317-327.
+    Apr. 1976.
+    N. P. Jouppi and D. W. Wall, “Available instruction-level parallelism
+                                                                                                         Edward D. Lazowska (M’90-SM’91) received the
+    for superscalar and superpipelined machines,’‘ in Proc. Third Int. Conf
+                                                                                                         A.B. degree from Brown University in 1972 and
+    Architectural Support for Programming Languages and Oper. Syst., Apr.
+                                                                                                         the Ph.D. degree from the University of Toronto in
+    1989, pp. 272-282.
+    L. Kleinrock, Queueing Systems, Vol. 11: Computer Applications. New                                  1977.
+    York: Wiley, 1976.                                                                                      He is a Professor of Computer Science at the
+    E. L. Lawler and C. U. Martel, “Scheduling periodically occurring tasks                              University of Washington, Seattle. He has been at
+    on multiple processors,” Inform. Processing Lett., vol. 12, no. 1, pp.                               the University of Washington since 1977, with the
+    9-12, Feb. 1981.                                                                                     exception of 9 months spent at the DEC Systems Re-
+    E. D. Lazowska, J. Zahorjan, G. S. Graham, and K. C. Sevcik,                                         search Center in 1984- 1985. His research concerns
+    Quantitative System Performance: Computer System Analysis Using                                      the design and analysis of distributed and parallel
+    Queueing Network Models. Englewood Cliffs, NJ: Prentice-Hall, 1984.                                  computer systems.
+    L. M. Ni and C. E. Wu, “Design tradeoffs for process scheduling in           Dr. Lazowska has served as Chair of the Graduate Record Examina-
+    shared memory multiprocessor systems,” IEEE Trans. Software Eng..         tion Board Computer Science test committee, Chair of SIGMETRICS (the
+    vol. SE-IS, no. 3, pp. 327-334, Mar. 1989.                                Association for Computing Machinery’s special interest group concerned
+    C. H. Sauer and K. M. Chandy, Computer Systems performance Mod-           with computer system performance), and General Chair of the 2nd ACM
+    eling. Englewood Cliffs, NJ: Prentice-Hall, 19x1.                         SIGPLAN Symposium on Principles and Practice of Parallel Programming.
+    Sequent Computer Systems, Inc. Symmetry Technicul Summary. 1988.          He is Program Chair for the 13th ACM Symposium on Operating Systems
+    M. S. Squillante, ‘‘Issues in shared-memory multiprocessor scheduling:    Principles, an editor of IEEE TRANSACTIONS   ON COMPUTERS,     and a member of
+    A performance evaluation,” Ph.D. dissertation, Dep. Comput. Sci. and      lFlP Working Group 7.3 on computer system performance. Twelve Ph.D. and
+    Eng., University of Washington, Sept. 1990.                               nineteen M.S. students have completed their degrees under his supervision.
+

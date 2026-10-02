@@ -1,0 +1,887 @@
+                                                                                    17th ACM Symposium on Operating Systems Principles (SOSP ’99)
+                                                                                       Published as Operating Systems Review, 34(5):80–92, Dec. 1999
+
+
+
+
+                       Building reliable, high-performance
+                    communication systems from components
+                    Xiaoming Liu, Christoph Kreitz, Robbert van Renesse, Jason Hickey,
+                            Mark Hayden, Kenneth Birman, Robert Constable1
+                                                    Department of Computer Science
+                                                  Cornell University, Ithaca, NY 14850
+
+
+                      xliu,kreitz,rvr,ken,rc@cs.cornell.edu, jyh@cs.caltech.edu, hayden@pa.dec.com
+
+
+Abstract                                                                       ing evolution. And components can be individually formally
+                                                                               specified and verified more easily, allowing safety-critical
+Although building systems from components has attractions,                     applications to be synthesized from such components.
+this approach also has problems. Can we be sure that a cer-                        The component-based approach has long been used suc-
+tain configuration of components is correct? Can it perform                    cessfully by VLSI designers. Yet, realizing the development
+as well as a monolithic system? Our paper answers these                        of an efficient and correct software system from components
+questions for the Ensemble communication architecture by                       has been difficult. One problem is that the abstraction barri-
+showing how, with help of the Nuprl formal system, configu-                    ers between the components impose high overheads arising
+rations may be checked against specifications, and how op-                     from additional function calls, poor locality of data and code
+timized code can be synthesized from these configurations.                     (leading to cache and TLB misses), redundant code that is
+The performance results show that we can substantially re-                     not reachable in a particular configuration of the components
+duce end-to-end latency in the already optimized Ensemble                      (resulting in unused fields in data structures and message
+system. Finally, we discuss whether the techniques we used                     headers), and separate compilation (causing non-optimal use
+are general enough for systems other than communication                        of existing optimization techniques).
+systems.                                                                           Another problem is that configuring a system from
+                                                                               components is often much harder than installing a shrink-
+                                                                               wrapped system. Such a configuration includes the selection
+1       Introduction                                                           of components, the parameterization of the individual com-
+                                                                               ponents, and the layout or composition of the selected com-
+Building systems from components has many attractions.                         ponents. Finally, although smaller components make it pos-
+First, it can be easier to design, develop, test, and optimize                 sible to prove the correctness of the algorithms or protocols
+individual components of limited functionality than when                       used in each component, the generation and verification of
+the same functionality is embedded within a large mono-                        the code of the components themselves is still very difficult.
+lithic system. Second, systems built from components may                           In spite of these problems, we have seen a prolifera-
+be more readily adapted and tuned for new environments                         tion of component-based systems in the last two decades.
+than monolithic systems. Third, component-based systems                        The trend towards componentization is yielding systems that
+may be extended at run-time with new components, facilitat-                    have more functionality than ever before. But these sys-
+    1
+     The current address of J. Hickey is California Institute of Tech-         tems are generally not more reliable or faster, in spite of
+nology, CS Dept., M/S 256-80, Pasadena, CA 91125. The cur-                     the tremendous improvements in hardware performance and
+rent address of M. Hayden is Compaq SRC, 130 Lytton Ave., Palo                 compiler technology.
+Alto, CA 94301. This work is supported in part by ARPA/ONR                         In this paper, we present encouraging, intermediate re-
+grant N00014-92-J-1866, ARPA/RADC grants F30602-96-1-0317                      sults of a cooperation between two groups at Cornell Uni-
+and F30602-98-2-0198, and NSF grant EIA 97-03470.                              versity: the Ensemble group communication group, and the
+                                                                               Nuprl automated formal reasoning group. The project has
+Permission to make digital or hard copies of all or part of this work
+                                                                               two orthogonal goals: hardening communication protocol
+for personal or classroom use is granted without fee provided that
+copies are not made or distributed for profit or commercial advan-             components and configurations of components, and improv-
+tage, and that copies bear this notice and the full citation on the            ing their efficiency. This is approached by combining tech-
+first page. To copy otherwise, to republish, to post on servers or to          nology from a variety of different fields:
+redistribute to lists, requires prior specific permission and/or a fee.
+SOSP-17 12/1999 Kiawah Island, SC                                                 • (Communication protocols) Protocols are developed
+⃝1999 ACM 1-58113-140-2/99/0012. . . $5.00
+ c                                                                                  within the Ensemble framework. This architecture is
+
+
+                                                                          80
+     presented in Chapter 2 of [10]. Protocols are decom-            protocol and (2) once initial work has been done to prepare
+     posed into micro-protocols, each specialized to do one          each protocol layer, it is possible to automate the optimiza-
+     task well in a specific environment. For different en-          tion of all their combinations. Thus the fact that Ensemble is
+     vironments, the same task is implemented in differ-             highly configurable is important. Ensemble protocol stacks
+     ent ways for improved efficiency. A particular micro-           can be combined in 1000’s (if not more) ways. It would not
+     protocol implementation constitutes a component.                be feasible to optimize them all by hand.
+                                                                         Although we have not yet completed a machine-
+   • (Programming languages) Components are written in               generated proof of a distributed property (a property that in-
+     Objective Caml (OCaml) [17], a dialect of ML [20].              volves more than one participant) of a non-trivial protocol,
+     For our project, the two important aspects of this              we have written specifications of four protocols and a man-
+     choice are that 1) OCaml has a formal semantics that            ual proof of the total ordering protocol and its configuration
+     allows the code to be manipulated by formal tools, and          in a virtually synchronous communication stack. This led
+     2) OCaml compiles to efficient machine code.                    to the discovery of a subtle bug. This effort has also hard-
+   • (Specification) Specification of the behavior of both           ened and simplified configuration of protocols in Ensemble,
+     protocols and micro-protocols is done using I/O au-             an otherwise difficult and error-prone process [11].
+     tomata (IOA) [18]. IOA specifications are accessible                The Ensemble, OCaml, and Nuprl systems are described
+     to programmers because their syntax is close to stan-           in Section 2. Section 3 describes how protocol behaviors are
+     dard programming languages such as C, and thus ease             specified and protocol implementations and configurations
+     the transition between specification and code. Further-         are checked for correctness. In Section 4 we show how we
+     more, IOA specifications can be composed, and have              use Nuprl in the optimization process, and we discuss the
+     formal semantics.                                               resulting performance. We review related work in Section 5.
+                                                                     Section 6 discusses the feasibility of using our approach in
+   • (Formal methods) For program reasoning and transfor-            other settings.
+     mation we use the Nuprl [7] system. Nuprl is able
+     to “understand” both the IOA specifications and the
+     OCaml code, and can rewrite the code for the purpose            2   Ensemble, OCaml, and Nuprl
+     of optimization. Nuprl’s proof strategies can be tai-
+     lored for reasoning about distributed systems, which                Ensemble is a high-performance
+     we use for correctness proofs.                                  network protocol architecture, de-             Ensemble
+                                                                     signed particularly to support group          application
+    These parts each contribute to the realization of a reli-        membership and communication pro-
+able, high-performance, component-based communication                tocols. Ensemble’s architecture is
+                                                                                                                       Top
+system. By decomposing protocols into a large number                 based on the notion of a protocol
+of micro-protocol components, Ensemble provides a highly             stack. The architecture is described
+flexible communication system, but the implementation has            in detail in Chapter 2 of [10]. The           Membership
+the usual problems. The large numbers of module bound-               system is constructed from simple
+aries introduce significant latency, and application-specific        micro-protocol modules, which can
+protocols can be difficult to configure. We use the formal           be stacked in a variety of ways to                Total
+tools to address these problems. The OCaml programming               meet the communication demands of
+language has a precise mathematical semantics that we use            its applications. Ensemble’s micro-
+as the foundation for formal reasoning. IOA specifications           protocols implement basic sliding
+provide the requirements for configuration and performance           window protocols, fragmentation and
+optimization, and we use Nuprl to automate the optimiza-             re-assembly, flow control, signing             Fragment
+tion. Eventually, we hope to leverage Nuprl for the configu-         and encryption, group membership,
+ration process as well.                                              message ordering, and other func-
+    We were able to synthesize code from the original im-            tionality. Ensemble includes a library          Network
+plementations automatically, whose latency is within 50% of          of over sixty of these components.
+the best hand-optimized code generated for Ensemble. For                 Each module adheres to a com- Figure 1. Ensem-
+example, we optimized a 4-layer stack that provides reliable         mon Ensemble micro-protocol inter- ble architecture
+multicast. On a 300 MHz SparcStation, the processing over-           face. There is a top-level and a
+head for sending a message through the stack is 2 µs (down           bottom-level part to this interface. The top-level part of the
+from 13 µs in the original Ensemble stack), and the overhead         interface of a module communicates with the bottom-level
+for delivery is 4 µs (down from 10 µs).                              part of the interface of the module directly on top of it. The
+    Significantly more work is required to optimize one pro-         interface is event-driven: modules pass event objects to the
+tocol stack using our formal framework than to do so by              adjacent modules. Certain types of events travel down (e.g.,
+hand. If one were to optimize a single monolithic proto-             send events), while others (such as message delivery events)
+col stack, such as TCP/IP, it would probably make sense to           travel up the stack.
+do so by hand. The two advantages to our approach are (1)                Ensemble is currently used in the BBN Aqua and Quo
+the optimization is guaranteed to preserve correctness of the        platforms, a fault-tolerant testbed at JPL, the Adapt adap-
+
+
+                                                                81
+tive multimedia middleware system at Lancaster University,            of micro-protocols, and 2) by verifying an existing imple-
+a multiplayer game by Segasoft, and in the Alier financial            mentation against its specification, it becomes possible to
+database tools.                                                       determine if the program is correct. We cover these in the
+     Ensemble is written in OCaml [17]. Chapter 4 of [10]             next two subsections.
+explores the impact of building Ensemble in OCaml, includ-
+ing comparisons with Ensemble’s predecessor, Horus [26],
+which was written in C. For instance, the code for Ensem-
+                                                                      3.1    Specification
+ble’s protocols was found to be about 7 times smaller than            Specifications of communication systems range along an
+functionally identical code in Horus. The reasons for this            axis from specifying the behavior of a system to specifying
+include OCaml’s high-level manipulation of data structures,           its properties. When specifying the behavior, we describe
+automated memory allocation and garbage collection, and               how the system reacts to events. For example, we may spec-
+automatic marshaling. [10] also reports that the Ensem-               ify that the system sends an acknowledgment in response to
+ble developers found the OCaml code easier to develop and             a data message. When specifying properties, we describe
+maintain than C.                                                      logical predicates on the possible executions of the system.
+     For our purposes, the main benefit of OCaml is that it           An example of a property is that messages are always deliv-
+has a precise definition that we can use during operations            ered in the order in which they were sent (FIFO).
+like synthesis, verification, and optimization. If performed              Both kinds of specifications are important. The prop-
+manually, these operations can be tedious and error-prone.            erties describe the system at the highest level. Since the
+We use formal automation to address both problems—                    properties do not specify how to implement a protocol, they
+automation makes it possible to re-use common reasoning               are easy to compose. Behavioral specification provides the
+strategies, and formal reasoning guarantees the correctness           connection to the code by describing how to implement the
+of program transformations.                                           properties. Behavioral specifications can be either concrete
+     We are not the only ones using OCaml for systems pro-            or abstract. Concrete specifications can be directly mapped
+gramming. OCaml is also used in many systems, such as the             onto executable code, while abstract specifications are non-
+Pentasoft financial simulation system, the Switchware active          deterministic descriptions that use global variables, and are
+network at UPenn, a Mitre network filter, a network supervi-          therefore not executable. The advantage of abstract specifi-
+sion system at France Telecom, and formal analysis of cryp-           cations is that they are simple, and that global or distributed
+tographic protocols at Stanford Research International.               properties such as FIFOness can be easily derived. The ad-
+     In the work we present here, Nuprl acts as a source-to-          vantage of a concrete specification is that an implementation
+source translator. Unlike a compiler, every step made by              can be easily derived from it. Below, when using the term
+Nuprl has to be accompanied by a proof, which often re-               specification, we will mean behavioral specification unless
+quires manual interaction. A semantics for the functional             otherwise noted.
+subset of OCaml, as well as the imperative language fea-                  We will now describe some examples of both abstract
+tures that are required for implementing finite state-event           and concrete behavioral specifications of networks and pro-
+systems, was developed in [14]. In particular, exceptions             tocols. The programming model we use is that of a state
+and support for object-orientation are currently not handled          machine with event-condition-action rules. This is not much
+by Nuprl. Ensemble’s implementation of micro-protocols                different from an abstract data type, or a C++ or Java object,
+only uses the corresponding subset. Tools convert OCaml               except that all interactions between components are through
+code into the corresponding terms of Nuprl’s input language           events. An abstract specification has a set of variables, and
+and vice versa. This way, the Nuprl system can reason about           a set of events that, under certain conditions, modify these
+OCaml expressions and evaluate them symbolically.                     variables and allow interaction with the environment.
+     The resulting logical programming environment [16]                   See Figure 2(a) for an example of an abstract specifica-
+provides the infrastructure for the application of formal ver-        tion of a FIFO network, using a variant of IOA as the speci-
+ification and optimization techniques to the actual code of           fication language. The state consists of a single global queue
+Ensemble. On this basis, we have developed formal tech-               that contains the messages that are in transit, paired with the
+niques for domain-specific optimizations of layered systems           respective destinations. The Send event specifies the des-
+[15, 10], which support the optimization of both individual           tination of a message and the message itself, and adds the
+layers and whole layer stacks.                                        message to the queue. The Deliver event of a particular
+     In summary, our formal environment has three parts: 1)           message at a particular destination can only trigger when that
+OCaml provides a precise code-level description of Ensem-             pair is at the head of the queue. If so, that pair is removed
+ble, 2) IOA specifications provide high-level logical descrip-        from the queue. No message loss or retransmissions, nor the
+tions of the micro-protocol components, and 3) the Nuprl              fact that there is no shared memory to implement the global
+prover provides the support for automating the reasoning              queue, needs to be considered. This specification is abstract
+process.                                                              because it is not executable: it uses a global variable, and the
+                                                                      scheduling of events is not determined. Instead, each event
+3   Specifications and correctness                                    has a condition that specifies under which circumstances the
+                                                                      corresponding action can be evaluated.
+Specifications serve two purposes: 1) when we design a new                Figure 2(b) specifies, again abstractly, a network that can
+protocol, the specification can be used to guide the selection        arbitrarily lose and reorder messages, as well as deliver them
+
+
+                                                                 82
+                                                                             Specification LossyNetwork()
+                                                                             Variables
+             Specification FifoNetwork()                                          in-transit: set of ⟨Address, Message⟩
+             Variables                                                       Actions
+                  in-transit: queue of ⟨Address, Message⟩                         Send(dst : Address; msg : Message)
+             Actions                                                              condition: true
+                  Send(dst : Address; msg : Message)                                    { in-transit.add(⟨dst, msg⟩); }
+                  condition: true
+                        { in-transit.append(⟨dst, msg⟩); }                       Deliver(dst : Address; msg : Message)
+                                                                                 condition: in-transit.contains(⟨dst, msg⟩)
+                  Deliver(dst : Address; msg : Message)                              {}
+                  condition: in-transit.head() == ⟨dst, msg⟩
+                      { in-transit.dequeue(); }                                  Drop(dst : Address; msg : Message)
+                                                                                 condition: in-transit.contains(⟨dst, msg⟩)
+                                                                                     { in-transit.remove(⟨dst, msg⟩); }
+
+                                   (a)                                                              (b)
+
+
+Figure 2. (a) The abstract behavioral specification of a FIFO network; (b) a network that reorders, duplicates, and
+loses messages.
+
+                                Specification FifoProtocol(p : Address)
+                                Variables
+                                     send-window, recv-window, ...
+                                Actions
+                                     Above.Send(dst : Address; msg : Message)
+                                     Below.Send(dst : Address; ⟨hdr , msg⟩ : ⟨Header, Message⟩)
+                                     Below.Deliver(dst : Address; ⟨hdr, msg⟩ : ⟨Header, Message⟩)
+                                     Above.Deliver(dst : Address; msg : Message)
+                                     Timer ()
+
+
+Figure 3. The prototype of a concrete behavioral specification of a communication protocol that retransmits mes-
+sages, removes duplicates, and delivers messages in order. Each process that participates in the protocol runs an
+instance of one of these.
+
+multiple times. In this case the state consists of an unordered          be executed. This does not affect the correctness of the im-
+set of messages. Send just adds a (destination, message)                 plementation.
+pair to the set, and Deliver delivers an arbitrary message                   The relationship between abstract behavioral specifica-
+in the set. There is a third, internal event that drops arbitrary        tions, concrete behavioral specifications, implementations,
+messages from the set to model message loss.                             and properties can be pictured as follows:
+    The prototype (or signature in IOA terminology) of a
+concrete specification of a protocol that implements a FIFO
+                                                                                                 Abstract Behavioral
+network on top of a lossy network is presented in Figure 3.
+                                                                                                   Specification
+(Including the specification of the actions would take up too
+much space.) A concrete specification only involves state
+and events local to a single participant in the protocol. For                       Refinement                          Proof
+every event the condition specifies if it can be executed. An
+instance of this specification has to run on each process that                  Concrete Behavioral                    Properties
+is a participant in the protocol. (Each instance has its own                       Specification
+copy of the variables.) Note that a concrete specification has
+two Send events and two Deliver events. Above.Send
+is visible only to the application, while Below.Send is vis-                                Scheduling
+ible only to the network. There is also an internal timer event
+that takes care of retransmissions.                                               Implementation
+    The difference between a concrete specification and an
+implementation is small: in an implementation, the pro-
+grammer also needs to detect which conditions are true, and                 A concrete specification is derived from the abstract
+specify the order in which the corresponding actions should              specification by a process called refinement. This involves
+
+
+                                                                    83
+designing a protocol that implements the abstract require-               methodology described above, but this has not yet been au-
+ments. On the other hand, the properties of the abstract spec-           tomated.)     Also, the heuristic only knows about approxi-
+ification are derived by proof. The alternative, to derive an            mately two dozen different properties, so it cannot generate
+implementation directly from properties, or prove properties             stacks for applications with specific unique requirements.
+given the implementation, would be much harder.
+     If we wish to prove the correctness of FifoProtocol, we
+use an instance of LossyNetwork, and an instance of Fi-                  4    Optimization
+foProtocol for each participant in the protocol. We then
+compose them by tying all Below.Send events to the Send                  Maintaining good communication performance in a layered
+event in LossyNetwork, and similarly for the Below.Deliver               system is hard, and a variety of projects have tried to address
+events. Two events can be tied together by combining the                 this problem. For example, the VIA Giganet interface pro-
+conditions and actions of those events. We then have to show             vides 10 µs one-way end-to-end latency for messages of 256
+that any execution of this composed specification, which is              bytes or smaller [27]. A highly optimized layering system
+an abstract specification, is also an execution of FifoNet-              like Ensemble adds about 1 to 2 µs per layer to the latency
+work. (An execution is basically the sequence of externally              of pure layering overhead, and having more than 10 layers is
+observable events of a specification.) A good example of                 not uncommon.
+such a proof, by hand, can be found in [11], which demon-                    Chapter 3 of [10] describes the following optimizations:
+strates the correctness of one of Ensemble’s total ordering
+protocols. (This exercise located a subtle bug in the original               1. Avoiding garbage collection cycles. In the original
+implementation.)                                                                Ensemble system, an OCaml object was allocated for
+                                                                                each message sent or delivered. These relatively large
+                                                                                objects tend to be short-lived, a scenario for which the
+3.2    Is Ensemble correct?                                                     OCaml garbage collector is not optimized. The En-
+                                                                                semble distribution now has its own message alloca-
+One way to answer this question is to first come up with                        tor, which is formed by a single OCaml string object.
+an abstract behavioral specification of a network that im-                      Ensemble is itself responsible for freeing messages.
+plements the properties that some particular application re-                    Using other careful coding techniques, creating short-
+quires. Then, we must show that the composition of the ab-                      lived objects was avoided in the normal case, greatly
+stract specification of the actual network used, and the con-                   reducing garbage collection overhead.1 In addition, by
+crete specifications of the micro-protocols in the protocol                     triggering garbage collection when the system is idle, it
+stack, results in the same executions as that of the required                   became highly unlikely that garbage collection is nec-
+abstract specification. Since there are many networks, many                     essary during stack processing.
+applications, and many micro-protocols, the correctness of
+Ensemble is no easy matter. But even for a single applica-                   2. Avoiding marshaling. Ensemble allows any OCaml
+tion, network, and protocol stack, this approach would be an                    value to be sent and delivered. As a value is sent, each
+almost impossible task.                                                         layer encapsulates the value into another one consist-
+     The approach that we are taking instead is the following.                  ing of the header of that layer and the headers of the
+For each micro-protocol p, we present two abstract specifica-                   layers above it. The resulting data structure needs to
+tions, p.Above and p.Below. p.Above specifies the behav-                        be serialized before sending along with the message
+ior that the protocol implements, whereas p.Below specifies                     payload. (Note that there is no fixed wire format for
+the behavior that the protocol requires of the networking en-                   headers in Ensemble.) Ensemble uses the OCaml value
+vironment below it. When proving the correctness of a stack                     marshaler for this, which traverses the data structure,
+of protocols for a particular network and application, we can                   and copies all the data into a byte string. A similar op-
+therefore limit ourselves to showing that, for each pair p and                  eration, copying parts of the string back into dynami-
+q of adjacent protocol layers (p below q), every execution                      cally allocated data structures, happens on delivery. In
+of p.Above is also an execution of q.Below and vice versa.                      many common cases, the headers contain only one or
+Since we are now working at the level of relatively simple                      two integers, and all this generality leads to substan-
+abstract specifications, and p.Above and q.Below will gen-                      tial overhead. By providing specialized marshalers for
+erally be identical or similar, the task is tractable.                          these cases, and by using the UNIX scatter-gather ca-
+     It would be nice if, given a particular application and net-               pability, we can avoid this overhead.
+work, we could automatically select a set of micro-protocols
+and generate a correct configuration. A brute force solu-                    3. Delaying non-critical message processing. For exam-
+tion of trying all possible combinations obviously will not                     ple, a message can often be sent or delivered before
+work. Instead, the Ensemble system contains an algorithm                        the message is buffered. Doing so takes the buffering
+for calculating stacks given the set of properties that an ap-                  overhead out of the so-called critical path, and reduces
+plication requires. This algorithm encodes knowledge of the                     end-to-end message latency.
+protocol designers and appears to work quite well, but we
+cannot currently be sure that it always generates a correct                 1
+                                                                              OCaml now has a new compacting garbage collector that may
+stack. (We could check the correctness afterwards using the              reduce the effectiveness of these optimizations.
+
+
+                                                                    84
+  4. Identifying common paths and eliminating layer                         For example, a CCP may be true if the event is a Deliver
+     boundaries. A common technique for optimizing lay-                 event, and the low end of the receiver’s sliding window is
+     ered protocol implementations is to identify the com-              equal to the sequence number in the event (in other words,
+     mon outcomes of if-statements, and outline the uncom-              this is the next expected packet to arrive, and it was not lost
+     mon code (i.e., move it into a different section of mem-           or reordered). If a message is received for which the CCP
+     ory than the common path to improve locality). Using               predicate is satisfied, that message may be delivered and the
+     function inlining, the layer boundaries can be removed.            low end of the window moved up, without a need for buffer-
+     The resulting common code path is compact and has                  ing.
+     better cache performance.                                              Bypass code fragments from a stack of layers can be
+  5. Header compression. Many layers need to add some                   composed to obtain a single bypass function guarded by a
+     information to the message header, and all layers con-             single common-case predicate. The same CCPs that are used
+     tribute to some processing overhead for every message              at compile-time to generate the bypass code are also used at
+     that is sent or received. Fortunately, most informa-               run-time to decide whether to deliver an event to the bypass
+     tion in headers seldom changes, allowing for signifi-              or to the original stack, as illustrated in Figure 4. (The Trans-
+     cant compression of headers, typically to just 16 bytes.           port module below the protocol stack provides marshaling
+                                                                        of messages.) The CCP for a composed bypass is the logical
+The first three steps do not affect the layering abstraction            conjunction of the individual CCPs for its components. It
+itself. However, the final two steps require generating spe-            is necessary to generate efficient code for this CCP, since it
+cial code for common cases. Finding common cases and                    will be executed for every event.
+compressing headers is far beyond the capabilities of cur-
+rent compiler optimization techniques, and therefore previ-                 The partial evaluation of a layer removes all the unreach-
+ous work [1, 2, 9, 21] involves hand-optimization or at least           able code for the corresponding CCP condition. Often, as a
+significant annotation of the code.                                     result, much of the header for that particular layer becomes a
+    Both [1] and [13] report that this is a difficult and error-        constant, for example, because the CCP condition prescribes
+prone process, which is consistent with our own experience              that the packet is an unfragmented DATA packet. All these
+in trying to do so. Chapter 5 of [10] shows how such op-                constant header fields in the combined headers of all layers
+timizations can be formalized using predicates and partial              can be combined into a single, short, identifier, thus com-
+evaluation of code, using a 4-layer protocol stack as an ex-            pressing the header and reducing handling overhead.
+ample. In this section, we describe how we have developed
+this into push-button technology using Nuprl which can be               4.1.1 Methodology
+applied to any protocol stack.
+                                                                        There are two levels of formal optimizations. The first, or
+4.1    Formal optimization in Nuprl                                     static level, depends solely on the code of the individual
+                                                                        modules of the Ensemble toolkit. It is performed semi-
+    To understand the way                                               automatically under the guidance of the programmer who
+                                             APPLICATION
+Nuprl interprets a protocol, it is                                      developed a particular Ensemble protocol layer, and an ex-
+useful to think of a protocol as a                                      pert on the Nuprl system. This optimization may take any-
+function. Such a function takes                  CCP       down
+                                                                        thing from 1/2 hour to an entire afternoon to develop. Its
+                                              no      yes
+the state of the protocol (the                                          result is part of the optimization tool that is made available
+                                        Top
+collected variables maintained                                          to the application developer.
+                                              Full Stack
+by the protocol) and an input
+event (a user operation, an                                                  The second, or dynamic level, depends on the particu-
+arriving message, an expiring                                           lar communication stack that an application developer builds
+timer, ...), and produces an           Pt2Pt           Bypass           with the Ensemble toolkit and thus cannot be provided a pri-
+                                                        Code
+updated state and a list of             Mnak
+                                                                        ori. This level is completely automated and requires only
+output events. This function                                            the names of the protocol layers that occur in the applica-
+                                       Bottom
+can be optimized if something                                           tion stack. Its result, which is typically obtained in less than
+is known about an input event                                           1/2 minute, is the complete code for an optimized protocol
+                                                 CCP
+and the state of the protocol.                no     yes
+                                                            up
+                                                                        stack, the bypass.
+We express this knowledge                                                    It should be noted that optimization is orthogonal to ver-
+                                            TRANSPORT
+by a so-called Common Case                                              ification. Our formal tools prove that the resulting code is
+Predicate (CCP): a Boolean                                              semantically equal to the original protocol stack but do not
+function on the state of a                    NETWORK                   make any assumptions about properties of the stack. Our op-
+protocol and an input event.                                            timization tool is built within the interactive Nuprl proof de-
+CCPs are specified by the                                               velopment system [7], which — due to its expressive logic
+programmer of a protocol, Figure 4. Optimized                           — supports formal reasoning not only about mathematics
+and are typically determined code architecture                          but also about program properties, program evaluation, and
+from run-time statistics. We call the result of optimizing a            program transformations. In the rest of this section we will
+protocol a bypass.                                                      explain the technical details of the optimization tool.
+
+
+                                                                   85
+4.1.2   Static optimization of protocol layers                        simplifications we reach a choice point (e.g., a conditional)
+                                                                      in the code. The system then applies context-dependent sim-
+In order to be able to formally reason about Ensemble and to          plifications for each of the CCPs until the corresponding
+optimize its protocol stacks, we first have to import its code        code fragment has been isolated. All these steps are com-
+into the Nuprl proof development system. For this purpose             pletely automated and usually the optimization can stop at
+we have developed a tool that parses the OCaml code of En-            this point. However, we give the Ensemble programmer
+semble’s modules and converts it into terms of Nuprl’s log-           an opportunity to invoke additional simplifications explicitly
+ical language that represent its formal semantics (see [14]           before committing the result to Nuprl’s logical library.
+for details). Nuprl’s display mechanism allows us to give
+                                                                          Performing these steps in a logical proof environment
+these terms the same syntactical appearance as the OCaml
+                                                                      guarantees that the generated bypass code is equivalent to the
+code they represent and thus to include “code fragments” in
+                                                                      original code of the layer if the CCP holds. In most cases this
+formal mathematical statements. This makes it easier to un-
+                                                                      means that about 100-300 lines of code have been reduced
+derstand Nuprl’s formal text and makes sure that all code             to a single update of the layer’s state and a single event to be
+transformations are semantically correct.
+                                                                      passed to the next layer.
+    The static optimizations of the Ensemble toolkit are
+based on an a priori (before compilation) analysis of pos-
+sible bypass paths through each individual protocol layer. A          4.1.3 Dynamic optimization of application stacks
+bypass path through a layer is a branch in the code of the
+layer. The CCP of this branch is the conjunction of the pred-         In contrast to individual layers, application protocol stacks
+icates in the conditions of the corresponding if-statements.          cannot be optimized a priori, as thousands of possible con-
+    The optimization of a protocol layer proceeds by a series         figurations can be generated with the Ensemble toolkit. But
+of code transformations that are based on the following basic         the application developer has little or no knowledge about
+mechanisms:                                                           Ensemble’s code. Therefore, an optimization of an appli-
+                                                                      cation stack has to be completely automatic. We have de-
+   • Function inlining and symbolic evaluation simplifies
+                                                                      veloped a tool for optimizing arbitrary Ensemble protocol
+     the layer’s code in the presence of constants or func-
+                                                                      stacks which proceeds as follows (see Figure 5).
+     tion calls. Logically, this means rewriting the code by
+     definition unfolding and controlled partial evaluation.              Given the names of the layers in the protocol stack, the
+                                                                      system consults the a priori optimizations of these layers and
+   • Directed equality substitutions such as the application          composes them into a bypass. The individual CCPs and state
+     of distributive laws lead to further simplifications of          updates are instantiated and composed by conjunction. This
+     the code. Technically, we apply lemmata from Nuprl’s             is done separately for each of the four fundamental cases
+     logical library. Adding a direction to each lemma (e.g.,         (point-to-point send and receive, as well as broadcast send
+     in the case of equality, whether the lemma should be             and receive events). Header compression, described below,
+     applied from left-to-right or vice versa) guarantees ter-        is integrated as well. Afterwards the four cases are joined
+     mination of this process.                                        into a single program that uses the CCP as switch between
+                                                                      the bypass code and the normal stack. This program is then
+   • Context-dependent simplifications help in extracting             exported from Nuprl to the OCaml programming environ-
+     the relevant code from a layer. They trace the code              ment to be compiled and executed.
+     path of messages that satisfy the CCPs and isolate the               To ensure that the generated optimized code is semanti-
+     corresponding code fragments. Technically, we con-               cally equal to the original protocol stack in all cases, these
+     sult a CCP in order to substitute a piece of code by a           steps are performed in the framework of formal optimization
+     value and then rewrite the result with the above two             and composition theorems.
+     mechanisms.                                                          An optimization theorem proves that, under a given CCP,
+    All these mechanisms preserve the semantics of a layer’s          a piece of bypass code is semantically equal to the Ensem-
+code under the assumption of the CCPs. To control their au-           ble protocol stack from which it was generated. For indi-
+tomated application, we restrict inlining to functions from           vidual protocol layers (i.e., 1-layer stacks) these theorems
+a few specific Ensemble modules. Symbolic evaluations                 are created and proven automatically from the a priori opti-
+and distributive laws can be applied to any expression in             mizations stored in Nuprl’s library. A bypass path through
+the code, but the automatic strategy chooses the outermost            Ensemble’s Bottom layer, for instance, is described by the
+possible. The fact that the code of all protocol layers has a         following optimization theorem.
+common outer structure allows us to start the optimization             OPTIMIZING LAYER Bottom
+of a layer with a predetermined sequence of controlled sim-             FOR EVENT DnM(ev, hdr)
+plifications.                                                           AND STATE s bottom
+    Optimizations for each layer are initiated for four funda-          ASSUMING getType ev = ESend ∧
+mental cases: down or up going events (sending or receiving                          s bottom.enabled
+messages) for both point-to-point sending and broadcasting.            YIELDS EVENTS [:DnM(ev, Full nohdr(hdr)):]
+                                                                        AND STATE s bottom
+The CCPs for these cases are created automatically and the
+Ensemble programmer may add additional CCPs to describe               This theorem formally states that, under the assump-
+the common case. After applying the initial fixed series of           tion that the layer is enabled, a down-going send-event
+
+
+                                                                 86
+                  OCaml Environment                                           NuPRL
+                                                                                      Layer Optimization Theorems
+                               Code                                             Up/Send         Up/Cast           Dn/Send         Dn/Cast
+                                                 Optimize Common Case
+
+                                                                                                                                                      Layers
+
+                                                         (static, a priori)
+
+
+
+
+                                      Protocol Layers                                          Composition Theorems
+                                                                                            Up/Linear       Up/Split    Up/Bounce
+
+                                                  Verify Simple Compositions
+                                                                                                                                                      Composition
+                                                                                            Dn/Linear       Dn/Split    Dn/Bounce
+                                                         (static, a priori)
+                                         Compose Function
+                                                                                          Stack Optimization Theorems
+
+                             Top Layer               Optimize Common Case
+                                                             (dynamic)
+                                                                                                                                                      Stack
+                              Layer
+                                                                                          Up/Send         Up/Cast           Dn/Send         Dn/Cast
+                              Layer
+                           Bottom Layer
+                                         Application Stack
+                     equivalent to
+
+
+                                                                                          Join & Generate Code
+
+
+                     Optimized Application Stack
+
+
+Figure 5. Optimization methodology: composing optimization theorems.
+
+
+does not change the state s bottom and is passed                                                 the composed layers (Upper ||| Lower) as well. The state
+down to the next layer, with its header hdr extended to                                          of the combined layer is updated according to the individual
+Full nohdr(hdr).                                                                                 updates.
+    Optimization theorems for larger stacks are created from                                         While the statement of such a composition theorem is al-
+those for single layers by applying formal composition theo-                                     most trivial, its formal proof is quite complex, because the
+rems. These theorems describe abstractly the effect of apply-                                    code of Ensemble’s layer composition function uses a gen-
+ing Ensemble’s composition mechanism to common combi-                                            eral recursion. By analyzing this code abstractly, and pro-
+nations of bypass paths, such as linear traces (events passes                                    viding the result of the analysis as a formal theorem, we
+straight through a layer), bouncing events (events that gener-                                   have lifted the optimization process to a higher conceptual
+ate callback events), and trace splitting (message events that                                   level: we can now reason about composition as such instead
+cause several events to be emitted from a layer) — both for                                      of having to go into the details of the code of each layer and
+up- and down-going events ([10], Chapter 5).                                                     of the composition mechanism. It also speeds up the opti-
+        OPTIMIZING LAYER Upper
+                                                                                                 mization process significantly: optimizing composed proto-
+          FOR EVENT DnM(ev, hdr)                                                                 col layers is now a single reasoning step, while thousands of
+          AND STATE s up                                                                         simplification steps would have to be applied to the code of
+        YIELDS EVENTS [:DnM(ev, hdr1):]                                                          the entire stack to achieve the same result.
+           AND STATE s1 up
+ ∧     OPTIMIZING LAYER Lower                                                                        Like the optimization theorems for individual protocol
+          FOR EVENT DnM(ev, hdr1)                                                                layers, all composition theorems are provided a priori as part
+          AND STATE s low                                                                        of the optimization tool, as they do not depend on a particu-
+        YIELDS EVENTS [:DnM(ev, hdr2):]
+          AND STATE s1 low                                                                       lar application stack. As a result, the optimization theorems
+ ⇒      OPTIMIZING LAYER Upper ||| Lower                                                         for a protocol stack can be generated automatically. To cre-
+          FOR EVENT DnM(ev, hdr)                                                                 ate the statement of such a theorem, we consult the theorems
+          AND STATE (s up, s low)                                                                about layer optimizations for the corresponding events and
+        YIELDS EVENTS [:DnM(ev, hdr2):]
+          AND STATE (s1 up, s1 low)                                                              compose them as described by the composition theorems.
+                                                                                                 To prove the theorem, we first instantiate the optimization
+The formal theorem above, for instance, expresses the obvi-                                      theorems of the layers in the stack with the actual event that
+ous effect of composing down-going linear bypass paths: if                                       will enter them. We then apply, step-by-step, the appropri-
+an event passes straight down through the upper layer and                                        ate composition theorems to compose the bypass through the
+then through the lower one, then it passes straight through                                      stack.
+
+
+                                                                                          87
+    The optimization theorems do not only describe a bypass                 the appropriate layer. Otherwise, output events are en-
+through a protocol stack but also provide the means for an                  queued back into the scheduler.
+additional optimization that cannot be achieved by partial
+evaluation or related techniques. They tell us exactly which             2. (Functional or FUNC) In this case no centralized event
+headers are added to a typical data message by the sender’s                 scheduler is used. Composition is done based on
+stack and how the receiver’s stack processes these headers in               the following observation: When two protocols are
+the respective layers. As most of the header fields are fixed               stacked on top of each other, the result is a new pro-
+(constant) now, we only have to transmit the header fields                  tocol. When stacking p on top of q, one applies events
+that may vary.                                                              going down to p, and up events going up to q. The
+    For this purpose, we generate code for compressing and                  down events that come out of p are applied to q, and
+uncompressing headers, and wrap the protocol stack with                     the up events that come out of q are applied to p, re-
+these two functions. Both functions are generated auto-                     cursively. The up events that come out of p and the
+matically by considering the free variables of the events in                down events that come out of q are merged together to
+the optimization theorems. We then optimize the code of                     form the output events. The state of the composition
+the wrapped protocol stack using the same methodology as                    of p and q is the combined states of p and q. An entire
+above. We have provided generic compression and uncom-                      stack can be composed one layer at a time this way.
+pression theorems, which describe the outcome of optimiz-                3. (Hand-Optimized or HAND) For particular common
+ing a wrapped stack relatively to results of optimizing a reg-              protocol stacks, Ensemble provides carefully opti-
+ular stack, and use them to convert the optimization theo-                  mized bypass code for common paths through the pro-
+rems for the regular stack into optimization theorems for the               tocol stack. These paths were created manually. The
+wrapped stack. All these steps are completely automated.                    stacks are built in the same way as in the functional
+    It should be noted that integrating compression into the                version, but just before events are given to the stack a
+optimization process will always lead to an improvement in                  condition is checked to see if the event can be handled
+the common case, because the optimized code will directly                   by the bypass. The bypass can access the state of the
+generate or analyze events with compressed headers, instead                 various layers in the stack.
+of first creating a full header and then compressing it. Only
+for the non-common case there will be a slight overhead due              4. (Machine-Optimized or MACH) Code generated from
+to compression.                                                             the functional code using the techniques of the previ-
+    All the above steps describe logical operations within the              ous section. The resulting code is used as a bypass
+Nuprl system. In a final step, their results are converted into             much like in the hand-optimized case. Generating code
+OCaml code that can be compiled and linked to the rest of                   from the imperative version is much harder for Nuprl,
+the communication system. To generate this code, we com-                    because the imperative code is harder to formalize than
+pose the code fragments from the four optimization theo-                    the functional code, and should not result in any bene-
+rems into a single program, using the CCPs as conditionals                  fit.
+that select either one of the bypass paths or the normal stack.
+This program is proven to be equivalent to the original stack              (None of these versions leverage concurrency. Ensemble
+in all cases, but generally more efficient in common cases             does supports running each layer in its own thread, but in
+(introducing a slight overhead in the exceptional cases).              practice the context switch and synchronization overheads
+    There may be multiple bypass paths for each layer in               are very large.)
+a stack, resulting in many possible bypasses for the entire                It is important to note that we are optimizing already
+stack. We hope to elaborate this technique into one that               heavily optimized code. That is, the first two optimiza-
+would allow us to detect common combinations at run-time,              tion steps, avoiding garbage collection and marshaling, have
+and generate the optimized code dynamically, using layer               been applied to all four versions.
+optimization theorems for all possible bypass paths. We can                When an application sends a message, it first travels
+then make use of Ensemble’s support for dynamically load-              down the protocol stack to the Ensemble Transport module
+ing layers and switching protocol stacks on the fly [25].              (see Figure 4 in Section 4.1). The Transport module mar-
+                                                                       shals the message into a sequence of bytes before it is sent
+                                                                       out onto the network. At the receiver, the message is passed
+4.2    Performance results                                             through the Transport module, which unmarshals the mes-
+                                                                       sage. The message then travels up the protocol stack, and is
+We will present and compare performance results for four               finally delivered to the application.
+different versions of Ensemble stacks:                                     In case of the hand-optimized version (HAND), the mes-
+                                                                       sage goes through the bypass code instead of the protocol
+  1. (Imperative or IMP) This is the normal version. In this           stack and the Transport module. In case of the machine-
+     case, Ensemble has a central event scheduler. It in-              optimized code (MACH), there is only a bypass for the pro-
+     stantiates each protocol layer individually, and hands            tocol stack, not for Transport. In both cases, the CCPs need
+     events to the layers as they come out of the scheduler.           to be checked first.
+     In the common case that no other events are queued                    In our experiments, the CCPs specify that messages are
+     in the scheduler, an output event is directly passed to           delivered in FIFO order, are not fragmented, and no failure
+
+
+                                                                  88
+                                                     MACH   IMP   FUNC                              HAND        MACH   IMP    FUNC
+             Down Stack                                 9    20      42          Down Stack            2           2    13      14
+             Down Transport                             8    27      30          Down Transport        4           6     4       6
+             Up Transport                               7    20      22          Up Transport          6           7     8       9
+             Up Stack                                   8    14      38          Up Stack              2           4    10      13
+             Total                                     32    81     132          Total                14          19    35      42
+
+                                                     (a)                                                  (b)
+
+
+Table 1. (a) 10-layer stack code latency in µs, for 3 different configurations using 4 byte messages. (b) 4-layer stack
+code latency in µs, for 4 different configurations using 4 byte messages.
+
+                                                     150
+
+
+
+
+                            latency (microseconds)
+                                                                                                    Up Stack
+                                                     100
+                                                                                                    Up Transport
+
+                                                                                                    Down Transport
+                                                      50
+
+                                                                                                    Down Stack
+
+                                                       0
+                                                             4       24      100       1k
+                                                                  message size (bytes)
+
+
+Figure 6. Code latency (10-layer protocol stack) comparison with different sized messages for the MACH, IMP, and
+FUNC configurations.
+
+
+or other membership events occur. In practice, these circum-                        diately sends another message (e.g., a response). If the first
+stances are very common, and in the measurements below                              message is delivered through the bypass code, it assumes
+the outcome of the CCP checks is always the choice to run                           that the next message can be sent through the bypass as well,
+the bypass code. In our case, checking the CCPs takes only                          without checking the CCPs. For many cases this is true, and
+about 3 µs. Thus, even with CCPs for situations that are                            leads to a significant performance improvement. However,
+less common, a significant performance improvement may                              it may not be a correct assumption (e.g., the response may
+be expected.                                                                        need to be fragmented), and therefore the optimization can-
+    We ran our measurements on two UltraSparc stations                              not be generally substituted for the original code). In order
+(300MHz) running Solaris 2.6, connected by a 100 Mbit Eth-                          to compare fairly between the hand-optimized code and the
+ernet. For the latency measurements, we used Solaris’ get-                          machine-generated code for the 4-layer case, we have added
+timeofday(). We ran each test 10,000 times and calcu-                               the same optimization procedure to the machine-generated
+lated the average. Since our experiments only measure code                          code. (This could have been done by Nuprl itself, but we did
+latencies, and do not require system calls, thread switches, or                     it by hand.)
+network communication, the variance in the reported num-
+bers is negligible. We used the OCaml 2.0 native code com-                              In Table 1(a), we show the code latencies involved in
+piler that produces good quality optimized machine code.                            both the 10-layer protocol stack and the Transport module,
+We chose two different Ensemble stacks for our experi-                              for both the up and down event handlers. The latencies are
+ments. Both stacks provide reliable virtually synchronous                           for 4 byte messages. The savings in the Transport module
+delivery of multicast and point-to-point messages. The first                        are mostly due to header compression, resulting in less over-
+stack uses 10 protocol layers and provides, additionally, total                     head in marshaling of headers. Most of the savings in the
+order, flow control, and fragmentation/reassembly. For com-                         Stack processing is due to inlining of the common code path.
+parison with the hand-optimized code we used a much sim-                            In Table 1(b), we show the code latencies for the 4-layer
+pler 4-layer stack, due to the difficulty of hand-optimization.                     stack. The performance improvements are naturally more
+    The hand-optimized code contains an optimization for                            substantial for larger stacks, but even for the small 4-layer
+the case when a process that is delivered a message imme-                           stack a better than two-fold improvement is obtained.
+
+
+                                                                               89
+                                                                                             10-layer stack
+                                                                                       Layer              Down        Up
+                                                                                    partial appl            684      392
+          Events              Original Stack   Optimized Stack
+                                                                                        total               820     1348
+          data mem refs           86293122           50905331                           local             1388      1420
+          ifu ifetch            172272565           100082695                          collect               44     2685
+          ifu ifetch miss          3335271            1631051                            frag               900      144
+          itlb miss                 587083             361307                         pt2ptw                932     4899
+          l2 ifetch               11075483            5525973                          mflow                596      572
+          inst decoder          182715118            98031212                           pt2pt               268     1040
+          ifu mem stall         143921523            76086051                          mnak                 152      428
+          cpu clk unhalted      348157540           199632585                         bottom                300     5052
+                                                                                     total size           6084     17980
+                                                                                MACH (from 10 layers)     3592      2108
+
+                                   (a)                                                             (b)
+
+
+Table 2. (a) Data collected from Pentium performance monitoring counters for 10,000 send/recv rounds. (b) Object
+code sizes (in bytes) of the protocol layers and the generated code. The sizes have been separated for code dealing
+with down going events (such as Send), and upgoing events (such as Deliver).
+
+
+    These numbers do not include the network latency,                 from 34816 to 19963, and the number of TLB misses from
+which is about 80 µs in this case (using Ethernet). For the           an average of 59 down to 36.
+10-layer stack, this means a total improvement of protocol                We believe most of this is due to partial evaluation and
+processing in end-to-end communication from 50% to 29%,               inlining of code. To show what effect this had on code size,
+while for the 4-layer stack the improvement is from 30%               we show, in Table 2(b), the object code sizes of both the up
+down to 19%.                                                          event handler and the down event handler for each protocol
+    The performance improvements are more substantial for             layer, as well as the size of the generated bypass handlers for
+low latency networks than for high latency ones. For our              a 10-layer stack.
+Ethernet, using the 10-layer stack, the end-to-end latency
+improvement due to our optimization is 30%. On VIA (with
+10 µs link latency), this would be 54%. For the 4-layer stack,        5   Related work
+the improvement is 14% on Ethernet, while 36% on VIA.
+    The hand-optimized code performs 25% better than the              The CMU Fox project [3] also uses an ML dialect, an exten-
+machine generated code. We believe that this difference can           sion of Standard ML, for building protocol stacks. In con-
+be attributed to having integrated the Transport module into          trast to our project, Fox has built standard TCP/IP protocol
+the hand-optimized code.                                              software and a web server on top of that. The broader goal
+                                                                      of the Fox project is to investigate the extent to which high
+    In Figure 6, we show the same processing overheads of             level languages like ML, and particularly their support for
+the 10-layer stack for different message sizes, 4, 24, 100,           modularity, are suitable for systems programming.
+and 1024 bytes. For each size, there are three bars: from left            Integrated Layer Processing (ILP) [6] is an approach to
+to right MACH, IMP, and FUNC. In each bar, from top to                reduce the overhead of layered protocols [1, 4]. By combin-
+bottom, we show the overheads of going down the protocol              ing the packet manipulation of each layer, the total amount of
+stack, down the transport, up the transport, and up the proto-        memory accesses are reduced, and data locality is improved.
+col stack. As may be observed, these processing overheads             The Filter Fusion Compiler (FFC) [22] implements ILP us-
+are mostly independent of message size. This is because we            ing partial evaluation. FFC has only been applied to very
+avoid copying by making use of the scatter-gather interfaces          simple protocols, and the code generated by FFC has to be
+to socket communication.                                              hand-modified to get good performance. ILP is most ap-
+    To get more insight of micro-performance characteris-             propriate for protocols that do many “data-touching” opera-
+tics, we did some measurements using the performance mon-             tions (checksum computation, encryption, etc.) on large data
+itoring counters on a Pentium II machine [12] running Linux           packets. In our setting, many packets are quite small, and a
+2.2.12. The machine we used has 32KB internal cache                   large amount of protocol latency is introduced by protocol
+(16/16KB instructional/data cache), 512KB L2 cache and                abstraction boundaries.
+128MB RAM.                                                                Our work presents a technique for optimizing mainly
+    In Table 2(a), we show some output from the perfor-               non-data touching operations, similar to path-inlining [21].
+mance monitoring counters. The result is for 10,000 rounds            Path-inlining turns out to be difficult because of message or-
+of message exchanges. In particular, we found that in a               dering constraints, and it is out of the reach of traditional
+send/receive loop, the number of CPU cycles was reduced               compiler optimization techniques because of the need for
+
+
+                                                                 90
+path constraints that cross component boundaries. Formal                6. Using a formal tool. Hand-checking and hand-
+tools are able to analyze global properties, and we use them               optimizing even only a handful of components is an
+for synthesizing common code paths.                                        arduous task. Our approach will only scale with ap-
+    Other work has applied formal tools. Esterel [5] is an im-             propriate tools such as Nuprl.
+perative, synchronous protocol specification language. The
+Esterel compiler is used to convert the protocol specification          7. Using in-house expertise from both systems and for-
+into a sequential finite automaton, from which efficient C                 mal groups. Neither the Ensemble nor the Nuprl group
+code is generated. Esterel was used to specify a large sub-                alone could have accomplished what we have.
+set of the TCP protocol, and to generate an implementation,
+but a general problem with this approach is that it does not               It should be noted that Ensemble was created as a ref-
+scale easily to arbitrary protocol stacks.                            erence implementation of Horus [26], which was written in
+    Finding common execution paths is not always trivial.             C. That is, Ensemble was designed to be verified, and there
+Packet classifiers help analyzing common paths in commu-              was initially no plan to retire Horus. We consider it infea-
+nication systems [2, 9, 24]. In operating system research             sible to verify a complex system such as Horus which was
+there is related work on locating and optimizing common               not designed for verification. Because of the successful opti-
+paths. Synthesis [19], which influenced systems as Scout,             mization approach in Ensemble (Ensemble is now generally
+Aegis, SPIN and Synthetix, uses a run-time code generator             as fast or even faster than Horus), the development of Horus
+to optimize the most frequently used kernel routines. [23]            was stopped. We have not yet been able to generate a ma-
+describes work on optimizing Synthetix kernel functions by            chine proof of a non-trivial group communication protocol,
+reducing the length of common paths.                                  but believe that we will complete a proof of one of Ensem-
+                                                                      ble’s total ordering protocols shortly.
+                                                                           We believe that it may be possible to use our approach
+6    Conclusion                                                       in other complex systems such as file systems, atomic trans-
+                                                                      action protocols, and memory paging hierarchies, and per-
+This paper described how correct protocol stacks can be con-          haps eventually an entire operating system kernel. Because
+figured from Ensemble’s micro-protocol components, and                of its logical foundation and the high level of abstraction, our
+how the performance of the resulting system can be im-                optimization techniques are relatively independent from the
+proved significantly using the formal tool Nuprl. Although            Ensemble toolkit. The methodology described here can be
+we chose a limited domain — all components are protocol               applied to other modular systems whose modules and com-
+layers, and all configurations are stacks of these — we be-           position mechanisms can be described semantically. As for
+lieve that our approach could generalize and scale to more            correctness proofs, the THE operating system kernel [8] was
+general configuration and component types.                            built from layered components and proven correct, by hand,
+    Even for the limited domain, we feel that the following           in 1968. (THE was also designed with verification in mind.)
+ingredients were necessary to make our project a success:             We believe it is crucial that the system be built from compo-
+                                                                      nents with well-specified behaviors, and that the components
+    1. Using small and simple components. Smaller compo-              are programmed in a language with a formal semantics.
+       nents are easier to reason about. On the other hand,                In our experience, getting programmers to write specifi-
+       components should be large enough so that their con-           cations is a hard task. (Note that this does not hinder opti-
+       figurations do not become overly complex.                      mization, which is now a push-button technology that does
+                                                                      not require specifications other than the code itself.) We still
+    2. Using an event-driven, mostly functional implementa-           have a long way to go with writing all the abstract specifica-
+       tion of components. Imperative implementations are             tions for the Ensemble layers. The prospect of writing over
+       much less suitable to formal analysis and transforma-          60 such specifications is daunting. Fortunately, many layers
+       tion.                                                          have similar specifications. Compare, for example, Figures
+                                                                      2(a) and (b). We are developing an object-oriented technique
+    3. Using a well-defined configuration operation on com-
+                                                                      of extending existing specifications. For example, FifoNet-
+       ponents. The semantics of a configuration operation
+                                                                      work may be generated from LossyNetwork by adding some
+       on components has to have a formal meaning. (In our
+                                                                      state and a few conditions and actions.
+       case, a configuration of protocol components creates a
+                                                                           See http://www.cs.cornell.edu/Info/Projects/NuPrl and
+       new protocol component.)
+                                                                      http://www.cs.cornell.edu/Info/Projects/Ensemble for more
+    4. Using a language with a formal semantics. Languages            information.
+       which do not have a formal semantics (e.g., C) do not
+       lend themselves to formal manipulation. (There is a
+       rich subset of Java that has a formal semantics.)              Acknowledgments
+    5. Using I/O automata as a specification language. IOA            We would like to thank Mark Bickford, Alan Fekete, and
+       have the look and feel of ordinary computer programs,          Nancy Lynch for very helpful discussions. We also want to
+       and can be easily understood by programmers who                thank the anonymous SOSP reviewers, and our “shepherd”
+       have no background in computer science theory.                 Peter Lee for numerous improvements made to our paper.
+
+
+                                                                 91
+References                                                          [14] K REITZ , C. Formal reasoning about communication
+                                                                         systems I: Embedding ML into type theory. Tech. Rep.
+ [1] A BBOTT, M., AND P ETERSON , L.         Increasing                  TR97-1637, Cornell University, June 1997.
+     network throughput by integrating protocol layers.
+                                                                    [15] K REITZ , C. Automated fast-track reconfiguration of
+     IEEE/ACM Transactions on Networking, 1(5):600–610
+                                                                         group communication systems. In 5th International
+     (Oct. 1993).
+                                                                         Conference on Tools and Algorithms for the Construc-
+ [2] B AILEY, M., G OPAL , B., PAGELS , M., P ETERSON ,                  tion and Analysis of Systems (1999), R. Cleaveland,
+     L., AND S ARKAR , P. PATHFINDER: A pattern-based                    Ed., no. 1579 in Lecture Notes on Computer Science,
+     packet classifier. In Proceedings of the First Sympo-               Springer-Verlag, pp. 104–118.
+     sium on Operating Systems Design and Implementa-
+                                                                    [16] K REITZ , C., H AYDEN , M., AND H ICKEY, J. A proof
+     tions (Apr. 1994), pp. 115–123.
+                                                                         environment for the development of group communi-
+ [3] B IAGIONI , E. A structured TCP in Standard ML. In                  cation systems. In 15th International Conference on
+     Proceedings of the ’94 ACM SIGCOMM Conference                       Automated Deduction (1998), C. . H. Kirchner, Ed.,
+     (London, UK, Aug. 1994), pp. 36–45.                                 no. 1421 in Lecture Notes in Artificial Intelligence,
+ [4] B RAUN , T., AND D IOT, C. Protocol implementation                  Springer-Verlag, pp. 317–332.
+     using integrated layer processing. In Proceedings of           [17] L EROY, X. The OCAML System. INRIA, Rocquen-
+     the ACM SIGCOMM Conference (1995), pp. 151–161.                     court, France, 1998. http://pauillac.inria.fr/ocaml.
+ [5] C ASTELLUCCIA , C., AND DABBOUS , W. Generat-                  [18] LYNCH , N. Distributed Algorithms. Morgan Kauf-
+     ing efficient protocol code from an abstract specifica-             mann, San Francisco, 1987.
+     tion. In Proceedings of the ACM SIGCOMM Confer-
+                                                                    [19] M ASSALIN , H. Synthesis: An Efficient Implementa-
+     ence (New York, 1996), pp. 60–72.
+                                                                         tion of Fundamental Operating System Services. PhD
+ [6] C LARK , D., AND T ENNENHOUSE , D. Architectural                    thesis, Computer Science Department, Columbia Uni-
+     consideration for a new generation of protocols. In                 versity, 1992.
+     Proceedings of the ACM SIGCOMM Conference (Sept.
+                                                                    [20] M ILNER , R., TOFTE , M., AND H ARPER , R. The Def-
+     1990), pp. 200–208.
+                                                                         inition of Standard ML. MIT Press, Cambridge, MA,
+ [7] C ONSTABLE , R., A LLEN , S., B ROMLEY, H.,                         1989.
+     C LEAVELAND , W., C REMER , J. F., H ARPER , R.,
+                                                                    [21] M OSBERGER , D., P ETERSON , L., B RIDGES , P., AND
+     H OWE , D., K NOBLOCK , T., M ENDLER , N., PANAN -
+                                                                         O’M ALLEY, S. Analysis of techniques to improve pro-
+     GADEN , P., S ASAKI , J., AND S MITH , S. Implement-
+                                                                         tocol processing latency. In Proceedings of the ACM
+     ing Mathematics with the NuPRL proof development
+                                                                         SIGCOMM Conference (New York, 1996), pp. 73–84.
+     system. Prentice Hall, 1986.
+                                                                    [22] P ROEBSTING , T., AND WATTERSON , S. Filter fu-
+ [8] D IJKSTRA , E. The structure of the THE multiprogram-
+                                                                         sion. In Proceedings of the 23th Annual Symposium on
+     ming system. Communications of the ACM, 11(5):341–
+                                                                         Principles of Programming Languages (St. Petersburg
+     346 (May 1968).
+                                                                         Beach, Florida, Jan. 1996), pp. 119–130.
+ [9] E NGLER , D., AND K AASHOEK , M. DPF: Fast, flex-
+                                                                    [23] P U , C., AUTREY, T., B LACK , A., C ONSEL , C.,
+     ible message demultiplexing using dynamic code gen-
+                                                                         C OWAN , C., I NOUYE , J., K ETHANA , L., WALPOLE ,
+     eration. In Proceedings of the ACM SIGCOMM Con-
+                                                                         J., AND Z HANG , K. Optimistic incremental special-
+     ference (1996), pp. 53–59.
+                                                                         ization. In Proceedings of the 15th ACM Symposium
+[10] H AYDEN , M. The Ensemble System. PhD thesis, Cor-                  on Operating Systems Principles (Dec. 1995), pp. 314–
+     nell University, Jan. 1998.                                         321.
+[11] H ICKEY, J., LYNCH , N., AND VAN R ENESSE , R.                 [24] VAN R ENESSE , R. Masking the overhead of protocol
+     Specifications and proofs for Ensemble layers. In                   layering. In Proceedings of the ACM SIGCOMM Con-
+     5th International Conference on Tools and Algorithms                ference (Aug. 1996), pp. 96–104.
+     for the Construction and Analysis of Systems (1999),
+                                                                    [25] VAN R ENESSE , R., B IRMAN , K., H AYDEN , M.,
+     R. Cleaveland, Ed., no. 1579 in Lecture Notes on Com-
+                                                                         VAYSBURD , A., AND K ARR , D. Building adaptive
+     puter Science, Springer-Verlag, pp. 119–133.
+                                                                         systems using Ensemble. Software—Practice and Ex-
+[12] I NTEL C ORPORATION , S ANTA C LARA , CA, USA.                      perience, 28(9):963–979 (July 1998).
+     Intel Architecture Software Developer’s Manual, 1999.
+                                                                    [26] VAN R ENESSE , R., B IRMAN , K., AND M AFFEIS , S.
+     http://developers.intel.com/design/pentiumii/manuals,
+                                                                         Horus: A flexible group communication system. Com-
+     order numbers 243190, 243191, 243192.
+                                                                         munications of the ACM, 39(4):76–83 (Apr. 1996).
+[13] K AY, J., AND PASQUALE , J. The importance of non-
+                                                                    [27] VON E ICKEN , T., AND VOGELS , W. Evolution of
+     data touching processing overheads in TCP/IP. In Pro-
+                                                                         the Virtual Interface Architecture. IEEE Computer,
+     ceedings of the ACM SIGCOMM Conference (Sept.
+                                                                         31(11):61–68 (Nov. 1998).
+     1993), pp. 259–268.
+
+
+                                                               92
+

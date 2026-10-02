@@ -1,0 +1,564 @@
+      R E S E A RCH FEATURE
+
+
+
+
+                           Yima: A Second-
+                           Generation Continuous
+                           Media Server
+                            Yima, a scalable real-time streaming architecture, incorporates
+                            lessons learned from earlier research prototypes to enable advanced
+                            continuous media services.
+
+
+
+     Cyrus
+
+
+                           A
+                                     pplications such as news on demand, dis-         We call our system Yima, a name denoting the
+     Shahabi                         tance learning, e-commerce, and scientific    first man in ancient Iranian religion. While Yima
+                                     visualization all store, maintain, and        has not achieved the refinement of commercial solu-
+     Roger
+                                     retrieve large volumes of real-time data      tions, it is operational and incorporates lessons
+     Zimmermann                      over a network. These data are denoted        learned from first-generation research prototypes.1,2
+     Kun Fu                collectively as continuous media, or CM. Video          Yima distinguishes itself from other similar research
+     Shu-Yuen              and audio objects are popular examples; haptic and      efforts in the following:
+     Didi Yao              avatar data are less familiar types. CM data require
+     University of         a streaming architecture that can, first, manage          • complete distribution with all nodes running
+     Southern California   real-time delivery constraints. Failure to meet these       identical software and no single points of fail-
+                           constraints on CM data disrupts the display with            ure;
+                           “hiccups.” Second, the architecture must address          • efficient online scalability allowing disks to be
+                           the large size of CM objects. A two-hour MPEG-2             added or removed without interrupting CM
+                           video with a bandwidth requirement of 4 megabits            streams;
+                           per second is 3.6 gigabytes in size.                      • synchronization of several streams of audio,
+                              The currently available commercial implementa-           video, or both within one frame (1/30 second);
+                           tions of CM servers fall into two broad categories:       • independence from media types;
+                                                                                     • compliance with industry standards;
+                             • low-cost, single-node, consumer-oriented sys-         • selective retransmission protocol; and
+                               tems serving a limited number of users; and           • multithreshold buffering flow-control mecha-
+                             • multinode, carrier-class systems such as high-          nism to support variable bit-rate (VBR) media.
+                               end broadcasting and dedicated video-on-
+                               demand systems.                                       Yima is also a complete end-to-end system that
+                                                                                   uses an IP network with several supportable client
+                             RealNetworks, Apple Computer, and Microsoft           types. This feature distinguishes it from previous
+                           product offerings fit into the consumer-oriented cat-   research that focused heavily on server design.
+                           egory, while SeaChange and nCube offer solutions
+                           oriented toward carrier-class systems. While com-       SYSTEM ARCHITECTURE
+                           mercial systems ordinarily use proprietary technol-       Figure 1 shows the overall Yima system archi-
+                           ogy and algorithms, making it difficult to compare      tecture. In our prototype implementation, the server
+                           their products with research prototypes, we have        consists of an eight-way cluster of rack-mountable
+                           designed and developed a second-generation CM           Dell PowerEdge 1550 Pentium III 866-MHz PCs
+                           server that demonstrates several advanced concepts.     with 256 Mbytes of memory running Red Hat
+
+56                    Computer                                                                                 0018-9162/02/$17.00 © 2002 IEEE
+ Server components                                                                                                              Figure 1. Yima sys-
+                                         Fast Ethernet or Gigabit Ethernet 1,000 Mbps                                           tem architecture.
+                           Ethernet
+                           switch                                                                                               The prototype imple-
+        Ethernet                                      Ethernet                                                                  mentation uses off-
+        100 Mbps                                      100 Mbps                                                                  the-shelf commodity
+                                                                                                                                hardware compo-
+            Node 0     Node 1       Node 2   Node N
+                                                                                                                                nents and industry
+                                                           Multiple 100-Mbps NICs
+   Personal                                                                                                                     standards end to
+   computer
+                                              ...          PCI bus; 1,064 Mbps                                                  end.
+ (for example,                                             Ultra160 SCSI controller
+   866 MHz;
+  256 Mbytes)
+                                                               up to 160 Mbytes/s               Internet backbone routers
+
+                  Disk 0   Disk 1      Disk 2 ... Disk N
+
+                 Disks: high-performance, Ultra160 SCSI         RTP/UDP               Command and Control
+                     (for example, Seagate Cheetah)           Media data                  RTSP/TCP
+
+
+
+                                                                                    Client components
+                 Playout
+                 buffer
+             B                      WMO                                                   User interface
+                                    Overflow watermark (PAUSE issued)
+                                                                                 RTSP and RTP
+                                    Slowdown (for example, ∆p + 20%)               controller
+
+      Amount                        Slowdown (for example, ∆p + 10%)                          Playback
+        of                          RESUME issued (∆p set to default)          Playout
+       data                                                                    buffer        Video/audio
+                                    Speedup (for example, ∆p − 10%)                            decoder
+                                    Speedup (for example, ∆p − 20%)
+                                    Underflow watermark                    RTSP = Real-time streaming protocol
+                                    WMU                                    TCP = Transmission-control protocol
+             0
+
+
+
+
+Linux. Sixteen 36-Gbyte Seagate Cheetah hard-disk                shows the different media types that Yima currently
+drives store the media data and connect to the                   recognizes. One unusual type is panoramic video
+server nodes via Ultra160 small computer system                  with 10.2-channel audio.
+interface (SCSI) channels.
+   The nodes in the cluster communicate with each                SERVER DESIGN CHALLENGES
+other and send the media data via multiple 100-                    The servers for delivering isochronous multime-
+Mbps Fast Ethernet connections. Each server is                   dia over IP networks must store the data efficiently
+attached to a local Cabletron 6000 switch with either            and schedule the data retrieval and delivery precisely
+one or two Fast Ethernet lines. The local switch con-            before transmission. We studied both master-slave
+nects to both a WAN backbone for serving distant                 and bipartite design approaches in the Yima-1 and
+clients and a LAN environment for local clients. Our             Yima-2 CM servers, respectively. These approaches
+testbed also includes server clusters at other remote            share many features that address design challenges
+locations, for example, Metromedia Fiber Network                 in this domain. They differ mainly in the logical
+in El Segundo, California, and Information Sciences              interconnection topology between cluster nodes.
+Institute East in Arlington, Virginia.
+   Choosing an IP-based network keeps the per-port               Data placement and scheduling
+equipment cost low and makes the system imme-                       There are two ways to assign data blocks to the
+diately compatible with the public Internet.                     magnetic disk drives that form the storage system:
+   The current prototype implements clients on stan-             in a round-robin placement3 or randomly.4 Tra-
+dard Pentium III PC platforms, but we could also                 ditionally, round-robin placement uses a cycle-based
+port them to digital television set-top boxes. The               approach for resource scheduling to guarantee a
+client software, Yima Presentation Player, runs on               continuous display, while random placement uses
+either Red Hat Linux or Windows NT. Structured                   a deadline-driven approach.
+into several components, the player lets various soft-              In general, the round-robin cycle-based approach
+ware and hardware decoders be plugged in. Table 1                provides high throughput with little wasted band-
+
+                                                                                                                            June 2002                  57
+            Table 1. Yima client media support.
+                                                                         Video
+            Media                                  Operating   Minimum resolution          Audio           Delivery
+            type        Decoder       Channels     system      CPU speed (in pixels)       encoding        rate
+
+            DivX        Software      1 video,     Linux       500 MHz     720 × 480       MP3             <1 Mbps
+            MPEG-4                    2 audio
+            MPEG-2      Creative      1 video,     Linux       200 MHz     720 × 480       Dolby AC-3      6-8 Mbps
+            and Dolby   Dxr2 DVD      5.1 audio
+            Digital
+            MPEG-2      Software      1 video      Linux       >2 × 1.5    1,920 × 1,080                   19.4 Mbps
+            HD                                                 GHz
+            MPEG-2      Vela          1 video,     Linux       500 MHz     1,920 × 1,080   Dolby AC-3 or   19.4-45 Mbps
+            HD          Research      10.2 audio                                           uncompressed    and 11 Mbps
+                        CineCast HD                                                        PCM
+            Panoramic   Vela          5 video,     Windows     2 × 400     (5 × 720) ×     Uncompressed    4 × 5 Mbps
+            MPEG-2      Research      10.2 audio   NT          MHz          480 each       PCM             and 11 Mbps
+                        CineCast
+
+
+
+          width for video objects that are retrieved sequen-            As Figure 1 shows, the Yima server architecture
+          tially, such as a feature-length movie. The startup        interconnects storage nodes via a high-speed net-
+          latency for an object might be large under heavy           work fabric that can expand as demand increases.
+          loads, but object replication can reduce it.5              This modular architecture makes it easy to upgrade
+             The random deadline-driven approach supports            older PCs and add new nodes.
+          fewer optimizations, so it could lower throughput,            Applications that rely on large-scale CM servers,
+          but several benefits outweigh this potential draw-         such as video-on-demand, require continuous oper-
+          back.6 First, random data placement supports mul-          ation. To achieve high reliability and availability
+          tiple delivery rates with a single server block size;      for all data stored in the server, Yima uses disk
+          it also simplifies the scheduler design, supports          merging7 to implement a parity-based data-redun-
+          interactive applications, and automatically achieves       dancy scheme that, in addition to providing fault
+          the average transfer rate with multizoned disks.           tolerance, can also take advantage of a heteroge-
+          Finally, random placement reorganizes data more            neous storage subsystem. Disk merging presents a
+          efficiently when the system scales up or down.             virtual view of logical disks on top of the actual
+             Random placement can require a large amount             physical storage system, which might consist of
+          of metadata to store and manage each block’s loca-         disks that provide different bandwidths and storage
+          tion in a centralized repository, for example, in          space. This abstraction allows a system’s applica-
+          tuples of the form <nodex, disky>. Yima avoids this        tion layers to assume a uniform characteristic for all
+          overhead by using a pseudorandom block place-              the logical disks, which in turn allows using con-
+          ment. A seed value initiates a sequence of numbers         ventional scheduling and data placement algo-
+          that can be reproduced by using the same seed              rithms across the physical storage system.
+          value. By placing blocks in a pseudorandom fash-
+          ion across the disks, the system can recompute the         Data reorganization
+          block locations. Since Yima numbers disks glob-               Computer clusters try to balance load distribu-
+          ally across the server nodes, it will assign blocks to     tion across all nodes. Over time, both round-robin
+          random disks across different nodes.                       and random data-placement techniques distribute
+             Hence, Yima stores only the seed for each file          data retrievals evenly across all disk drives. When
+          object instead of locations for every block.               a system operator adds a node or disk, however,
+                                                                     the system must redistribute the data to avoid par-
+          Scalability, heterogeneity,                                titioning the server. Reorganizing the blocks
+          and fault resilience                                       involves much less overhead when the system uses
+            Any CM server design must scale to support               random rather than round-robin placement. For
+          growth in user demand or application requirements.         example, with round-robin striping, adding or
+          Several techniques address this requirement, includ-       removing a disk requires the relocation of almost all
+          ing the use of multidisk arrays. However, if the           data blocks. Randomized placement requires mov-
+          design connected all the disks to a single large com-      ing only a fraction of the blocks from each disk to
+          puter, the I/O bandwidth constraints would limit           the added disk—just enough to ensure that the
+          the overall achievable throughput—hence, Yima’s            blocks are still randomly placed to preserve the load
+          architecture uses multiple computers, or multinodes.       balance.
+
+58   Computer
+                                                                                                                                                       Figure 2. Client
+                                 Client                                                               Client                                           session view of the
+                                                                                                                                                       Yima server. (a) Data
+                                                                                                                                                       is sent through the
+                                                                                                                                                       master node in
+                                                                                                                                                       Yima-1, and (b) data
+   RTSP server     RTSP server            RTSP server   RTSP server     RTSP server     RTSP server             RTSP server       RTSP server
+                                                                                                                                                       is sent from all the
+   RTP server      RTP server             RTP server    RTP server      RTP server      RTP server              RTP server        RTP server
+                                                                                                                                                       nodes in Yima-2.
+       Scheduler    Scheduler              Scheduler     Scheduler          Scheduler    Scheduler                Scheduler        Scheduler
+       File I/O      File I/O               File I/O      File I/O          File I/O      File I/O                File I/O          File I/O
+
+
+                                                                                                               Active modules       Data request
+
+ (a)                                                                  (b)                                      Inactive modules     Data
+
+
+
+
+   Yima uses a pseudorandom number generator to                          A master server node is a client’s point of con-
+produce a random, yet reproducible, number                            tact during a session. We define a session as a com-
+sequence to determine block locations. Because                        plete RTSP transaction for a CM stream. When a
+some blocks must move to the added disks when                         client wants to request a data stream using RTSP,
+the system scales up, Yima cannot use the previous                    it connects to a master server node, which in turn
+pseudorandom number sequence to find the blocks;                      brokers the request to the slave nodes. If multiple
+therefore, Yima must derive a new random number                       master nodes exist in the cluster, this assignment is
+sequence. We use a composition of random func-                        decided based on a round-robin domain name ser-
+tions to determine this new sequence. Our                             vice (RR-DNS) or a load-balancing switch. A
+approach—termed Scaling Disks for Data Arranged                       pseudorandom number generator manages the
+Randomly (Scaddar)—preserves the sequence’s                           locations of all data blocks.
+pseudorandom properties, resulting in minimal                            Using a distributed file system obviates the need
+block movements and little overhead in the com-                       for applications to be aware of the storage system’s
+putation of new locations.8 The Scaddar algorithm                     distributed nature. Even applications designed for
+can support disk scaling while Yima is online.                        a single node can to some degree take advantage of
+                                                                      this cluster organization. The Yima-1 media stream-
+Multinode server architecture                                         ing server component, based on Apple’s Darwin
+   We built the Yima servers from clusters of server                  Streaming Server (DSS) project (http://www.open
+PCs called nodes. A distributed file system provides                  source.apple.com/projects/streaming/), assumes that
+a complete view of all the data on every node with-                   all media data reside in a single local directory.
+out requiring individual data blocks to be repli-                     Enhanced with our distributed file system, multiple
+cated, except as required for fault tolerance.7 A                     copies of the DSS code—each copy running on its
+Yima cluster can run in either a master-slave or                      own master node—can share the same media data.
+bipartite mode.                                                       This also simplifies our client design since it sends
+   Master-slave design (Yima-1). With this design, an                 all RTSP control commands to only one server
+application running on a specific node operates on                    node.
+all local and remote files. Operations on remote files                   Finally, Yima-1 uses a pause-resume flow-con-
+require network access to the corresponding node.                     trol technique to deliver VBR media. A stream is
+The Yima-1 software consists of two components:                       sent at a rate of either RN or zero megabits per sec-
+                                                                      ond, where RN is an estimated peak transfer rate
+  • the Yima-1 high-performance distributed file                      for the movie. The client issues pause-and-resume
+    system, and                                                       commands to the server depending on how full the
+  • the Yima-1 media streaming server.                                client buffer is. Although the pause-resume design
+                                                                      is simple and effective, its on-off nature can lead to
+   As Figure 2a shows, the distributed file system                    bursty traffic.
+consists of multiple file I/O modules located on each                    With the Yima-1 architecture, several major per-
+node. The media-streaming server itself is com-                       formance problems offset the ease of using clus-
+posed of a scheduler, a real-time streaming proto-                    tered storage, such as a single point of failure at the
+col (RTSP) module, and a real-time protocol (RTP)                     master node and heavy internode traffic. These
+module. Each Yima-1 node runs the distributed file                    drawbacks motivated the design of Yima-2, which
+system, while certain nodes also run the Yima-1                       provides a higher performing and more scalable
+media-streaming server. A node running only the                       solution for managing internode traffic.
+file I/O module has only slave capabilities, while a                     Bipartite design (Yima-2). We based Yima-2’s bipar-
+node that runs both components has master and                         tite model on two groups of nodes: a server group
+slave capabilities.                                                   and a client group.
+
+                                                                                                                                                   June 2002                   59
+                                 With Yima-1, the scheduler, RTSP, and             CLIENT SYSTEMS
+      Yima-2 offers the       RTP    server modules are all centralized on a         We built the Yima Presentation Player as a client
+                              single master node from the viewpoint of a           application to demonstrate and experiment with
+         flexibility of       single client. Yima-2 expands on the decen-          our Yima server. The player can display a variety
+     delivering any data      tralization by keeping only the RTSP mod-            of media types on both Linux and Windows plat-
+       type while still       ule centralized—again from the viewpoint of          forms. Clients receive streams via standard RTSP
+      being compatible        a single client—and parallelizing the sched-         and RTP communications.
+                              uling and RTP functions, as Figure 2b shows.
+            with the
+                              In Yima-2, every node retrieves, schedules,          Client buffer management
+      MPEG-4 industry         and sends its own local data blocks directly            A circular buffer in the Yima Presentation Player
+           standard.          to the requesting client, thereby eliminating        reassembles VBR media streams from RTP pack-
+                              Yima-1’s master-node bottleneck. These               ets that are received from the server nodes.
+                              improvements significantly reduce internode          Researchers have proposed numerous techniques
+                              traffic.                                             to smooth the variable consumption rate RC by
+                           Although the bipartite design offers clear advan-       approximating it with a number of constant-rate
+                        tages, its realization imposes several new chal-           segments. Implementing such algorithms at the
+                        lenges. First, clients must handle receiving data          server side, however, requires complete knowledge
+                        from multiple nodes. Second, we replaced the               of RC as a function of time.
+                        original DSS code component with a distributed                We based our buffer management techniques on
+                        scheduler and RTP server to achieve Yima-2’s               a flow-control mechanism so they would work in
+                        decentralized architecture. Last, Yima-2 requires          a dynamic environment. A circular buffer of size
+                        a flow-control mechanism to prevent client buffer          B accumulates the media data and keeps track of
+                        overflow or starvation.                                    several watermarks including buffer overflow
+                           With Yima-2, each client maintains contact with         WMO and buffer underflow WMU. The decoding
+                        one RTSP module throughout a session for control           thread consumes data from the same buffer. Two
+                        information. For load-balancing purposes, each             schemes, pause/resume and ∆p, control the data
+                        server node can run an RTSP module, and the deci-          flow.
+                        sion of which RTSP server to contact remains the              Pause-resume. If the data in the buffer reaches
+                        same as in Yima-1: RR-DNS or switch. However,              WMO, the client software pauses the data flow
+                        contrary to the Yima-1 design, a simple RR-DNS             from the server. The playback will continue to con-
+                        cannot make the server cluster appear as one node          sume media data from the buffer.
+                        since clients must communicate with individual                When the data in the buffer reaches the under-
+                        nodes for retransmissions. Moreover, if an RTSP            flow watermark WMU, the stream from the server
+                        server fails, sessions are not lost. Instead, the system   resumes. However, the buffer must set WMO and
+                        reassigns the sessions to another RTSP server, with        WMU with safety margins that account for net-
+                        no disruption in data delivery.                            work delays. Consequently, if the data delivery rate
+                           We adapted the MPEG-4 file format as specified          (RN) is set correctly, the buffer will not underflow
+                        in MPEG-4 Version 2 for the storage of media               while the stream is resumed.
+                        blocks. This flexible-container format is based on            Although the pause/resume technique is a simple
+                        Apple’s QuickTime file format. In Yima-2, we               and effective design, if pause and resume actions
+                        expanded on the MPEG-4 format by allowing                  coincide across multiple sessions, bursty traffic will
+                        encapsulation of other compressed media data such          become a noticeable effect.
+                        as MPEG-2. This offers the flexibility of delivering          Client-controlled ∆p. ∆p is the interpacket delivery
+                        any data type while still being compatible with the        time the schedulers use to transmit packets to the
+                        MPEG-4 industry standard.                                  client. Schedulers use the network time protocol
+                           To avoid bursty traffic caused by Yima-1’s              (NTP) to synchronize time across nodes. Using a
+                        pause/resume transmission scheme and still                 common time reference and each packet’s time
+                        accommodate VBR media, the client sends feed-              stamp, server nodes send packets in sequence at
+                        back to make minor adjustments to the data                 timed intervals.
+                        transmission rate in Yima-2. By sending occa-                 The client fine-tunes the delivery rate by updat-
+                        sional slowdown or speedup commands to the                 ing the server with new ∆p values based on the
+                        Yima-2 server, the client can receive a smooth             amount of data in its buffer. Fine-tuning is achieved
+                        data flow by monitoring the amount of data in              by using multiple watermarks in addition to WMO
+                        its buffer.                                                and WMU, as Figure 1 shows.
+
+60                 Computer
+       PCM audio                      Trigger                                     12 channels of PCM audio (sampling rate: 48,000)
+                        Yima
+       (11 Mbps)                       unit
+                        audio                     2 optical TOSlink connections
+        Network       client PC                 (max. 8 digital audio channels each)
+       connection                                                                                     Audio D/A
+                      Sound card
+     to Yima server                                                                                   converter
+
+                                                CineCast
+                                   Ultra SCSI   MPEG-2                                          10.2 channels of audio
+                                                  quad
+     MPEG-2 video       Yima                    decoder                                           Audio preamplifier
+      (5 x 4 Mbps)      video                                                                        Audio power
+        Network       client PC                                                                       amplifier
+       connection     SCSI card                 CineCast
+     to Yima server                             MPEG-2
+                                                  quad                                        To additional
+                                   Ultra SCSI
+                                                decoder                                       speakers and
+                                                                                               subwoofers
+                                                           NTSC           NTSC
+                                                           video          video
+                                   Genlock                Panoramic real-time
+                                    Unit
+                                                       video stitching equipment
+                                                         (or separate displays)
+                                                                                        Head-mounted display
+
+
+
+
+                                                            Multiscreen display
+
+
+                                                               Subwoofers
+
+
+
+                                                                                                                             Figure 3. Panoramic
+  When the level of data in the client buffer              channel Sony-Philips Digital Interface (SP-DIF) dig-
+                                                                                                                             video and 10.2-
+reaches a watermark, the client sends a corre-             ital audio output terminal.
+                                                                                                                             channel audio play-
+sponding ∆p speedup or slowdown command to                    With the emergence of MPEG-4, we began
+                                                                                                                             back system block
+maintain the amount of data within the buffer. The         experimenting with a DivX software decoder.9
+                                                                                                                             diagram. One Yima
+buffer smoothes out any fluctuations in network            MPEG-4 provides a higher compression ratio than
+                                                                                                                             client renders five
+traffic or server load imbalance that might delay          MPEG-2. A typical 6-Mbps MPEG-2 media file
+                                                                                                                             channels of syn-
+packets. Thus, the client can control the delivery         may only require an 800-Kbps delivery rate when
+                                                                                                                             chronized video in
+rate of received data to achieve smoother delivery,        encoded with MPEG-4. We delivered an MPEG-4
+                                                                                                                             a mosaic of 3,600 ×
+prevent bursty traffic, and keep a constant level of       video stream at near NTSC quality to a residential
+                                                                                                                             480 pixels while
+buffer data.                                               client site via an ADSL connection.10
+                                                                                                                             another Yima client
+                                                                                                                             renders 10.2 chan-
+Player media types                                         HDTV client
+                                                                                                                             nels of synchronized
+  We have experimented with a variety of media                The streaming of high-definition content pre-
+                                                                                                                             audio (0.2 refers to
+types for our Yima player. Figure 1 shows the              sented several challenges. First, high-definition
+                                                                                                                             two low-frequency
+player’s three-threaded structure. The playback            media require a high-transmission bandwidth. For
+                                                                                                                             channels, or
+thread interfaces with the actual media decoder.           example, a video resolution of 1,920 x 1,080 pix-
+                                                                                                                             subwoofers).
+The decoder can be either software- or hardware-           els encoded via MPEG-2 results in a data rate of
+based. Table 1 lists some decoders that we incor-          19.4 Mbps. This was less of a problem on the
+porated.                                                   server side because we designed Yima to handle
+  The CineCast hardware MPEG decoders from                 high data rates.
+Vela Research support both MPEG-1 and MPEG-                   The more intriguing problems arose on the client
+2 video and two-channel audio. For content that            side. We integrated an mpeg2dec open source
+includes 5.1 channels of Dolby Digital audio, as           software decoder because it was cost-effective.
+used in DVD movies, we use the Dxr2 PCI card               Although it decoded our content, achieving real-
+from Creative Technology to decompress both                time frame rates with high-definition video was
+MPEG-1 and MPEG-2 video in hardware. The                   nontrivial because of the high resolution. On a
+card also decodes MPEG audio and provides a 5.1-           dual-processor 933-MHz Pentium III, we achieved
+
+                                                                                                                         June 2002                  61
+                           approximately 20 frames per second using          missions are based on the best-effort user datagram
+     A Yima client         unoptimized code with Red Hat Linux 6.2           protocol, a data packet could arrive out of order at
+                           and Xfree86 4.0.1 on an nVidia Quadro 2           the client or be altogether dropped along the net-
+      can render           graphics accelerator. In our most recent          work. To reduce the number of lost RTP data pack-
+      up to eight          implementation, we used a Vela Research           ets, we implemented a selective retransmission
+     synchronous           CineCast HD hardware decoder, which               protocol.11 We configured the protocol to attempt
+      streams of           achieved real-time frame rates at data rates      at most one retransmission of each lost RTP packet,
+                           up to 45 Mbps.                                    but only if the retransmitted packet would arrive
+     MPEG-2 video
+                                                                             in time for consumption.
+     and 24 audio          Multistream synchronization                          When multiple servers deliver packets that are
+       channels.              The flow-control techniques implemented        part of a single stream, as with Yima-2, and a
+                            in the Yima client-server communications         packet does not arrive, how does the client know
+                            protocol synchronize multiple, independently     which server node attempted to send it? In other
+                            stored media streams.                            words, it is not obvious where the client should
+                        Figure 3 shows the client configuration for the      send its retransmission request.
+                     playback of panoramic, five-channel video and 10.2-        There are two solutions to this problem. The client
+                     channel audio. The five video channels originate from   can broadcast the retransmission request to all server
+                     a 360-degree video camera system such as the            nodes, or it can compute the server node to which it
+                     FullView model from Panoram Technologies. We            issues the retransmission request. With the broad-
+                     encode each video channel into a standard MPEG-2        cast approach, all server nodes receive a packet
+                     program stream. The client receives the 10.2 chan-      retransmission request, check whether they hold the
+                     nels of high-quality, uncompressed audio separately.    packet, and either ignore the request or perform a
+                        During playback, all streams must render in tight    retransmission. Consequently, broadcasting wastes
+                     synchronization so the five video frames corre-         network bandwidth and increases server load.
+                     sponding to one time instance combine accurately           Yima-2 incorporates the unicast approach.
+                     into a panoramic mosaic of 3,600 x 480 pixels           Instead of broadcasting a retransmission request to
+                     every 1/30th of a second. The player can show the       all the server nodes, the client unicasts the request
+                     resulting panoramic video on either a wide-screen       to the specific server node possessing the requested
+                     or head-mounted display. The experience is              packet. The client determines the server node from
+                     enhanced with 10.2-channel surround audio, pre-         which a lost RTP packet was intended to be deliv-
+                     sented phase-accurately and in synchronization          ered by detecting gaps in node-specific packet
+                     with the video.                                         sequence numbers. Although this approach re-
+                        Yima achieves precise playback with three levels     quires packets to contain a node-specific sequence
+                     of synchronization: block-level via retrieval sched-    number along with a global sequence number, the
+                     uling, coarse-grained via the flow-control protocol,    clients require very little computation to identify
+                     and fine-grained through hardware support. The          and locate missing packets.
+                     flow-control protocol maintains approximately the
+                     same amount of data in all client buffers. With this    TEST RESULTS
+                     prerequisite in place, we can use multiple CineCast        In extensive sets of experiments, Yima-2 exhibits
+                     decoders and a genlock timing-signal-generator          an almost perfectly linear increase in the number
+                     device to lock-step the hardware MPEG decoders          of streams as the number of nodes increases. Yima-
+                     to produce frame-accurate output. All streams must      2’s performance may become sublinear with larger
+                     start precisely at the same time.                       configurations, low-bit-rate streams, or both, but
+                        The CineCast decoders provide an external trig-      it scales much better than Yima-1, which levels off
+                     ger that accurately initiates playback through soft-    early. We attribute Yima-1’s nonlinearity to the
+                     ware. Using two PCs, one equipped with two              increase of internodal data traffic.
+                     four-channel CineCast decoders and one with a              We sent MPEG-4 data from the Yima servers in
+                     multichannel sound card, a Yima client can render       our lab to the public Internet via the University of
+                     up to eight synchronous streams of MPEG-2 video         Southern California campus network. The geo-
+                     and 24 audio channels.                                  graphical distance between the two end points mea-
+                                                                             sured approximately 40 kilometers. We set up the
+                     RTP/UDP AND SELECTIVE RETRANSMISSION                    client in a residential apartment and linked it to the
+                       Yima supports the industry-standard RTP for the       Internet via an ADSL connection. The ADSL
+                     delivery of time-sensitive data. Because RTP trans-     provider did not guarantee any minimum band-
+
+62             Computer
+width but stated that it would not exceed 1.5           2. A. Bonhomme, “Survey of Video Servers,” hyper-
+Mbps. The raw bandwidth achieved end-to-end                linked resource page, including bibliography,
+between the Yima client and servers was approxi-           http://www.ens-lyon.fr/~abonhomm/video/survey.
+mately 1 Mbps.                                             html (current May 2002; last update June 2001).
+   The visual and aural quality of an MPEG-4            3. S. Berson et al., “Staggered Striping in Multimedia
+encoded movie at less than 1 Mbps is surprisingly          Information Systems,” Proc. 1994 ACM Sigmod Int’l
+good. Our test movie, encoded at almost full NTSC          Conf. Management of Data, ACM Press, New York,
+resolution, displayed little degradation—a perfor-         1994, pp. 79-90.
+mance attributable to the low packet loss rate of       4. J.R. Santos and R.R. Muntz, “Performance Analy-
+0.365 percent without retransmissions and 0.098            sis of the RIO Multimedia Storage System with Het-
+percent with retransmissions. The results demon-           erogeneous Disk Configurations,” Proc. 6th ACM
+strated the superiority of Yima-2 in scale-up and          Int’l Multimedia Conference (ACM MM 98), ACM
+rate control. They also demonstrated the incorpo-          Press, New York, 1998, pp. 303-308.
+rated retransmission protocol’s effectiveness.          5. S. Ghandeharizadeh et al., “On Minimizing Startup
+   We colocated a Yima server at Metromedia Fiber          Latency in Scalable Continuous Media Servers,”
+Network in El Segundo, California, to demonstrate          Proc. Multimedia Computing and Networking
+successful streaming of five synchronized video            (MMCN 97), SPIE-Int’l Society Optical Engineering,
+channels. Also, as part of a remote media immer-           Bellingham, Wash., 1997, pp. 144-155.
+sion experiment (http://infolab.usc.edu/News/           6. J.R. Santos, R. Muntz, and B. Ribeiro-Neto, “Com-
+NYT-RML.html). We successfully streamed HD                 paring Random Data Allocation and Data Striping
+video at 45 Mbps from Arlington, Virginia, syn-            in Multimedia Servers,” Int’l Conf. Measurement
+chronized with 10.2-channel audio at 11 Mbps               and Modeling of Computer Systems (Sigmetrics
+from Marina del Rey, California, to our lab at the         2000), ACM Press, New York, 2000, pp. 44-55.
+University of Southern California.                      7. R. Zimmermann and S. Ghandeharizadeh, “Contin-
+                                                           uous Display Using Heterogeneous Disk-Subsys-
+                                                           tems,” Proc. 5th ACM Int’l Multimedia Conf. (ACM
+        e are exploring resource management
+
+W
+                                                           MM 97), ACM Press, New York, 1997, pp. 227-236.
+        strategies across both distributed and peer-    8. A. Goel et al., “Scaddar: An Efficient Randomized
+        to-peer architectures in which multiple            Technique to Reorganize Continuous Media Blocks,”
+Yima clusters would exist across geographically            Proc. 18th Int’l Conf. Data Eng. (ICDE 02), IEEE
+dispersed areas.12 This distribution would allow a         CS Press, Los Alamitos, Calif., 2002, pp. 473-482.
+wider range of serviceable clients. We also plan to     9. J. Hibbard, “What the $%@# is DivX;-)?” Red Her-
+extend the support of data types to include haptic         ring Magazine, Jan. 2001, pp. 60-64.
+and avatar data as part of the overall research in     10. R. Zimmermann et al., “Yima: Design and Evalua-
+immersive media at USC’s Integrated Media                  tion of a Streaming Media System for Residential
+Systems Center. ■                                          Broadband Services,” Proc. VLDB 2001 Workshop
+                                                           Databases in Telecommunications (DBTel 01),
+                                                           Springer-Verlag, Berlin, 2001, pp. 116-125.
+Acknowledgments                                        11. C. Papadopoulos and G.M. Parulkar, “Retransmis-
+  This research has been funded by the US National         sion-Based Error Control for Continuous Media
+Science Foundation grants EEC-9529152 (IMSC                Applications,” Proc. 6th Int’l Workshop Network
+ERC) and IIS-0082826. We thank our IMSC                    and Operating Systems Support for Digital Audio
+collaborators Chrysostomos L. Nikias, Ulrich               and Video (NOSSDAV 96), Springer-Verlag, Heidel-
+Neumann, Alexander Sawchuk, Chris Kyriakakis,              berg, 1996, pp. 5-12.
+Christos Papadopoulos, and Albert Rizzo. We also       12. C. Shahabi and F. Banaei-Kashani, “Decentralized
+thank the following students for helping with the          Resource Management for a Distributed Continuous
+implementation of certain Yima components:                 Media Server,” to be published in IEEE Trans. Par-
+Mehrdad Jahangiri, Nitin Nahata, Sahitya Gupta,            allel and Distributed Systems, vol. 13, no. 6, June
+Farnoush Banaei-Kashani, and Hong Zhu.                     2002.
+
+
+
+References                                             Cyrus Shahabi is an assistant professor and direc-
+1. D.J. Gemmell et al., “Multimedia Storage Servers:   tor of the Information Laboratory (http://infolab.
+   A Tutorial,” Computer, May 1995, pp. 40-49.         usc.edu) in the Computer Science Department at
+
+                                                                                                            June 2002   63
+          the University of Southern California. He is also         ceived a PhD in computer science from USC. He is
+          director of the Information Management Research           a member of the IEEE and the ACM. Contact him
+          Area at the Integrated Media Systems Center, an           at rzimmerm@usc.edu.
+          NSF Engineering Research Center at USC. His
+          research interests include multidimensional data-         Kun Fu is a doctoral candidate in computer science
+          bases, multimedia servers, and data mining. Sha-          at the University of Southern California. His re-
+          habi received a PhD in computer science from USC.         search interests include multimedia servers, real-
+          He is a member of the IEEE and the ACM. Contact           time data distribution, and parallel computing. Fu
+          him at shahabi@usc.edu.                                   received an MS in engineering science from the Uni-
+                                                                    versity of Toledo. Contact him at kunfu@cs.
+          Roger Zimmermann is a research assistant profes-          usc.edu.
+          sor in the Computer Science Department at the
+          University of Southern California and director of         Shu-Yuen Didi Yao is a doctoral candidate in com-
+          the Media Immersion Environment Research Area             puter science at the University of Southern Califor-
+          at the Integrated Media Systems Center. His inter-        nia. His research interests include scalable storage
+          ests include novel database architectures for immer-      architectures, multimedia servers, video streaming,
+          sive environments, video-streaming technology,            and fault-tolerant systems. Yao received an MS in
+          cluster and distributed computing, and fault-             computer science from USC. He is a member of the
+          resilient storage architectures. Zimmermann re-           ACM. Contact him at didiyao@cs.usc.edu.
+
+
+
+
+                      Get thousands of dollars
+                      worth of online training—
+                      FREE for members                                                                    Ne
+                                                                                                       Mem w 2002
+                                                                                                           be
+                                                                                                       Ben rship
+                                                                                                          efit
+
+
+
+
+                      Choose from 100 courses at the IEEE Computer Society’s Distance Learning Campus.
+                      Subjects covered include…
+                         * Java                        * Project management            * HTML
+                         * PowerPoint                  * Visual C++                    * Visual Basic
+                         * Cisco                       * TCP/IP protocols              * CompTIA
+                         * Windows Network Security    * Unix
+                      With this benefit, offered exclusively to members, you get…
+                         * Access from anywhere at any time                * Vendor-certified courseware
+                         * A multimedia environment for optimal learning   * A personalized “campus”
+                         * Courses powered by KnowledgeNet®—a leader
+                           in online training
+                      Sign up and start learning now!
+                      http://computer.org/DistanceLearning
+
+64   Computer
+

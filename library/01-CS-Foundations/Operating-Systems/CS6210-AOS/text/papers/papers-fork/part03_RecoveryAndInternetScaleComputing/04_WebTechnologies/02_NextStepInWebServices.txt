@@ -1,0 +1,369 @@
+  By Francisco Curbera, Rania Khalaf, Nirmal Mukhi,
+                Stefan Tai, and Sanjiva Weerawarana
+
+
+THE NEXT STEP IN
+ WEB SERVICES
+  How three specifications support creating
+       robust service compositions.
+  The Web services framework intends to
+  provide a standards-based realization of the ser-
+  vice-oriented computing paradigm, which has
+  emerged in response to a fundamental shift in
+  the way enterprises conduct their business. Fully
+  integrated enterprises are being replaced by busi-
+  ness networks in which each participant provides
+  the others with specialized services. Traditional
+  IT infrastructures in which infrastructure and
+  applications were managed and owned by one
+  enterprise are giving way to networks of applica-
+  tions owned and managed by many business
+  partners. Standards and the pervasiveness of net-
+  work technologies provide the technology sup-
+  port for this trend.
+     This new computing environment defines a set
+  of requirements that distinguish SOC from other
+  computing paradigms. To operate in a SOC envi-
+  ronment, applications (“services”) must declara-
+  tively define their functional and nonfunctional
+  requirements and capabilities in an agreed,
+
+
+
+                                COMMUNICATIONS OF THE ACM October 2003/Vol. 46, No. 10   29
+machine-readable format. Based on declarative ser- aspects are critical elements of meaningful business
+vice descriptions, automated service discovery, interactions. The descriptive capabilities of WSDL
+selection and binding become a native capability of are enhanced by the Web Services Policy Frame-
+SOC middleware and applications. A consequence work (WS-Policy), which extends WSDL to allow
+of the dynamic binding capability is a looser cou- the encoding and attachment of QoS information
+pling model between applications.                         to services in the form of reusable service “policies.”
+   A componentized model emerges as the natural It is important to note that the Web services stack
+architecture for the SOC model. Services become (see Figure 1) is designed modularly, allowing one
+the basic building blocks out of which new to use only the pieces of the stack required in a par-
+applications are created,                                                              ticular setting; for exam-
+and service composition                                                                ple, one may use a local
+becomes the main con-                         BPEL4WS
+                                                                            Business   proprietary registry to
+                                                                            Processes
+cern of the application                                                                find Web services.
+                                    WSDL, Policy, UDDI, Inspection         Description
+development process.                                                                      Here we focus on the
+A service composition                                       Transactions               problem of creating ser-
+                                                Reliable                     Quality
+combines services follow-        Security
+                                               Messaging                    of Service vice compositions and
+ing a certain composi-                                     Coordination                review how three speci-
+tion pattern to achieve a       SOAP (Logical Messaging) Other protocols    Transport
+                                                                                       fications, BPEL4WS,
+business goal, solve a              XML, Encoding         Other services       and     WS-Coordination, and
+                                                                             Encoding
+scientific problem, or                                                                 WS-Transaction, sup-
+provide new service                                                                    port creating robust
+functions in general. Service compositions may Figure 1. The Web services              service compositions.
+themselves become services, making composition a stack.                                BPEL4WS (or BPEL for
+recursive operation. Service composition provides a                                    short) provides a mecha-
+mechanism for application integration that seam-                                       nism for defining service
+lessly supports cross-enterprise (business-to-busi- compositions in the form of choreographies of Web
+ness) and intra-enterprise application integration.       services; a choreography consists of the aggregation
+   To support the SOC architecture, Web services of services according to certain business rules. WS-
+must provide standards-based definitions of an Coordination and WS-Transaction complement
+interoperability communication protocol, mecha- BPEL to provide mechanisms for defining specific
+nisms for service description, discovery, and com- standard protocols for use by transaction process-
+position as well as a basic set of quality of service ing systems, workflow systems, or other applica-
+(QoS) protocols. The initial trio of Web services tions that wish to coordinate multiple Web
+specifications, SOAP, WSDL and UDDI, provided services. We describe the key aspects of each speci-
+open XML-based mechanisms for application inter- fication and finally explain how the three fit
+operability, service description, and service discov- together to provide a framework for composing
+ery. For a detailed look at these specifications and and coordinating distributed Web services.
+how they fit together, see [3]. SOAP is now a W3C
+standard, and WSDL and UDDI are being consid- Service Composition
+
+
+
+
+                                                                B
+ered by standard bodies.                                               PEL defines a language for creating ser-
+                                                                       vice compositions in the form of busi-
+
+
+
+
+T
+            o move beyond this basic framework                         ness processes and is now being
+            (“describe, publish, interact”) mecha-                     standardized by the Organization for the
+            nisms for service composition and qual-                    Advancement of Structured Information
+            ity of service protocols are required. Standards (OASIS). Overviews and comparisons of
+            Several specifications have been pro- several proposed Web services-based business
+posed in these areas, most notably the Business process modeling standards have been presented at
+Process Execution Language for Web Services www.ebml.org and [12].
+(BPEL4WS) [1] for service composition, Web ser-              The Nature of BPEL Compositions. BPEL sup-
+vices coordination (WS-Coordination) [10] and ports a process-oriented form of service composi-
+Web services transactions (WS-Transaction) [11] to tion: each BPEL composition is a business process
+support robust service interactions, Web services or workflow that interacts with a set of Web services
+security (WS-Security), and Web services reliable to achieve a certain goal. BPEL compositions are
+messaging (WS-ReliableMessaging). All these thus called processes; the services the process inter-
+
+30     October 2003/Vol. 46, No. 10 COMMUNICATIONS OF THE ACM
+acts with are called partners. A process, like any       and manipulating data.
+Web service, supports a set of WSDL interfaces that          These primitive activities can then be combined
+enable it to exchange messages with its partners.        into complex algorithms using the structured activ-
+The process interacts with them by invoking the          ities provided in the language. These are the ability
+operations they support and receiving messages           to define an ordered sequence of steps (sequence),
+through the process service interface. Figure 2 illus-   to have conditional branching (switch), to define a
+trates one such set of interactions. Observe that in     loop (while), to execute one of several alternative
+this model, the constituent services (partners) are      paths (pick) and to indicate that a collection of steps
+external to the composition itself.                      should be executed in parallel (flow). Within activ-
+   The interaction between                                                              ities executing in parallel,
+a BPEL composition and its                   Process
+                                                                                        execution order constraints
+partners is assumed to be, in                WSDL                        Partner A      can be specified by defining
+                                   Partner B
+the general case, a peer-to-                                                            control links between the
+peer conversational one in                                                              activities. All structured
+which each party invokes                                                                activities can be recursively
+operations on (or sends mes-                                                            combined.
+sages to) the public inter-                                                                 To maintain the state of
+faces of the other. This                                                                an interaction BPEL uses a
+general model covers the                                                                mechanism called message
+more traditional partner                  WSDL B                    WSDL A              correlation. Key fields
+roles found in client/server                                                            within the data messages
+environments:          certain                                                          are identified that will be
+(client) applications may only use the process as a      Figure 2. A BPEL process       used to correlate messages
+service without offering any function themselves,        interacting with two partners: received from a partner to a
+                                                         black circles are activities;
+while others are simply used (invoked) by the            black arrows are control       particular conversation. For
+process as utility services.                             links; other arrows illustrate example, in an order fulfill-
+                                                         message exchanges.
+   Defining Business Protocols. The core of a                                           ment system, the invoice
+BPEL process composition is thus the definition of                                      number may be used to
+the message exchanges that take place between the        identify the conversation between the process and
+process and each one of its partners. First, partners    one of its partners. The stateful nature of business
+are defined in a BPEL process by declaring the           interactions is thus naturally captured by business
+WSDL interfaces over which the interaction with          data fields, as opposed to middleware and system-
+each partner will take place, including both the         generated artifacts.
+interfaces supported by the partner and by the               Correlation-based stateful interactions map quite
+process. To achieve the goal of providing multi-         naturally into an “instance-oriented” process life-
+protocol access to a service, WSDL separates             cycle model. Unlike in traditional object systems,
+abstract service descriptions (interfaces and mes-       process instances are not created via a factory or ref-
+sages) from specific deployments of the service [3].     erenced using an explicit instance identifier.
+Only abstract interfaces are used in the partner def-    Instead, some of the messages sent to a BPEL
+initions, which makes BPEL compositions plat-            process implicitly lead to the creation of a new
+form-and transport-independent: the same BPEL            process instance; a set of correlation fields is then
+process may be accessed over standard SOAP over          initialized that will allow the location of the process
+HTTP, as well as, say, J2EE protocols such as IIOP       instance in subsequent interactions. Note that a
+and JMS [8].                                             process may have more than one set of correlation
+   Once the process partners are defined, a set of       fields: different correlation sets may be used for each
+primitive activities are used to define how messages     partner of the process; moreover, the interaction
+are exchanged with each partner. A message is sent       with each partner may rely on different correlation
+to a partner using an invoke activity; the process can   sets at different times.
+wait for a process operation to be invoked by some           Fault Handling and Compensation. BPEL pro-
+external client using the receive activity; the          vides extensive support for dealing with errors,
+response of an input-output operation is sent back       through the use of fault and compensation handlers.
+using the reply activity. In addition, BPEL provides     Fault handlers provide a structured model to deal
+other primitive activities to perform actions such as    with errors occurring within the process; the model
+signaling faults, terminating the process execution,     is similar to “try-catch” blocks in Java, but results in
+
+                                                              COMMUNICATIONS OF THE ACM October 2003/Vol. 46, No. 10   31
+significant simplification of the process modeling with distributed coordination capabilities. The
+required to handle faults [2, 4]. Fault handling is fault and compensation handling relationship
+closely tied in BPEL to the notion of compensation. between BPEL scopes can be expressed as a WS-
+Compensation [5, 6, 9] is a                                                              Coordination coordina-
+common technique used to                                                                 tion type, and distributed
+“undo” the effects of actions                                                            BPEL implementations
+that have already been com-                         Client                               can register for fault han-
+pleted (such as canceling a                                                              dling and compensation
+prior completed flight book-                                                             notifications using the
+ing in a travel reservation                      WSDL                          WSDL      coordination framework.
+process). A process designer         C                             C                     WS-Coordination defines
+defines the compensating                                                                 the coordination context
+actions to be performed                                                  C               for use in environments
+should an error occur in the                                                             where BPEL scopes are dis-
+course of executing the pri-                                                             tributed or span different
+mary process. Hence, com-                                                  C             vendor implementations; a
+pensation handlers are KEY:                                                              context that is understood
+typically invoked by a fault          C   Fault/Compensation
+                                          handler and WS-C/T
+                                                                                         across the participants
+handler. The units of fault               x implementation                               (BPEL implementations)
+handling and/or compensa-                 WS-C/TX messages                               is required in such envi-
+tion in BPEL processes are                                                               ronments. The use of the
+called scopes. If a fault                                                                Business Activity coordi-
+occurs in a scope, all activities are disabled and the Figure 3. Using                   nation type defined in the
+fault is either handled or thrown to the enclosing WS-Coordination/
+                                                             WS-Transaction to
+                                                                                         WS-Transaction specifica-
+scope. Completed scopes nested within a faulting coordinate BPEL Web                     tion for coordinating
+one are compensated in reverse order of comple- services and nested                      nested BPEL scopes is also
+                                                             BPEL scopes.
+tion. The BPEL compensation model is closely                                             described in [1]. Figure 3
+related to the protocols defined by the WS-Transac-                                      illustrates these two uses of
+tion specification, presented later.                         WS-Coordination/WS-Transaction to implement
+                                                             distributed BPEL process coordination and the
+Service Composition Using BPEL4WS,                           coordination of nested BPEL scopes.
+WS-Coordination, and WS-Transaction
+
+
+
+
+W
+                  S-Coordination and WS-Transac- WS-Coordination and WS-Transaction
+
+
+
+
+                                                                W
+                  tion are two specifications that                               S-Coordination and WS-Transac-
+                  address the reliable, transactional                            tion address the problem of coor-
+                  coordination of Web services.                                  dinating multiparty service
+                  They can be used individually, or                              interactions. The rationale behind
+in combination with BPEL. Each of these specifica-                               WS-Coordination is to provide
+tions has a well-defined purpose in the context of generic coordination mechanisms that can be
+robust service compositions:                                 extended for specific coordination protocols. Such
+                                                             coordination includes the execution of short-run-
+• BPEL allows a set of existing Web services to be           ning transactions within an organization (similar to
+  composed into a new Web service using well-                traditional distributed transactions) and long-run-
+  defined process modeling constructs;                       ning transactions across organizations. WS-Trans-
+• WS-Coordination is a general framework for                 action defines two such specific coordination
+  implementing specific coordination types, where protocols for atomic (short-running) and business
+  the coordination of Web services requires a                (long-running) transactions. Another notable spec-
+  shared context; and                                        ification in this area is the Business Transaction Pro-
+• WS-Transaction defines two particular coordina- tocol (BTP), described in [7].
+  tion types for (short-running) atomic transac-                 WS-Coordination. WS-Coordination defines a
+  tions and (long-running) business transactions.            framework that supports the notion of pluggable
+                                                             coordination models, similar to frameworks for
+   The combined use of these three specifications extended distributed object transactions like the
+allows the BPEL composition model to be extended OMG/J2EE Activity Service for Extended Transac-
+
+32     October 2003/Vol. 46, No. 10 COMMUNICATIONS OF THE ACM
+tions (JSR 95). The proposed approach to imple-
+menting a specific coordination model is to extend
+the mechanisms provided by WS-Coordination.
+   Specific coordination and transaction models are
+each represented as a coordination type supporting
+a set of coordination protocols; a coordination pro-
+tocol is the set of well-defined messages that are
+exchanged between Web services participants.
+Coordination protocols such as completion proto-
+cols, synchronization protocols, or outcome notifi-        WEB SERVICES ARE
+cation protocols address the problem of correct
+execution of a set of distributed activities to reach a    MOVING FROM THEIR
+consistent, defined outcome.
+   The WS-Coordination framework defines three             INITIAL “DESCRIBE,
+main elements commonly required by different
+coordination models:                                       PUBLISH, INTERACT”
+• A CoordinationContext, the shared, extensible            CAPABILITY TO A NEW
+  context representing the coordination that is
+  propagated to the distributed participants;              PHASE IN WHICH ROBUST
+• An Activation service, the service used by clients
+  to create a coordination context; and                    BUSINESS INTERACTIONS
+• A Registration service, the service used by partic-
+  ipants to register resources for inclusion in spe-       ARE SUPPORTED.
+  cific coordination protocols.
+
+   The Activation service and the Registration ser-
+vice are generic. Together with the set of services
+that represent the specific coordination protocols
+for a given coordination type, they make up a Coor-                                                                 ▲
+dination service (or coordinator for short).
+   In order to coordinate a set of Web services, the
+coordination client starts the coordination by send-
+ing a request message to the Activation service of a
+chosen coordinator. A CoordinationContext is then
+created by the Activation service. The Coordina-
+tionContext contains a global identifier, expiration
+data, the port reference for the Registration service,
+and can also be extended to include other informa-
+tion relevant to specific coordination protocols
+(such as an isolation level element for an atomic
+transaction). The port reference is a WSDL defini-
+tion type that is used to identify an individual port;
+it consists of the URI of the target port as well as
+contextual information that may include service-
+specific instance data.
+   Whenever the client initiates an invocation on a
+Web service, the CoordinationContext must be
+propagated along with the application message
+(WS-Coordination implementations can be used to
+append the context to the application message).
+The service being invoked can then find out about
+the Registration service’s port reference (contained
+in the context) to register for the coordination pro-
+
+                                                          COMMUNICATIONS OF THE ACM October 2003/Vol. 46, No. 10   33
+tocol that it wishes to participate in; it can either           future. The specifications presented here, however,
+directly register with the client’s coordinator, or use         are important milestones on the way toward a com-
+another (local) coordinator, and have the coordina-             plete standards-based framework to support service
+tor register with the client’s coordinator (see [11]            orientation. Other specifications are already filling
+for an example in the context of atomic transac-                in the remaining gaps and industry support is
+tions).                                                         slowly consolidating behind a set of basic standards.
+   WS-Transaction: Atomic Transactions and                      Over the next few years, we will likely see the
+Business Activities. WS-Transaction leverages WS-               deployment and adoption of the full SOC model by
+Coordination by defining two particular coordina-               business and scientific communities. c
+tion types: “Atomic Transaction (AT)” and
+“Business Activity (BA).” ATs model short-running               References
+atomic transactions; BAs model business transac-                 1. Business Process Execution Language for Web Services, version 1.1.;
+                                                                    www.ibm.com/developerworks/library/ws-bpel/.
+tions that are potentially long-lived.                           2. Curbera, F., Khalaf, R., Leymann, F., and Weerawarana, S. Exception
+   ATs compare to traditional distributed transac-                  handling in the BPEL4WS language. In Proceedings of the Interna-
+                                                                    tional Conference on Business Process Management, BPM 2003 (Eind-
+tions. The AT coordination type supports the prop-                  hoven, The Netherlands, June 2003).
+erty of atomicity (“all-or-nothing” with respect to              3. Curbera, F. et al. Unraveling the Web services Web: An introduction
+the execution of distributed Web services opera-                    to SOAP, WSDL, and UDDI. IEEE Internet Computing 6, 2
+                                                                    (Mar./Apr. 2002).
+tions) based on the premise that the data resources              4. Hagen, C. and Alonso, G. Flexible exception handling in the OPERA
+manipulated by service operations can be held. The                  process support system. In Proceedings of the International Conference
+                                                                    on Distributed Computing Systems (ICDS 98), 526–533.
+coordination type correspondingly comprises pro-                 5. Leymann, F. Supporting business transactions via partial backward
+tocols common to atomic transactions, including                     recovery in workflow management systems. In Proceedings of BTW
+the two-phase commit protocol.                                      '95, Springer-Verlag, Berlin, 1995.
+                                                                 6. Leymann, F. and Roller, D. Production Workflow. Prentice Hall,
+   The BA coordination type supports transactional                  2000.
+coordination of potentially long-lived activities.               7. Little, M. Transactions and Web services. Commun. ACM 46, 10
+                                                                    (Oct. 2003).
+BAs do not require resources to be held, but busi-               8. Mukhi, N., Khalaf, R., and Fremantle, P. Multi-protocol Web ser-
+ness logic to be applied to handle exceptions. Par-                 vices for enterprises and the grid. In Proceedings of EuroWeb ‘02
+ticipants are viewed as business tasks that are                     (Oxford, UK, December 2002).
+                                                                 9. van der Aalst, W. and van Hee, K. Workflow Managment: Methods,
+children to the BA for which they register. The par-                Models, and Systems. MIT Press, 2002.
+ticipant list is dynamic (a participant may choose to           10. Web Services Coordination (WS-Coordination) 1.0; www-
+leave a transaction) and participants are loosely-                  106.ibm.com/developerworks/library/ws-coor.
+                                                                11. Web Services Transaction (WS-Transaction) 1.0; www-
+coupled. Unlike in the more tightly coupled two-                    106.ibm.com/developerworks/library/ws-transpec.
+phase commit protocol, a BA participant may also                12. Workflow Patterns, Standard Evaluation. Technische Universiteit
+                                                                    Eindhoven; tmitwww.tm.tue.nl/research/patterns/standards.htm.
+declare its outcome before being solicited to do so.
+
+Conclusion                                                      Francisco Curbera (curbera@us.ibm.com) is a research staff
+
+
+
+
+T
+            he Web services framework has emerged               member at IBM Research in Hawthorne, NY.
+            to address the movement toward service-             Rania Khalaf (rkhalaf@us.ibm.com) is a software engineer at
+                                                                IBM Research in Hawthorne, NY.
+            oriented computing, where applications              Nirmal Mukhi (nmukhi@us.ibm.com) is a software engineer at
+            are offered as services both within and             IBM Research in Hawthorne, NY.
+            across enterprises. Aiming to leverage              Stefan Tai (stai@us.ibm.com) is a research staff member at IBM
+the heterogeneity of the IT landscape, its key                  Research in Hawthorne, NY.
+                                                                Sanjiva Weerawarana (sanjiva@us.ibm.com) is a research
+enabler is in the definition of a modular technology            staff member at IBM Research in Hawthorne, NY.
+stack based on open, XML-based standards. As the
+technology continues to evolve, a number of speci-              Permission to make digital or hard copies of all or part of this work for personal or
+fications are being proposed to address the areas               classroom use is granted without fee provided that copies are not made or distributed
+                                                                for profit or commercial advantage and that copies bear this notice and the full cita-
+necessary to support SOC, such as security, reliabil-           tion on the first page. To copy otherwise, to republish, to post on servers or to redis-
+ity, and service composition. The specifications pre-           tribute to lists, requires prior specific permission and/or a fee.
+
+sented here demonstrated how Web services are
+moving from their initial “describe, publish, inter-
+act” capability to a new phase in which robust busi-
+ness interactions are supported.
+   SOC is still in the early stages of development;
+fully dynamic business interactions following the
+SOC model are not foreseen in the immediate                     © 2003 ACM 0002-0782/03/1000 $5.00
+
+
+
+34     October 2003/Vol. 46, No. 10 COMMUNICATIONS OF THE ACM
+

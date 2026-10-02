@@ -1,0 +1,1068 @@
+                                                                                    17th ACM Symposium on Operating Systems Principles (SOSP ’99)
+                                                                                        Published as Operating Systems Review 34(5):64–79, Dec. 1999
+
+
+
+                            Active network vision and reality:
+                          lessons from a capsule-based system
+                                                              David Wetherall
+                                         Department of Computer Science and Engineering
+                                                          University of Washington
+                                                         (djw@cs.washington.edu)
+
+
+
+
+Abstract                                                                       terms of new and novel services, while at the same time
+                                                                               keeping the network efficient and secure? At least eight
+Although active networks have generated much debate in the                     active network prototypes have been developed in addi-
+research community, on the whole there has been little hard                    tion to our own to study this question in one form or an-
+evidence to inform this debate. This paper aims to redress                     other [1, 11, 43, 48, 2, 16, 30, 39]. Hence the concept of
+the situation by reporting what we have learned by design-                     active networking (if not its actual deployment) is now “old
+ing, implementing and using the ANTS active network toolkit                    hat.” However, very little evidence has been presented to
+over the past two years. At this early stage, active networks                  support or refute the original vision for active networks to
+remain an open research area. However, we believe that we                      date.
+have made substantial progress towards providing a more                            In this paper, we reconsider the vision for active net-
+flexible network layer while at the same time addressing the                   works in light of our experience designing, implementing
+performance and security concerns raised by the presence                       and using the ANTS toolkit [46] over the past two years;
+of mobile code in the network. In this paper, we argue our                     ANTS is well-suited to this purpose because it is based on
+progress towards the original vision and the difficulties that                 an aggressive “capsule” design that adds extensibility at the
+we have not yet resolved in three areas that characterize a                    IP packet level. We unabashedly present a mix of fact and
+“pure” active network: the capsule model of programma-                         opinion, experimental results and qualitative analysis, that
+bility; the accessibility of that model to all users; and the                  reports on the progress we have made reconciling network
+applications that can be constructed in practice.                              flexibility with performance and security. Our findings are
+                                                                               based on having implemented two large active network ap-
+                                                                               plications and numerous smaller examples on top of ANTS,
+1    Introduction                                                              and on a comparison of the properties of ANTS with the
+                                                                               Internet. Additionally, ANTS is widely used within the re-
+Active networks are a novel approach to network architecture                   search community (having been publicly available since late
+in which customized programs are executed within the net-                      ’97) and has resulted in considerable design feedback.
+work. They were first described in [41], where the authors                         To highlight what we have learned, we contrast our find-
+postulated that this approach would provide two key bene-                      ings with the vision originally stated in [41] in three areas
+fits: it would enable a range of new applications that lever-                  that characterize a “pure” active network: the capsule model
+aged computation within the network; and it would acceler-                     of programmability; the accessibility of that model to all
+ate the pace of innovation by decoupling services from the                     users; and the applications that can be constructed in prac-
+underlying infrastructure. Active networks have generated                      tice. Specifically, we present the following findings in this
+much interest because of their appeal as a means of creating                   paper:
+new Internet services. They have also resulted in at least as                      Capsules. Profile measurements suggest that cap-
+much controversy because of serious performance and secu-                      sules can be a competitive forwarding mechanism wherever
+rity concerns raised by the presence of untrusted code within                  software-based routers are viable; this is despite the fact
+the network.                                                                   that our prototype is limited to an unimpressive 10 Mbps, in
+     Can active networks deliver their claimed benefits in                     large part due to being implemented in Java. To implement
+Permission to make digital or hard copies of all or part of this work          capsules efficiently, we have replaced a naive code carrying
+for personal or classroom use is granted without fee provided that             scheme with one in which code is carried by reference and so
+copies are not made or distributed for profit or commercial advan-             depends, to a larger extent than suggested in [41], on demand
+tage, and that copies bear this notice and the full citation on the            loading and traffic patterns for which caching is effective.
+first page. To copy otherwise, to republish, to post on servers or to          We have also found it necessary to revise our architecture to
+redistribute to lists, requires prior specific permission and/or a fee.        accommodate heterogeneous types of nodes, and in partic-
+SOSP-17 12/1999 Kiawah Island, SC
+ c 1999 ACM 1-58113-140-2/99/0012. . . $5.00
+                                                                               ular to be compatible with nodes that are not active. As a
+                                                                               result, routers that would not otherwise perform forwarding
+
+
+                                                                          64
+in software are not slowed by capsule processing.                       2   Background
+     Accessibility. We have partly succeeded in allowing each
+user the freedom to control the handling of their packets               There are many approaches by which programmability can
+within the network. We are able to isolate the code and                 be deeply embedded into the network infrastructure, at either
+state of different services to guarantee their correctness to           routers or individual packets, in the fashion of active net-
+the same degree as do today’s static and trusted protocols.             works. We briefly consider three styles to help place ANTS
+This is possible without restrictions on who can program                in context.
+the network, despite the fact that active network code is                    Some active network systems provide extensibility to
+mobile and untrusted. However, it remains an open prob-                 individual devices, increasing their flexibility well beyond
+lem to prevent misbehaving programs from monopolizing                   the level currently supported by router configuration mech-
+resources across a group of nodes. This is analogous to the             anisms, such as Cisco’s IOS. Two examples are the active
+way that the current Internet does not prevent misbehaving              bridge [1] and router plugins [11]. Such systems are well-
+users from monopolizing bandwidth. Both problems require                suited to the task of imposing policy or functionality at a par-
+further network mechanisms to be developed (see, for exam-              ticular network location in the manner of a firewall or other
+ple, [8]), though the active network version of the problem is          edge boundary device. As such, they are typically meant for
+more complicated; we describe how it differs. To deal with              use by network administrators or other privileged users.
+this problem in the immediate future, we have fallen back on                 A second style of system provides programmability
+certification by a trusted authority, a measure not in keeping          across multiple nodes for control tasks rather than new data
+with [41] in that it will slow the rate of change. Nonetheless,         transfer services. For example, BBN’s SmartPackets [39]
+we argue that the result is a system that can still evolve much         provides a programming environment that caters to manage-
+more quickly than the Internet.                                         ment tasks; ISI’s active signaling and the Tempest [43] target
+     Applications. We have found capsules most useful for               call and virtual network setup; and ACTIVE IP [47] supports
+experimenting with and deploying new services that are                  measurement and discovery tasks. Netscript [48] is an ex-
+routing variants, such as multicast, that make use of network           ample of a system that combines both of these styles by al-
+layer state. Capsule code tends to be “glue” that acts as a             lowing management channels to program new data transfer
+flexible means for composing the capabilities made avail-               services.
+able by active nodes, rather than application-specific com-                  These two styles of system essentially restrict either
+putation that is migrated to within the network as suggested            where programs can be run or who can cause them to be
+in [41]. We expect that there will be relatively few active ser-        run. Doing so limits their applicability, but is useful in prac-
+vices, but believe that the case for using active networks is           tice precisely because it makes the design problem more
+still compelling because of the great difficulties introducing,         tractable by specializing it to a particular domain. Single
+changing and experimenting with new services in the Inter-              network element schemes, for example, are not intended to
+net today. In particular, the automatic code deployment of              introduce services that are spread over the wide area and for
+capsules provides a fundamentally new and valuable model                that reason do not have to coordinate code distribution across
+for systematic change across wide-area network paths.                   an entire network. Similarly, control tasks are not executed
+     In sum, we believe that we have made substantial                   at the granularity of packet forwarding and so have less strin-
+progress towards building the kind of active network envi-              gent performance requirements.
+sioned in [41]. We find it feasible to add a degree of pro-                  In contrast, ANTS belongs to a third style of systems that
+grammability across the network layer that provides clearly             do not a priori restrict who can program which nodes. In-
+useful new flexibility. At the same time, the mechanisms we             stead, ANTS aims to allow each user to construct new data
+have developed and the restrictions we have adopted go a                transfer services across the wide-area, such as routing for
+long way towards resolving performance and security con-                host mobility, by controlling the handling of their own pack-
+cerns. On the other hand, it is clear that greater application          ets within the network. This is analogous to extensible op-
+experience is needed and open issues remain in areas such               erating system approaches [21, 5] that aim to offer untrusted
+as resource management. We observe that programmability                 applications as much control over the way system resources
+is rapidly being incorporated into network elements at es-              are managed as possible while still being able to protect the
+sentially all locations where it is viable. Without further re-         underlying resources and arbitrate between competing de-
+search this programmability will by default take the form of            mands.
+piecemeal solutions that allow individual network elements                   ANTS is based on an aggressive “capsule” approach in
+to be upgraded, but no more than that. If we are not careful,           which code is associated with packets and run at selected IP
+the network may well be “activated” without providing the               routers that are extensible. We sketch its design in the fol-
+benefit of a systematic means of upgrading services across              lowing section. Two other capsule-based systems, PAN [30]
+the Internet.                                                           and PLAN [16], are similar in spirit to our own, and ex-
+     The rest of this paper is organized as follows. We begin           perience with both, on the whole, supports the conclusions
+with background on active network research, and then sum-               drawn here. We mention specific results in the text as appro-
+marize the essential features of ANTS needed to understand              priate. PAN is modeled on ANTS and differs principally in
+our results. In the main sections, we present our findings for          that its capsules transfer unsafe binary forwarding programs
+each of the three topic areas. Finally, we discuss some more            and execute them directly, trading security for performance.
+speculative observations in terms of network architecture.              PLAN capsules carry short programs in a specially-designed
+                                                                        language that is the basis for system security. In contrast, the
+
+
+                                                                   65
+                                                                  app
+                                                                                                                  active node is connected to its neighbors, some of which can
+                                                                                                                  be conventional IP routers, by link layer channels. The in-
+                                                                                                                  novative properties of an ANTS network stem from the in-
+                                                                 active
+                                                                  node
+                                                                                                                  teraction of capsules and active nodes; the application and
+                                        e
+                                                                                                                  channel components are simply modeled on those of con-
+                                                                                    ca
+                                   ul                                                ps                           ventional networks.
+                              ps                                                         ul
+                         ca                                               ch
+                                                      ne
+                                                           l
+                                                                            an
+                                                                                          e
+                                                                                                                       The format of a capsule, shown in Figure 2, is an ex-
+                                                 an                            ne
+                                            ch                                   l                                tension of the IP packet format. Capsules are like mobile
+                                                                                                       app        agents in that they direct themselves through the network by
+                              channel                            IP       channel             active
+                                                                                                                  using a custom forwarding routine. The type of forwarding
+          activeactive
+           node node                                           router                          node               is indicated by the value of the type field and is selected by
+    app
+                                                                                                       app        end-user software when it injects a capsule into the network.
+                              capsule                                     capsule
+                                                                                                                  The corresponding forwarding routine is transferred using
+                                                                                                                  mobile code techniques to active nodes that the capsule vis-
+Figure 1. Entities in an ANTS active network                                                                      its as it passes through the network. The routine is executed
+                                                                                                                  at each active node that is encountered along the forwarding
+                                                                                                                  path. At conventional nodes, IP forwarding occurs using the
+                                                                                                                  IP header fields.
+ANTS toolkit builds on the safety properties of Java byte-                                                             Any party can develop a new network service and make
+codes.                                                                                                            it available for widespread use. The first step is to write a
+    A final strategy that does not fit into these three styles is                                                 new set of forwarding routines that implement the desired
+worth noting. Active services [2] seek to gain the advantages                                                     behavior. This is done in a subset of Java in our reference
+of active networks without disturbing the network layer by                                                        implementation, the ANTS toolkit. Each different forward-
+relying on domain-specific proxies to support “value-added”                                                       ing routine corresponds to a different type of capsule and
+network services such as transcoding. We consider domain-                                                         can carry different header fields (the type-dependent header
+specific solutions to be a useful tool, but the use of prox-                                                      fields in Figure 2). The kinds of forwarding routines that
+ies to be largely orthogonal to many active network design                                                        can be constructed depend on the capabilities of the active
+problems. Clearly, proxies are valuable for incremental de-                                                       node; routines are further restricted in the amounts of node
+ployment. (They are not the only option though. We prefer                                                         resources they can consume. The ANTS toolkit provides
+firewall-style interception at selected routers because of the                                                    a core API, listed in Table 1, that grew out of experience
+late-binding that it provides, and the potential for access to                                                    with a predecessor system [47] and consists of the small-
+routing and load information that it retains.) However, the                                                       est set of operations with which we were able to develop
+use of proxies rather than extensible routers does not resolve                                                    many different services. It provides three categories of calls
+design issues such as the extension API, code distribution                                                        that: query the node environment; manipulate a soft-store of
+and global resource management, all of which must be tack-                                                        service-defined objects that are cached for a short time and
+led in any real system.                                                                                           then expired; and route capsules towards other nodes or ap-
+                                                                                                                  plications in terms of shortest paths. These calls allow novel
+3     The essentials of ANTS                                                                                      routing services to be expressed by querying network char-
+                                                                                                                  acteristics, maintaining route information in the soft-store,
+In this section, we summarize the details of ANTS that are                                                        and following it during forwarding. Additional API calls
+needed to understand the subsequent discussion. We focus                                                          will likely be added with further development and experi-
+on “bootstrapping the reader” by explaining how it works;                                                         ence. Loss information, for example, is clearly useful for
+we defer arguments about why it works in this manner to                                                           congestion-related services, yet absent from the list because
+the following sections. The summary is based on the refer-                                                        it is inconvenient in our current user-level Java implementa-
+ence version of ANTS detailed in a dissertation [45], which                                                       tion.
+supersedes an earlier exposition [46].                                                                                 Once the code is written, it is signed by a trusted author-
+    We describe ANTS along two lines: the interface it                                                            ity (an IETF-equivalent) to certify that the service makes use
+presents to users at the edge of the network, and its im-                                                         of overall network resources in a “reasonable” fashion. Cer-
+plementation within the network. In addition, we comment                                                          tification reflects global resource management concerns that
+on the ANTS toolkit, a reference implementation written in                                                        we have not otherwise resolved in the general case. This
+Java, and how ANTS may be deployed incrementally in the                                                           issue is discussed in Section 5. Finally, the code is regis-
+Internet.                                                                                                         tered with a directory service using a human-readable name
+                                                                                                                  (such as “Drop Priority”) to make it available to other net-
+                                                                                                                  work users.
+3.1 Interface                                                                                                          End-user software can use a new service developed ac-
+                                                                                                                  cording to this model in a simple manner. First, the service
+The entities in an ANTS network are shown in Figure 1. Ap-                                                        code is obtained via the directory service, which is simply
+plications obtain customized network services by sending                                                          the local filesystem in our prototype. In a large-scale net-
+and receiving special types of packets called capsules via                                                        work, this step can be made automatic (without burdening
+a programmable router referred to as an active node. Each                                                         applications) with a process analogous to DNS host resolu-
+
+
+                                                                                                             66
+                 corresponding IP header                + ANTS-specific header                     + higher layers
+
+
+              source destination                                        type-dependent
+              address  address            TTL     version type previous                                  payload
+                                                               address header fields
+
+
+
+
+                                                             capsule
+
+
+Figure 2. Key features of the capsule format
+
+
+               Method                                                            Description
+               int getAddress()                                                  Get local node address
+               ChannelObject getChannel()                                        Get receive channel
+               Extension findExtension(String ext)                               Locate extended services
+               long time()                                                       Get local time
+               Object put(Object key, Object val, int age)                       Put object in soft-store
+               Object get(Object key)                                            Get object from soft-store
+               Object remove(Object key)                                         Remove object from soft-store
+               void routeForNode(Capsule c, int n)                               Send capsule towards node
+               void deliverToApp(Capsule c, int a)                               Deliver capsule to local application
+               void log(String msg)                                              Log a debugging message
+
+
+Table 1. Active node API
+
+tion. Second, the service is registered with the local active          maintained by active nodes for this purpose. If this node has
+node. This provides the node with a copy of the service code           the required code, which is likely because it executed the
+to bootstrap code distribution within the network, and allows          code moments before, it sends the code. The code is then
+the node to compute the type values that will be placed on             cached for later use and executed to forward the capsule. If
+corresponding capsules. Once these steps are complete, ap-             messages are lost or the code is unavailable, the capsule is
+plications are free to send and receive capsules that belong to        discarded and considered lost. Thus code transfer will either
+the new service, and these capsules will be forwarded within           succeed quickly, in which case the interruption to forward-
+the network by executing the corresponding routines.                   ing will be close to minimal, or occasionally fail, in which
+                                                                       case applications must recover the lost capsule in the normal
+                                                                       manner.
+3.2 Implementation                                                         Once the code has been distributed, capsule processing
+To process capsules efficiently for the expected traffic pat-          at an active node is straightforward: capsules are received,
+terns of our target applications, ANTS separates the trans-            they are demultiplexed using their type field to the associ-
+fer of service code from that of the rest of the capsule and           ated forwarding routine, the routine is safely executed within
+caches code at active nodes. Each capsule carries a type field         a sandbox, and the process repeats. We refer to this model as
+as shown in Figure 2 that refers to its customized forwarding          extensible packet forwarding, since it generalizes the IP for-
+routine. The value of this type field is based on an MD5 [36]          warding model in use today. The sandbox prevents untrusted
+fingerprint of the associated service code. Code is provided           code from corrupting the node and the state of other services
+to nodes at the edges of the network by end-user software.             that are being run concurrently. Capsules may only effect
+Within the network, a lightweight code distribution system             externally visible behavior through node API “system calls”.
+transfers the code along the path the capsule follows when             The sandbox also enforces constraints that facilitate the pro-
+the code is not already cached.                                        tection and resource management mechanisms discussed in
+    Our code distribution system is designed to provide rapid          Section 5: overall runtime is limited; access to the capsule
+but unreliable transfer of short routines between adjacent ac-         itself is limited so that the source address and type are con-
+tive nodes; ANTS places a limit of 16 KB on the code of                stant, while the previous address and TTL are maintained by
+each service to limit the impact of code transfers on the net-         the node; creation of other capsules is restricted so that only
+work. The protocol works as follows (Figure 3). When the               related types can create each other; and freshly manufac-
+code needed to forward a capsule is not found in the cache,            tured capsules obey invariants such as having a smaller TTL
+a request is sent to the previous active node that the capsule         and the source address of the parent to facilitate distributed
+visited. The “previous address” header field (Figure 2) is             debugging. The additional packet overhead of this model is
+
+
+                                                                  67
+                  1                                                    cialized runtimes would improve performance by exploiting
+                                                                       the subset of Java (or other language) that is used to write
+          capsule
+                                         2                             forwarding routines. For example, ANTS requires that for-
+                                         request                       warding routines be single-threaded.
+
+               response
+                                                                       3.4 Deployment
+                      3                            code
+                                                   group               ANTS is designed to be deployed incrementally within the
+                                                                       Internet today. Since not all nodes are required to be ac-
+                                          4
+       code                                                            tive, a straightforward step is to selectively activate nodes in
+       group                               capsule
+                                                                       strategic locations. This is likely to begin with end-systems,
+                                                                       along with routers connected to bandwidth-limited wireless
+         previous                             loading                  and access links, and followed by increasingly high perfor-
+          node                                 node                    mance routers at ISPs within the network. Activating such
+                                                                       routers can be straightforward because ANTS nodes can be
+                                                                       embedded in the network and intercept capsules that pass
+Figure 3. Demand loading of capsule code                               through them.
+                                                                           At a finer granularity, nodes can be active for selected
+                                                                       services, but perform IP forwarding for other services. The
+modest; type is the largest field in our implementation, and           ANTS architecture allows this decision to be made locally
+at 128 bits it is the size of a single IPv6 address. The addi-         by each node. This strategy can extend the performance
+tional runtime steps are also modest, as is reported in Section        range of active nodes: compute-intensive services that are
+4.2, because we are able to leverage the restrictions placed           not dynamically loaded because they do not run at the line
+on forwarding routines to simplify the implementation.                 packet rate can instead be statically loaded if the capsules
+                                                                       that use them arrive infrequently. This is analogous to the
+                                                                       way ICMP and other services are handled separately from
+3.3 ANTS Toolkit                                                       the IP “fast path” in high-bandwidth routers. This line of
+The ANTS toolkit [45] is a reference implementation of the             reasoning suggests that hybrid active node implementations
+architecture described above. It incorporates everything de-           will be useful for combining the performance of high-end
+scribed in this paper with the exception of signing code and           routers with the flexibility of programmable services. For
+checking the signatures, since this has no effect once code is         example, an IP router could be extended with an attached
+loaded. The toolkit also carries capsules within UDP data-             PC that receives packets via a classifier.
+grams that are organized into an overlay, rather than as a
+direct extension of the IP format. This is convenient as the           4   Are capsules feasible?
+toolkit runs at user-level on end-systems.
+    Both the reference platform itself and the capsule for-            We now switch gears and turn to the main contributions of
+warding routines (which are supplied by application devel-             this paper. The first question we consider is essentially one
+opers) are written in 100% Java. This has been a valuable              of performance: are capsules a feasible mechanism on which
+design choice in that it has allowed us to rapidly develop             to build active network programs?
+a portable, compact (approximately 10000 lines) and flex-                  We argue that when capsules are implemented as de-
+ible experimental platform that is accessible to application           scribed in Section 3.2, they can be a competitive forwarding
+developers. The active node sandbox, for example, builds               mechanism wherever software-based routers are viable. We
+directly on Java’s type-safety and security manager frame-             argue this in two steps. First, that capsule code can indeed
+work, while code distribution is facilitated by dynamic load-          be carried by reference and loaded on demand. Fingerprints
+ing mechanisms. As a result, the ANTS toolkit has been                 have proved an effective design technique here. Second, that
+widely used within the research community.                             the intrinsic overhead of capsule processing is low and so
+    The cost of this design choice has primarily been per-             adds little to the cost of IP forwarding when both are imple-
+formance, though the lack of fine-grained control over re-             mented in software.
+sources, for example, the size of objects and garbage collec-              Of course, software-based forwarding will not be vi-
+tion, has also been a limitation. We expect much of these              able at all network locations, even in router designs with
+costs to eventually be recovered, since neither the reference          a processor per port. At one extreme, current genera-
+platform nor the forwarding routines need to be written in             tion PC-based routers provide a flexible processing envi-
+Java in a different implementation. In the short term, the             ronment capable of forwarding at least 70,000 packets/sec,
+platform can be statically compiled and, with a suitable Java          easily reaching 100 Mbps for typical packet sizes [28].
+runtime, reside in the operating system along with other net-          They are poorly-suited to this task as they are I/O lim-
+working code. Ultimately, safe execution techniques ap-                ited. At the other extreme, modern high-end commercial
+plicable to binaries (namely software-based fault isolation            routers can forward 70 byte packets at wire speed for OC-
+(SFI) [44] or proof-carrying-code (PCC) [29]) could be used            48 (2.4Gbps) line rates, which requires forwarding rates ap-
+in higher performance implementations. Alternatively, spe-             proaching 4,000,000 packets/sec [42]. The difference is a
+
+
+                                                                  68
+factor of 50. It is difficult, however, to evaluate the poten-              and its forwarding code is unambiguous3. Because this cor-
+tial of extensible routers because of the changing underlying               respondence can be verified locally, without trusting exter-
+technologies; for example, reconfigurable hardware such as                  nal parties or relying on external information, the danger of
+RaPiD [10] is appearing. Ultimately, the applications of a                  code spoofing is eliminated. SFS uses fingerprints as the ba-
+programmable node will be constrained by its capabilities                   sis of self-certifying pathnames [26] for essentially the same
+and position in the network. For example, processor rates of                reasons.
+1 GHz and line rates of 1 Gbps imply an average process-                         A significant difference compared to conventional pro-
+ing budget of 1000 cycles, if all packets are to processed and              tocols is that the identifier names an implementation rather
+the average size is 128 bytes. This figure varies by orders                 than an interface. This is potentially beneficial because it
+of magnitude, reaching 100,000 cycles if 10% of the pack-                   eliminates versioning problems: different versions of code
+ets are processed and the line rate is 100 Mbps, for exam-                  are treated as different services within the network. How-
+ple. Thus a network in which node capabilities are hetero-                  ever, we have found that this property typically means that a
+geneous seems fundamental to us. It is for this reason that                 higher level of naming is soon introduced. In our system, a
+our architecture supports partially active networks in which                directory service is used by end-user software selecting pro-
+some routers, such as those in the core of the Internet, can                tocols, and bootstrap capsules (such as those that transfer
+implement IP forwarding only and are not slowed by capsule                  code between active nodes) carry well known names. Any
+processing.                                                                 higher level of naming must then be secured if it is not to
+                                                                            negate the fingerprint properties that we value.
+                                                                                 To transfer code to the right place, we have found the
+4.1 Implementing capsules                                                   simple scheme described in Section 3.2 to be quite general
+One of the first changes we made in moving from an earlier                  and sufficient to our needs. In networking parlance, service
+active network system to ANTS was to carry capsule code                     code is “soft-state” [9] that is automatically replenished as
+by reference rather than by value. Besides the obvious space                it is needed. The scheme thus adapts to packet loss, node
+and time overheads of carrying code and converting it to an                 failures and changing routes, all without complicating cap-
+efficient executable representation, we observed that most                  sule semantics with extra mechanisms such as an explicit
+of the applications we were exploring exhibited significant                 “connection” setup phase. Because it interleaves capsule
+locality — the same code was executed along the same net-                   forwarding and code transfer hop-by-hop, it can be used to
+work path. This is particularly so for network layer evolution              load new routing services.
+where, although many new services might be tried over time,                      There are also more subtle issues that we have uncovered
+a small number of services account for virtually all of the                 while studying code distribution. For example, the code dis-
+traffic at any given instant. We believe that this is unlikely to           tribution system should not leave active nodes open to a de-
+change, even in a much more dynamic network, because of                     nial of service attack. The hop-by-hop nature of our scheme
+the existence of higher layer flows and a dependence on third               may be of use here, since code messages are only exchanged
+party software. Most other active network systems that em-                  between neighbors and can easily be authenticated, thus re-
+phasize performance also cache code, for example PAN [30]                   ducing the scope of attacks. Also, unless the latency of load-
+and router plugins [11, 12]. PLAN [16] does carry a small                   ing is small it may conflict with the end-system timeouts that
+amount of code directly, but similarly distinguishes between                are used to detect loss. For our system, a measurement-based
+forwarding fragments and extension code that is cached1 .                   analysis [45] predicts that loading delays will fall within the
+    To provide the same behavior as the capsules described                  normal range of one-way transit variations (of 0.1 to 1 sec-
+in [41], we must be able to distribute the right code to the                ond) reported in [33], even for cross-country paths. Caching
+right place, where “right” is determined by a model in which                behavior under overload is also of concern.
+the code is actually present in each capsule. Each mecha-                        For the most part, however, we have deferred serious
+nism can potentially cause difficulties.                                    analysis of the performance of code distribution mechanisms
+    To ensure the right code, we compute the type identifiers               until there is greater experience with large scale active net-
+that are stamped on each ANTS capsule from an MD5 [36]                      works. We observe that, if code loading is rare enough, its
+fingerprint of the corresponding code2 . This is analogous to               performance will be of little consequence as long as it is ad-
+the way fingerprints are used to name the types of network                  equate. We believe our scheme provides adequate perfor-
+objects [7]. We originally chose this method as a distributed               mance, but further observe that ANTS could be used with
+naming scheme to eliminate the need for standardized proto-                 other code distribution schemes in practice.
+col identifiers, but quickly came to value its security proper-
+ties. It is secure because a belief that the fingerprint function           4.2 Forwarding performance
+is one-way implies that the association between a capsule
+   1
+                                                                            At active nodes, processing can be separated by the granu-
+      It is also interesting to note that PLAN forwards capsules            larity at which it occurs:
+roughly three times as fast as ANTS. As best we can tell, this is
+due more to the performance of the underlying language runtimes                • per capsule forwarding tasks;
+and better marshaling code than architectural choices.
+    2                                                                          3
+      We first heard this technique suggested in the context of pro-            There is some evidence that the collision-resistance of MD5
+tocol code by Gary Minden. We pioneered its use at the same time            may be broken in the foreseeable future [37], but to our knowledge
+as PAN [30].                                                                no evidence that the one-way property on which we depend is in
+                                                                            question.
+
+
+                                                                       69
+                            10000                                                                          between the per port forwarding engines. An initial concern
+                                                                                                           was that the soft-store would require synchronized access.
+                                                                                                           We have found, however, that this potential problem can be
+                             8000
+                                                                                                           eliminated by design, since it does not complicate active net-
+
+
+
+
+Throughput (capsules/sec)
+                                                                                                           work programming to define the soft-store to be a per port
+                             6000                                                                          resource.
+                                             C Relay                                                           To understand the costs of capsule processing, we mea-
+                                          JAVA Relay
+                                               ANTS
+                                                                                                           sured the forwarding performance of a single ANTS node
+                             4000
+                                                                                                           while running a basic service that is the equivalent of IP, yet
+                                                                                                           implemented within the ANTS framework rather than as a
+                             2000                                                                          built-in capability. For comparison, the performance of user
+                                                                                                           level relays written in Java and C, but otherwise running on
+                                  0
+                                                                                                           the same system, are also shown; these blindly receive and
+                                      0      200       400     600      800      1000   1200   1400        then transmit packets, without the intervening processing re-
+                                                        Capsule Payload Size (bytes)
+                                                                                                           quired by ANTS. The experimental platform used was a Sun
+                                                                                                           Ultra 1 running Solaris 2.6 and an early access release of
+                                                                                                           Sun’s JDK1.2. It has an estimated performance of 3.5 on the
+Figure 4. Active node throughput (pps)                                                                     SPECJVM98 benchmark, while the hardware and operating
+                                                                                                           system alone have publicly available performance results of
+                            800                                                                            approximately 6 on the SPECINT95 benchmark4.
+                            700
+                                                                                                               Throughput results are shown in Figure 4, and latency re-
+                                                                                                           sults in Figure 5. We see that ANTS forwards approximately
+                            600                                                                            1700 capsules/sec for small packet sizes and 16 Mbps for
+                                                                                                           large (Ethernet) packet sizes, with corresponding latencies
+                            500
+                                                                                                           that range from approximately 500 to 700 µs. ANTS and
+Latency (us)
+                                                                                 C Relay
+                            400                                               JAVA Relay                   Java relay throughput is similar, while C relay throughput is
+                                                                                   ANTS
+                                                                                                           greater by between a factor of three and four. For latency, the
+                            300
+                                                                                                           result is similar though less pronounced, with ANTS adding
+                            200                                                                            roughly half of the difference between Java relay latency and
+                                                                                                           C relay latency; we have not tuned our system for latency.
+                            100                                                                                While these results are unimpressive by production stan-
+                              0                                                                            dards, they do serve to demonstrate three points. First, even
+                                  0        200     400      600      800       1000     1200   1400        at face value, they show a level of performance that is ad-
+                                                     Capsule Payload Size (bytes)
+                                                                                                           equate to deploy active nodes across access links up to T1
+                                                                                                           (1.5 Mbps) rates immediately. Second, ANTS captures most
+                                                                                                           of the potential of Java relay, the minimal Java-based user-
+Figure 5. Active node latency (µs)                                                                         level system running on the same platform. Third, the sim-
+                                                                                                           ilar slopes of the latency lines indicate that capsule pro-
+                            • per service code distribution; and                                           cessing does not contain hidden data-dependent costs (ex-
+                            • periodic node management tasks.                                              tra copies) compared to a minimal relay. The conclusion we
+                                                                                                           draw is that the performance of our prototype is limited by
+    Of these tasks, only capsule forwarding limits node per-                                               both user-level and Java-based operation, neither of which
+formance in practice. For the traffic patterns of interest, code                                           is required by our architecture. The user-level C relay is
+caching is effective and so code distribution is rarely needed.                                            faster by a factor of four, and it is likely that an in-kernel
+Measurements of the ANTS toolkit showed a processing cost                                                  implementation is faster by a factor of at least two again.
+of approximately 1 ms per code distribution message, with                                                  These observations suggest that substantially faster imple-
+up to a maximum of 16 messages to transfer service code.                                                   mentations can be constructed without resorting to custom
+This is approximately one order of magnitude more expen-                                                   hardware. PAN [30] is one step in this direction. It imple-
+sive than regular capsule forwarding, and requires that the                                                ments an architecture that is modeled on ANTS, but with
+cost of loading be amortized over around 1000 capsules be-                                                 in-kernel binary forwarding routines that forego protection.
+fore it has a negligible impact (1%) on network performance.                                               By doing so, it is able to saturate 100 Mbps Ethernet with
+    Periodic tasks in ANTS, such as route updates and clean-                                               1 KB packets, almost an order of magnitude improvement.
+ing of the soft-store, do not result in a noticeable slowdown                                                  To understand the fundamental costs of capsule process-
+either. This is because we are able to make them occur at a                                                ing in more detail, we profiled an ANTS node running on
+much coarser granularity than capsule forwarding (seconds                                                  the same platform. We did this for 512 byte capsules with
+rather than microseconds) and implement them in a manner                                                      4
+                                                                                                               The SPECJVM98 result is an estimate because one of the
+that does not block forwarding for their duration.                                                         seven tests we ran produced invalid results due to bugs in the run-
+    We also note that capsule forwarding is readily paral-                                                 time and benchmark. The publicly available results come from the
+lelized to run on routers in which there is one processor per                                              SPEC website at www.spec.org.
+port. This is because no tight synchronization is required
+
+                                                                                                      70
+     Operation                 IP?    Time (µs)     (%)                       updates are simple, and IP requires analogous updates,
+     1. Packet Receive         no       180         29                        though fewer in number.
+     2. Header Processing      yes       30          5                     9. A message is sent to the outgoing network interface via
+     3. Type Demultiplex       no        20          3                        the operating system. IP in the kernel does not require
+     4. Capsule Decode         no       110         18                        this step, and neither would ANTS if running in the
+     5. Capsule Evaluate       no        10          2                        kernel.
+     6. Route Lookup           yes       30          5
+                                                                            Clearly, our user-level profiling and analysis can project
+     7. Capsule Encode         no        90         14
+                                                                       only approximate results for a kernel-level implementation.
+     8. Header Processing      yes       40          7
+                                                                       However, what is significant is how few complex process-
+     9. Packet Transmit        no        80         13
+                                                                       ing steps are required for capsule forwarding. In particu-
+     Other                     n/a       25          4                 lar, a number of steps are not required in the current model,
+     Total                     n/a      615         100                but easily could be in alternative designs: code distribution,
+                                                                       because it has been separated; authentication, because state
+Table 2. Profile of basic capsule processing                           protection is built on the fingerprint identifiers as described
+                                                                       in the next section; and resource reservation and account-
+                                                                       ing, because we follow the basic connectionless forwarding
+built-in Java runtime facilities, and normalized the result us-        model.
+ing the previously reported latency to account for profiling                To contrast ANTS and IP processing using the results
+overhead. The results are shown in Table 2. In the profile             in Table 2, we first exclude the receive and transmit times,
+results, ANTS processing is divided into nine steps, some of           since they would not be substantial in a kernel-based im-
+which are analogous to the steps that occur in IP and some             plementation. Note that this will increase the overhead at-
+of which are unique to ANTS. This is noted in the ”IP?” col-           tributed to ANTS. Of the remaining ANTS-only steps, the
+umn. For this comparison, IP processing steps are abstracted           largest components by far are for capsule encoding and de-
+from RFC 1812 [3], which defines the standard IP process-              coding, both of which are artifacts of our Java-based proto-
+ing that must be performed by all IP routers.                          type rather than intrinsic costs of capsule processing. This
+                                                                       difficulty is well known but not satisfactorily addressed with-
+  1. A message is received from the incoming network in-               out language support such as the view construct in SPIN’s
+     terface via the operating system. IP in the kernel does           version of Modula-3 [18]. We therefore exclude these costs.
+     not require this step, and neither would ANTS if run-                  The remaining processing steps correspond to intrinsic
+     ning in the kernel.                                               costs. The profile data shows that, for these steps, ANTS
+  2. The structure of the message is checked to ensure that            adds 30 µs to the 100 µs needed for IP. That is, ANTS adds
+     it is a valid capsule. The checks are simple, and IP              an overhead of roughly 30% to IP to perform type demul-
+     performs analogous checks.                                        tiplexing and safe evaluation. Both of these operations are
+  3. The capsule type is mapped to the appropriate forward-            known to run quickly. Demultiplexing is efficient because it
+     ing routine. This is done with a hash table lookup.               requires only a hash lookup. This is facilitated in ANTS be-
+     There is no corresponding requirement for IP.                     cause the fingerprint provides pseudo-random bits that can
+                                                                       be used directly as an index. Safe evaluation can be per-
+  4. The capsule is decoded from an external packet repre-             formed efficiently with binary forwarding routines in a high
+     sentation to an internal object representation. This step         performance implementation: SFI [44] is known to add an
+     requires object allocation and member initialization by           overhead of approximately 4% for fault isolation (write pro-
+     copying. It is an artifact of the Java-based implemen-            tection) and approximately 20% for general (read/write) pro-
+     tation that is not intrinsic to the ANTS architecture.            tection, while PCC [29] adds no runtime overhead after the
+  5. A forwarding routine is invoked. To implement IP                  proof is checked when the code is loaded. Other costs will
+     service, the forwarding routine simply invokes default            of course depend on the forwarding routine itself, but these
+     forwarding via the active node. While default forward-            costs are deliberately incurred when a new service provides
+     ing is the same as IP forwarding, expressing it as a              a performance advantage. The forwarding times for some
+     service within ANTS generates some overhead to set                routines are reported in Section 6. We note here that all of
+     up the call in a safe and generic manner.                         the node API operations can be implemented to run quickly
+  6. A routing table lookup is performed. In the prototype,            since all are lightweight; for example, none require disk ac-
+     a simple hash table lookup is used, while in IP and               cess or network roundtrips.
+     a production ANTS system a more expensive longest
+     matching prefix operation is needed. (The greater rel-
+     ative cost of this step in practice will result in a more         5    Who can introduce new services?
+     favorable comparison than is made here.)
+                                                                       The vision presented in [41] is that all users should be able to
+  7. The capsule is encoded to an external packet represen-            customize processing within the network. This would foster
+     tation from an internal object representation. Again,             third party developers and a marketplace for new services
+     this step is not intrinsic to ANTS.                               that would accelerate the pace of innovation. Mobile code
+  8. Header fields are updated, for example, by decrement-             technologies are suggested as a mechanism that will enable
+     ing the TTL and setting the previous node address. The            programs to be run safely in the context of shared resources.
+
+                                                                  71
+    We have partly succeeded in reaching this goal, finding             it does limit the kind of services that can be constructed in
+security concerns to be more challenging than those of per-             ANTS, the benefits of having this form of protection model
+formance. After all, it is clear that the speed at which capsule        far outweigh the costs. A typical example of a service that is
+forwarding can be implemented will dictate where it is ap-              difficult to realize is a firewall, since one type of capsule can-
+plied. But it is not clear that the resource management and             not directly control the forwarding of another type. (How-
+security difficulties can be resolved in a large wide-area sys-         ever, these kind of services are not targeted by ANTS.)
+tem without restrictions that negate the original vision.                   Protection threats that would break this model must stem
+    In ANTS, we are able to isolate the code and state of               from the transfer and execution of code within the network.
+different services in a manner that is equivalent to that of            It appears to us that there are only three kinds of threats that
+static and trusted protocols today. This is despite the fact            could result in capsules of one service being handled in an
+that service code is mobile and untrusted. We view this as              unintended manner, whether accidental or malicious, that
+substantial progress. On the other hand, we currently handle            cannot occur in the Internet except in response to a faulty
+the problem of global resource allocation with a certifica-             implementation:
+tion mechanism that slows the rate of change compared to
+the active network vision, though we argue that the resulting              • the node runtime may be corrupted by service code;
+system can still evolve much more quickly than the Internet.               • service code distributed to an active node may be cor-
+    The rest of this section elaborates on these findings along              rupted or spoofed; and
+the lines of the protection and resource management threats                • the state cached at an active node on behalf of one ser-
+that exist, and how they are handled in ANTS compared to                     vice may be inadvertently manipulated by another ser-
+the Internet. We consider protection threats to be those that                vice.
+directly impact the execution of a service within the network
+so that it is no longer isolated from other code and hence no               The first threat, corrupting the active node itself, is met
+longer guaranteed to behave correctly. We consider resource             through the use of safe evaluation techniques for executing
+management threats to be those that affect the performance              service code. While the ANTS toolkit relies on the proper-
+of a service, rather than its correctness, by consuming shared          ties of Java, other implementations could be based on proof-
+resources in an unreasonable fashion that starves other legit-          carrying code (PCC) or software-based fault isolation (SFI).
+imate network users. That is, we are more concerned with                The net result is that the sound implementation of the node
+network robustness than fairness.                                       runtime implies that it cannot be crashed or otherwise cor-
+                                                                        rupted by arbitrary service code in the same sense that tra-
+                                                                        ditional operating systems protect themselves from applica-
+5.1 Protection                                                          tions.
+The ultimate goal of ANTS is to allow untrusted users to                    The second threat, code spoofing or the transfer of cor-
+control the handling of their own packets within the network,           rupted code, is met through the use of fingerprint-based cap-
+yet to ensure that the code they provide can do no harm to              sule types, as was previously discussed.
+the users of other services even if it is designed poorly or                A third means of interfering with a service is to corrupt
+used maliciously. Early in our design effort, we realized               the state that it maintains at an active node. This is prevented
+that the capsule model provides a clear basis for simplify-             in ANTS by a restricted node API. Access to state shared
+ing interactions within the network: each capsule explicitly            across services is guarded. For example, the default shortest-
+specifies its own handling via its type field, which is carried         path routes can only be read by services, so that one service
+with the capsule through the network as shown in Figure 2.              cannot alter them for another. Only two forms of service-
+To extend this scheme into a protection model that is equiv-            specific state are retained by a node after a capsule is for-
+alent to the operation of conventional protocols, we added              warded: service code itself and data placed in the soft-store.
+the stipulation that a capsule cannot change its type to that           The code is readily protected because it is read-only. The
+of another service (or equivalently create capsules of another          data is protected by building on the fingerprint-based cap-
+service) within the network. This is enforced by the ANTS               sule types to partition the soft-store by service. This guar-
+runtime sandbox described in Section 3.3. The result is that            antees that state maintained on behalf of one service cannot
+the processing a capsule can undergo is fixed by the value of           be manipulated by code corresponding to another service.
+its type field at the moment it is injected into the network,           Conversely, sharing between the sessions of a service is con-
+in the same manner that an IPv4 packet is forwarded with                trolled by the service code.
+IPv4 processing only. This means that, for example, it is                   A significant complication that we faced to make this
+not possible to construct a service that arbitrarily searches           model useful is the need for read and write sharing between
+the network and then interferes with capsules belonging to              different types of capsules. To implement many services,
+another service.                                                        a set of related forwarding routines must be able to share
+     This model is straightforward to understand, and has               state within the network. For example, one type of cap-
+worked well for us once we extended it to allow for the                 sule may establish custom routes by placing information in
+controlled sharing of state between related types of cap-               the soft-store of nodes, and another type of capsule follow
+sules (as described shortly). It provides an authentication-            those routes by accessing the information. We accomplish
+free foundation on which other security mechanisms can be               one level of sharing in a secure manner by using a hier-
+constructed as they are needed. We have found that, while               archical fingerprint scheme for computing the capsule type
+                                                                        identifiers. Essentially, if capsules with forwarding routines
+
+
+                                                                   72
+A and B are to share state within the network and XH is                      Long running forwarding routines are broken with a watch-
+the fingerprint of X, they are marked with the type identi-                  dog timer. Termination is simplified by unloading all state
+fiers (A, (A, B)H )H and (B, (A, B)H )H .5 Code distribu-                    associated with forwarding routines that trigger violations.
+tion then transfers the routines A and B when they are re-                   Access to memory and bandwidth is limited by decrement-
+quired so that the type identifier can be verified. In this man-             ing the TTL field to prevent a capsule from sending a large
+ner, capsules of type A and B can be recognized as belong-                   number of outgoing capsules (as defined by the TTL) or
+ing to a single service that is identified as (A, B)H and state              placing a large number of objects in the soft-store. Alter-
+can be shared between them. This scheme also prevents an-                    native local policies, such as static limits on the fanout of a
+other routine, C, from later claiming to belong to the service               capsule, could easily be enforced. Other resources, such as
+and manipulate its state.                                                    the stack, can be similarly limited, though this is not done
+    In sum, ANTS provides measures that defeat all of these                  in the prototype because it requires the Java runtime to be
+kind of threats so that the protection provided by ANTS is as                modified. This simple scheme has been sufficient to our pur-
+good as the protection afforded to protocols in the Internet                 poses because we are more concerned with preventing gross
+today. This is so despite the fact that ANTS services are im-                errors in the set of cached services than accounting for all re-
+plemented with mobile and untrusted code (certification is                   source consumption or enforcing fairness between capsules.
+not required for basic protection) while conventional proto-                 Other research efforts, such as RCANE [27], are exploring
+cols are implemented with static trusted code. Further, these                active network environments that support more fine-grained
+measures are robust because they are implemented by each                     control of resources.
+active node without relying on any external parties.                             The third threat, that misbehaving applications may
+    In the larger context, Internet security is in the process of            starve well-behaved ones exists in both ANTS and the In-
+being extended because it is known to be weak. Both ANTS                     ternet and is not well addressed in either. The root of this
+and the Internet protect different protocols from interfering,               problem is that the Internet currently lacks network-based
+but not different users of a protocol from interfering with                  resource allocation mechanisms; instead, it relies on the co-
+each other. An interesting use of ANTS is to introduce new                   operation of users6 . This is increasingly recognized as prob-
+security services that add authentication and encryption at                  lematic, and efficient network-based mechanisms are fun-
+selected points. This could easily be done by extending the                  damentally needed to improve fairness and penalize non-
+node API with authentication and encryption calls that ser-                  responsive flows [8] in the same manner that operating sys-
+vices could combine to meet their own security needs.                        tems, not applications, must arbitrate between competing re-
+                                                                             source demands and protect the system. These mechanisms
+                                                                             will benefit an active network in the same ways they benefit
+5.2 Resource management                                                      the current Internet.
+We now provide a taxonomy of resource management                                 In-between these extremes lies the more difficult task of
+threats. In ANTS, one service can potentially interfere with                 controlling the resource consumption of a capsule and its
+the performance of another in three ways:                                    descendents across a group of nodes. This task differenti-
+                                                                             ates active networks from the Internet. In the Internet, the
+   • a capsule may consume a large, possibly unbounded,                      resources that are consumed as a packet is forwarded from
+     amount of resources at a single node;                                   source to destination are relatively well understood in terms
+   • a capsule and other capsules it creates within the                      of a static model that limits bandwidth, memory and pro-
+     network may consume a large, possibly unbounded,                        cessing time. This, of course, assumes correct design and
+     amount of resources across multiple nodes; and                          implementation, which is not always the case.7 In an active
+   • an application running on an end-system may be used                     network, however, resource consumption is driven by pro-
+     to inject a large, possibly unbounded, number of cap-                   grams and cannot be finessed by arguments of a restricted
+                                                                             set of developers. It will be much more dynamic in nature,
+     sules into the network.
+                                                                             and must be restricted in its form to ensure that the effects of
+    This classification is useful because it highlights re-                  one service on others or a region of the network are reason-
+source management tasks that can readily be addressed, re-                   able.
+main open in both ANTS and the Internet, and the difference                      One useful technique is a per capsule hop limit. In
+between the two.                                                             both IP and ANTS, packets and capsules would consume
+    The first threat, too many resources used at a node during               unbounded resources if blindly forwarded around a routing
+the forwarding of a single capsule, is able to be met in ANTS                loop. The TTL field is used to break such loops in IP, and
+with current technology because the programming model is                     ANTS uses the same mechanism to detect and stop an anal-
+restricted. In the Internet, the resources consumed during                   ogous class of infinite loop program errors. PLAN [16] goes
+packet forwarding are implicitly bounded by the design and                   further by dividing the TTL between a capsule and its de-
+correct implementation of IP and other network protocols. In                     6
+                                                                                   It is often mentioned that the access bandwidth of a user limits
+ANTS, the node runtime enforces simple resource bounds.                      the impact they can have on the network. However, this is a poor
+   5                                                                         allocation mechanism at best. It does not prevent, for example,
+     Actually, type calculation is more complex because there is an          equally capable users from starving one another of bandwidth to a
+intermediate level of naming between individual capsules and ag-             given destination.
+gregate services that is used to minimize code distribution. See [45]            7
+                                                                                   For an example flaw see CERT Advisory CA98-01, Smurf IP
+for details.
+                                                                             Denial-of-Service Attacks, January 1998.
+
+
+                                                                        73
+scendents so that the original TTL bounds the total amount              that the availability of executable code raises the possibil-
+of resources consumed within the network. We consider                   ity of automatically testing services against common failure
+TTL-based mechanisms insufficient, however, to prevent                  cases.
+capsules from consuming an excessive (though bounded)                       Our current dependence on certification begs the ques-
+amount of node resources if directed to do so by a poorly               tion of whether it is still useful to incur the costs of other se-
+designed service. TTLs cannot provide a tight bound on ac-              curity mechanisms. We believe that protection and resource
+tivity when multicast must be accommodated. This is be-                 allocation mechanisms are invaluable because they defend
+cause the number of “capsule-hops” that can legitimately re-            against accidental as well as malicious errors; we seek to
+sult from a single capsule grows with the multicast group               expand our mechanisms to cover the ground nominally pro-
+size, and so can be large. More fundamentally, the property             tected by certification. Even if this can be accomplished,
+that we want to hold is that capsule forwarding does not re-            however, it is likely that certification has a role to play in a
+sult in activity that is concentrated in a small region of the          practical active network. Signed code provides a trail to fol-
+network, swamping nodes in the process. Activity that is                low when problems arise. It also enables a spectrum of trust,
+significant but not concentrated, as occurs when multicast is           whereby more trusted users are allowed access to wider and
+implemented correctly, can be an efficient use of resources             more powerful APIs. We have deferred the study of these
+and should be allowed. However, since TTLs are not related              tradeoffs and associated issues for which we can anticipate a
+to topology they cannot readily restrict the location of activ-         need, such as revocation, to future research.
+ity. Even without multicast this is problematic. For example,
+consider a service that “ping-pongs” a capsule between ad-
+jacent nodes until its TTL is exhausted. With a maximum                 6   What services can be introduced?
+TTL of 255 (8 bits as in IP), a node sending one capsule
+with a buggy or malicious forwarding routine might inflict              We have found the most compelling use of capsules to be as
+100 capsules worth of forwarding work on other nodes.                   a means of rapidly upgrading the services of large, wide-area
+     Better mechanisms are therefore needed. In particular              networks such as the Internet. There is a clear need for such
+cases, it may be practical to locally check that programs               a mechanism because of difficulties that exist today. For ex-
+match a restricted form. For example, forwarding rou-                   ample, IPv6 (the next version of the IP) is proving slow and
+tines that route a capsule towards a fixed destination and do           difficult to deploy; if the Internet continues to be successful
+not create other capsules satisfy most definitions of “safe.”           IPv6 will not be the last evolutionary step that is needed. In
+Though this class may sound restrictive it includes selec-              the meantime, backwards-compatible solutions such as Net-
+tive discard, congestion notification and network merging               work Address Translation (NAT) boxes (which map a large
+services. Fairness mechanisms that limit the impact of mis-             set of internal addresses to a small set of external ones) are
+behaving users, such as fair queuing, will also mitigate the            gaining ground because they are more readily deployed, de-
+damage that can be inflicted by a poorly designed program.              spite the architectural difficulties they present [40]. Further-
+However, they cannot prevent such programs from consum-                 more, today’s Internet hampers experimentation: it was not
+ing more resources than is appropriate.                                 possible to test the IPv6 candidates under real conditions be-
+     Until better solutions are available, we have fallen back          fore selecting a standard. Thus active networks would be of
+on the mechanism of requiring that service code be certi-               tremendous value if they facilitated the widespread deploy-
+fied with a digital signature by a trusted authority (an IETF           ment of even a small number of services such as multicast,
+equivalent) before it is freely executed at nodes. This runs            mobility or IPv6.
+counter to the other mechanisms of the node runtime in that                 In the remainder of this section we characterize the kind
+it depends on external parties. Nonetheless, we argue that              of services that ANTS is able to introduce and discuss this
+it results in a system that is capable of evolving much more            characterization using examples. We have found that ANTS
+rapidly than is possible today. This is because certification           is able to introduce a class of new services that are otherwise
+differs from standardization in that it does not seek to define         difficult to deploy. We have also been struck by the number
+a single preferred behavior. Rather, no consensus is needed             of service variations that are enabled by using a program-
+and certification only seeks to establish that a service makes          ming language to combine a small set of node operations.
+reasonable use of overall network resources, regardless of              This leads us to conclude that a viable active network could
+whether it is considered an effective means of accomplishing            be extremely useful for the experimentation necessary to de-
+a particular task. To simplify the potentially difficult task of        sign new protocols. Despite this, it is clear that greater ap-
+inspecting programs for certification, we note that the latter          plication experience is needed to judge the utility of active
+need not be foolproof since it is not necessary to hold all pro-        networks. No single application (“killer app”) that proves
+grams to the same level of accountability. To support rapid             the value of extensibility has emerged, and none is likely to
+experimentation, for example, it would be possible to mod-              because support for such an application can always be built-
+ify the ANTS runtime to execute code that is newly certified            in to the base system. Rather, the advantages of extensibility
+(or even not certified) at a reduced rate, so that it consumes          accrue over time. Active networks are no different in this
+no more than 1% (say) of the available resources. Fresh code            regard than extensible operating systems [21, 5], databases
+could similarly be certified for a restricted period in which           or language implementations [22].
+a trial can be run. Together with a revocation mechanism,
+such techniques would allow new services to be gradually
+accepted as experience is gained with them. We also note
+
+
+                                                                   74
+                          Service         Capsule          Code (bytes)      Latency (us)    Slowdown
+                                          MulticastData       3496               670            1.25
+                          ANTS–PIM        JoinPrune           4325               975            1.82
+                                          RegisterStop        1690               560            1.05
+                                          Query               1844               615            1.15
+                          WebRoute        Bind                1821               685            1.28
+                                          Redirect            1843               600            1.12
+                                          Activate            1991               620            1.16
+
+
+Table 3. Latency and code size for sample ANTS capsule forwarding routines
+
+
+6.1 Characterization of services                                        • multicast (PIM-SM [13], CBT [4], Express [17]);
+The reason capsules provide a powerful means for effecting              • reliable multicast support ([31, 25], Cisco’s PGM);
+change is that they deploy processing along network paths               • explicit congestion notification (ECN) [34];
+in a clean manner that is not dependent on the details of the           • PIP [14], a former IPv6 candidate; and
+path itself. This is in contrast with the existing mechanisms           • anycasting [32].
+that are essentially administrative and proceed one router at
+a time. New services that can be deployed in ANTS but are                We identified these services as candidates only gradu-
+difficult to introduce into the Internet today are thus those        ally, as we gained experience constructing forwarding rou-
+whose implementation is spread across multiple network el-           tines that possessed the required characteristics. It is not
+ements. They are often variations on routing and forwarding.         obvious how all of these services can be designed to meet
+Unlike services constructed above the network layer, they            the required criteria, and in the remainder of this section we
+can make direct use of topology, loss and load information           discuss the criteria in light of these examples.
+to construct novel routing, flow setup, congestion handling
+and measurement services.                                            6.2 Discussion
+    By analyzing our architecture we have identified the
+characteristics that a service must possess to be able to be         6.2.1   Expressible
+readily introduced in ANTS:
+                                                                     The small API available in our prototype has proved suf-
+   • Expressible. The service code must be constructed us-           ficient to express a variety of services. This is partly be-
+     ing the restricted node API listed in Table 1.                  cause its capabilities, such as the ability to place application-
+   • Compact. The service code must be smaller than a self-          defined objects into the soft-store, are widely applicable, and
+     imposed limit of 16 KB to limit the impact of code              partly because the forwarding routines themselves tend to act
+     distribution on the rest of the network.                        as “glue” that binds together these capabilities. It quickly be-
+   • Fast. Each routine must run to completion at the for-           came apparent as we wrote services that this code is a much
+     warding rate, or it will be aborted by the node.                more flexible form of glue than the traditional means of com-
+                                                                     position in networked systems, layering models, even com-
+   • Incrementally deployable. The service must not fail in          pared to micro-protocol systems such as the x-kernel [19].
+     the case that not all nodes are active.                         We note that Click [28], an experimental router infrastruc-
+    We believe that many useful services can be constructed          ture containing much finer-grain routines (such as queue ma-
+to have these characteristics. We have implemented at least          nipulation), has recently emerged. We view systems such as
+five services (host mobility, source-specific multicast [46],        Click as synergistic with active networks, since they provide
+path MTU queries, PIM-style multicast, and Web cache                 a router with a native set of fine-grain APIs that ANTS cap-
+routing [45]), the last two of which were case studies of            sules could compose into novel functions.
+services that are intended to be realistic. Others have used             Many variations on a forwarding routine are often possi-
+ANTS to study a number of novel services: an auction ser-            ble, such as multicast protocols that support reliable multi-
+vice [23]; a reliable multicast protocol [24]; and a network-        cast, or changes in routing between Web caches that imple-
+level packet cache [20].                                             ment different search policies. This is significant because
+    As evidence of the utility of capsules, the strongest ar-        in ANTS a slightly different service is straightforward to
+gument we can presently make is to provide examples of               use since its deployment is automatic. This could stimu-
+services that: have been promoted by others; are meritorious         late the real-world experimentation that is necessary to de-
+enough that they have received serious consideration by the          sign new and improved protocols. Code also provides a
+Internet community; are difficult to introduce in the Inter-         wider interface with which to discover network properties
+net today because they rely on network layer state and their         than the “black-box” model that is used today, where prop-
+implementation is spread across the network; and can be in-          erties are inferred from observations of traffic. For example,
+troduced in an equivalent form with ANTS-style capsules.             path MTU estimates can be obtained by recording the min-
+We have identified a number of such services:                        imum MTU as a capsule is forwarded along a path (at con-
+                                                                     nection setup time too) rather than relying on heuristics and
+
+                                                                75
+error messages. This too enriches the variety of services that           4.2. This shows the impact of executing a real routine that
+can be expressed.                                                        is more complex than IP forwarding. Each line represents
+     The API does not readily allow two kinds of services to             one type of capsule; each service is comprised of multiple
+be constructed, both of which fall outside the design space              kinds of capsules that work together. Web Query capsules,
+of the ANTS programming model. It is difficult to embed                  for example, take 1.15 times as long to forward as the “null”
+long-lived processes in the network, such as a Web cache or              ANTS capsule and have roughly 1.8 KB of associated code
+transcoding engine. This is because the API does not support             that is first demand loaded. We omit an explanation of the
+reliable storage or timers. Such capabilities could be added             services themselves because it is not necessary to understand
+to the API by other means, for example an administrator up-              their operation for the purpose of this paper, and they are
+grading an active node, but they cannot be extended at the               fairly involved. The interested reader is referred to a disser-
+capsule level. However, ANTS works in synergy with such                  tation [45].
+complementary evolution. This is because new services can
+be written to take advantage of new capabilities as they are
+embedded in the network: forwarding routines simply query                6.2.3   Incrementally deployable
+nodes for the availability of a particular feature and act ac-           Essentially all new Internet services must be able to be intro-
+cordingly. We speculate that one of the most valuable uses               duced incrementally or they cannot be deployed. In ANTS,
+of ANTS may be new services that connect applications with               this requires that services be able to function in a network in
+network-embedded resources (caches, transcoding engines)                 which not all nodes are active. Designing services for this
+in a more flexible way than the fixed proxies or transparent             case has proved to be a challenging but usually soluble task.
+interception that is used today.                                             For example, some of the potential services we put forth,
+     The second kind of service that is difficult to construct           notably the multicast services such as PIM, are specified for
+is that which cuts across many flows, such as firewall filter-           a network region in which all routers participate in the im-
+ing. (But recall that one service can be composed of several             plementation. It is not obvious how to define an equivalent
+cooperating types of capsule.) This is because network pro-              service that works in a partially active network. Yet this can
+cessing is explicitly selected for each capsule as it is injected        be done. To see how, consider that PIM can be run in an
+into the network to support our security model. Instead, this            overlay, which is effectively a situation where only some of
+kind of service is well-served by extending routers to be pro-           the network nodes implement the service — what is needed
+grammable by the administrator, as is done in [11]. This is              then is a dynamic means of establishing the tunnels of the
+because processing that cuts across many flows is often used             overlay. We designed such a mechanism using capsules as
+to enforce policy at a point.                                            part of our PIM-equivalent implementation in ANTS.
+                                                                             Similarly, active path MTU discovery requires that all
+6.2.2   Compact and fast                                                 nodes along the path be active or the result must be treated as
+                                                                         an estimate. Technically, however, Internet path MTUs can
+Forwarding routines tend to be small because they tend to be             only ever be estimates because they must allow for routes
+“glue” code. We have not found it difficult to construct ser-            that change unexpectedly. To the extent that there are active
+vices that are smaller than our 16 KB limit, despite a naive             nodes adjacent to bandwidth limited links, which typically
+transfer format that transfers Java classfiles directly. Other           have the smallest MTUs, the result of an active path MTU
+systems have similarly found that capsule-style code can be              service will be a useful estimate.
+compact and often acts as glue [39, 16]. Inevitably though,
+this bound will limit the complexity of forwarding routines
+that can be constructed. We believe that a relatively small              6.3 Upgrading ANTS
+bound, on the order of the current 16 KB, will prove suf-                An interesting class of services to consider are those that are
+ficient for the type of services that ANTS targets and that              not easily introduced without upgrading ANTS itself. These
+other deployment mechanisms will be more appropriate for                 are primarily services that require changes to widely-held
+more ambitious services, such as video transcoding.                      assumptions, of which we have identified the following ex-
+     The forwarding routines also tend to complete quickly.              amples:
+This is because all of the node API operations complete
+rapidly (none block on disk or network access) and the glue                 • the way capsule types are computed and carried;
+code typically combines them in a straightforward manner.                   • the format of addresses;
+The majority of the routines we have constructed have run                   • the code distribution mechanism;
+within a factor of two of the basic capsule forwarding time.
+     As evidence to support these assertions, we provide in                 • resource limiting via TTLs;
+Table 3 the forwarding times and program code sizes for cap-                • and the node API.
+sules of the two most realistic services we have implemented
+in ANTS: PIM-style multicast and Web cache routing. For-                     These base assumptions are shared by active nodes
+warding time is given in microseconds across a single ANTS               throughout the network, and so are difficult to override lo-
+node, using the same experimental platform as described in               cally. While it would perhaps be preferable to have an ar-
+Section 4.2. It is also given as a slowdown factor relative              chitecture that encoded no such assumptions, this position
+to results for the “null” ANTS capsule reported in Section               is untenable. The chief benefit of ANTS compared to the
+                                                                         Internet is that the scope of node processing that is fixed at
+
+
+                                                                    76
+the outset in its function has been greatly reduced. When              7.2 Dealing with heterogeneous nodes
+changes to widely-shared assumptions are necessary, they
+must be made by upgrading ANTS in the same way as pro-                 Implementing active nodes has forced us to reckon with the
+tocols are upgraded in the Internet today, with backwards-             differing capabilities of nodes at different network locations.
+compatibility, versioning or overlays. For this reason, ANTS           A difference in style between ANTS and IP that has emerged
+capsules carry a version number.                                       is in how we accommodate this heterogeneity. IP essentially
+     We note, however, that there are often design                     defines the minimal forwarding required for internetwork-
+workarounds that obviate the need to change the base as-               ing, with the expectation that this processing will run at all
+sumptions. For example, though it is not possible to intro-            locations. On the other hand, in an active network we must
+duce IPv6 per se because the format of addresses is fixed, it          confront the issue of different kinds and complexities of cap-
+still possible to increase the size of the address space and so        sule processing running at different locations.
+solve the same problem. PIP [14] accomplishes this by using                 Our strategy has been to bind capsule routines at runtime
+the existing addresses hierarchically with a technique known           to those nodes that have sufficient forwarding resources to
+as source routing. As another example, while the node API              execute them. We do this in a clean manner by: using cap-
+is fixed, language-level introspection can be used to query            sule code to query the node environment and decide if there
+whether a new feature is available at the local node and if so         are sufficient resources; having active nodes protect them-
+gain access to it. This is a powerful mechanism for support-           selves by unloading routines in the case that they take too
+ing change, and ANTS includes the notion of extensions in              long to run; and writing services that do not need to be run
+its node API (Table 1) for this purpose.                               at all nodes to work correctly. IP routers then exist at the
+                                                                       bottom of this organization as those nodes that are not active
+                                                                       for any type of capsule. Architecturally, this strategy could
+7   Architectural observations                                         be seen as the logical extension of the two-tier “edge and
+                                                                       core” model recently in vogue with developments such as
+Active networks represent a different architectural perspec-           IETF Differentiated Services.
+tive than traditional layered protocol stacks. In this section,
+we offer somewhat more speculative observations on net-
+work architecture that we have made in the course of our               7.3 End-to-end argument
+work and that have not appeared in the literature to the best          An initial concern of the active network approach was that
+of our knowledge.                                                      it might conflict with the end-to-end argument [38, 6, 35].
+                                                                       With one exception, encryption, we have not found this to
+7.1 Value of systematic change                                         be the case, most likely because we view ANTS as simply a
+                                                                       framework for expressing and deploying new services. The
+As we have experimented with ANTS, we have realized                    new services themselves can be well designed or poorly de-
+the value of a systematic means of upgrading protocol pro-             signed, depending on the skill of the developer. It is cer-
+cessing within the network, as opposed to depending on                 tainly possible to construct services that do not conflict with
+backwards-compatibility. ANTS makes the new process-                   the end-to-end argument (such as the multicast variants de-
+ing that a capsule can undergo within the network explicit,            scribed in this paper) and features of our architecture (such
+while depending on backwards-compatibility implicitly ex-              as the provision of soft-storage) are intended to encourage
+tends old processing.                                                  good design.
+    It is quite remarkable how effectively backwards-                       However, end-to-end encryption, such as that specified
+compatibility has been leveraged to extend TCP/IP to new               in IPv6 IPSEC, poses a challenge for the active network
+situations. However, an implicit means of extension ulti-              approach. When it is present, active code cannot readily
+mately has unexpected or adverse side-effects, while an ex-            operate on the packet payload. Two factors mitigate this
+plicit one has much cleaner semantics. This is already ap-             problem. First, many ANTS services require access only
+parent in the case of NATs compared to IPv6, and we be-                to packet header fields, for example, routing variations. It
+lieve that many more situations will come to light. For                is then possible to design encryption in a manner that ex-
+example, consider network-embedded Web caches, such as                 poses these fields. Second, end-to-end encryption that cov-
+Cisco’s CacheDirector, that are currently being developed.             ers the entire payload, such as IPSEC, precludes many useful
+For reasons of backwards-compatibility, they work in a man-            network-embedded services that are already deployed, such
+ner that is transparent to their clients, spoofing the remote          as firewalls, transparent proxies, and wireless boosters. For
+Web server. This may pose no direct problems today. How-               this reason, variant encryption standards that expose header
+ever, research is now beginning to address how to share                fields are likely to emerge.
+congestion information to improve the performance of short
+connections. In this context, transparent proxies have the
+potential to confuse hosts by mixing different congestion in-          7.4 Localizing change
+formation under one name.                                              We have come to appreciate that changes in network services
+                                                                       must be localized in their implementation if they are to be
+                                                                       easily deployed. This observation holds regardless of the
+                                                                       protocol layer of the change, and whether they are effected
+                                                                       by means of an active network or not. Much of the value of
+
+
+                                                                  77
+the capsule model is that it allows changes to be made along            MIT, and in particular wish to thank Tom Anderson, Steve
+an entire network path at one time, rather than at individual           Garland, John Guttag, Hank Levy and David Tennenhouse
+network locations. This new kind of locality greatly expands            for their encouragement and guidance. The SOSP referees
+the scope of changes that can be made.                                  and our shepherd, Jay Lepreau, have further helped us to
+    Arguably, IPv6 is proving slow and difficult to intro-              improve this work with their careful feedback.
+duce because its changes are not easily localized. Since it
+replaces rather than extends existing addresses, it logically
+needs to be deployed at all network locations before it can             References
+be used. This is clearly not feasible, and an overlay and                [1] D. S. Alexander et al. Active Bridging. In Proc. SIG-
+complicated transition plans are necessary to avoid long pe-                 COMM’97, pages 101–111, Cannes, France, Sep 1997.
+riods of restricted connectivity [15]. Conversely, NATs are                  ACM.
+rapidly gaining ground despite their drawbacks precisely be-
+                                                                         [2] E. Amir et al. An Active Service Framework and its
+cause they are easy to deploy with only local changes. It is                 Application to Real-time Multimedia Transcoding. In
+interesting to speculate whether incrementally deployed so-                  Proc. SIGCOMM’98, pages 178–189. ACM, Sep 1998.
+lutions to IPv6, such as PIP [14], would have enjoyed more
+success.                                                                 [3] F. Baker. Requirements for IP Version 4 Routers. Re-
+                                                                             quest for Comments 1812, IETF, June 1995.
+                                                                         [4] A. Ballardie et al. Core based Trees. In Proc. SIG-
+8    Conclusions                                                             COMM’93, pages 85–95, San Francisco, CA, 1993.
+                                                                             ACM.
+In this paper, we have reported substantial progress towards
+active networks as envisioned in [41]. In order to build a real,         [5] B. Bershad et al. Extensibility, Safety and Performance
+working system, we have revised some of the positions orig-                  in the SPIN Operating System. In 15th Symp. on Oper-
+inally put forth in [41]. Nevertheless, even after this healthy              ating Systems Principles, pages 267–283. ACM, Dec.
+dose of reality, we find that a surprising amount of the origi-              1995.
+nal vision still holds sway:                                             [6] S. Bhattacharjee et al. Active Networking and the End-
+                                                                             to-End Argument. In Intl. Conf. on Network Protocols
+    • Capsules have proved a worthwhile model because                        (ICNP’97), pages 220–228, Atlanta, GA, Oct 1997.
+      they provide a clean means of upgrading processing                     IEEE.
+      along an entire network path. This model of deploy-                [7] A. Birrell et al. Network objects. In 14th Symp. on
+      ment is considerably more powerful than the pointwise                  Operating Systems Principles (SOSP’93), pages 217–
+      administrative upgrades that are the norm today. To                    230, Ashville, NC, Dec. 1993. ACM.
+      implement capsules efficiently, we have come to de-
+      pend on the demand loading of code and on traffic pat-             [8] B. Braden et al. Recommendations on queue manage-
+      terns for which code caching is effective.                             ment and congestion avoidance in the internet. Request
+                                                                             for Comments 2309, IETF, April 1998.
+    • We have partly succeeded in designing a network that
+      any untrusted user can freely customize. We have man-              [9] D. D. Clark. The Design Philosophy of the DARPA
+      aged to isolate different services from each other with-               Internet Protocols. In Proc. SIGCOMM’88, pages 106–
+      out trust or centralized control, but not to protect the               114, Stanford, CA, Aug. 1988. ACM.
+      network as a whole from untrusted services. To ac-                [10] D. Cronquist et al. Architecture design of reconfig-
+      complish the latter in the general case, we have fallen                urable pipelined datapaths. In Conf. on Advanced
+      back on certification by a trusted authority until better              Research in VLSI, pages 23–40, Atlanta, GA, March
+      solutions are found. This is a measure that runs counter               1999.
+      to our vision but which still allows easy change relative         [11] D. Decasper et al. Router Plugins: A Software Ar-
+      to standards bodies today.                                             chitecture for Next Generation Routers. In Proc. SIG-
+    • We have found the most compelling application of                       COMM’98, pages 229–240. ACM, Sep 1998.
+      capsules to be network layer service evolution, rather            [12] D. Decasper and B. Plattner. DAN: Distributed Code
+      than the migration of application code to locations                    Caching for Active Networks. In Conf. on Computer
+      within the network. We have found capsule code to                      Communications (INFOCOM’98), San Francisco, CA,
+      be well-suited to the task of introducing many varia-                  April 1998. IEEE.
+      tions of a service, and hence valuable for experimen-
+      tation. We also speculate that capsule code will act in           [13] S. Deering et al. Protocol independent multicast-sparse
+      synergy with network embedded devices (caches and                      mode (PIM-SM): Protocol Specification. Request For
+      transcoders) that are deployed by other means, such                    Comments 2362, IETF, June 1998.
+      that both will work more effectively together.                    [14] P. Francis and R. Gondivan. Flexible Routing and
+                                                                             Addressing for a Next Generation IP. In Proc. SIG-
+                                                                             COMM’94, pages 116–125. ACM, Sep 1994.
+Acknowledgments                                                         [15] R. Gilligan and E. Nordmark. Transition Mechanisms
+                                                                             for IPv6 Hosts and Routers. Request For Comments
+This work has benefited from the advice and assistance of                    1933, IETF, April 1996.
+many. We are grateful to the members of the SDS group at
+
+
+                                                                   78
+[16] M. Hicks et al. PLANnet: An Active Internetwork. In            [32] C. Partridge et al. Host Anycasting Service. Request
+     Conf. on Computer Communications (INFOCOM’99),                      For Comments 1546, IETF, Nov. 1993.
+     pages 1124–1133, New York, NY, Mar. 1999. IEEE.                [33] V. Paxson. End-to-End Internet Packet Dynamics. In
+[17] H. Holbrook and D. Cheriton. IP multicast channels:                 Proc. SIGCOMM’97, pages 139–152, Cannes, France,
+     EXPRESS support for large-scale single-source appli-                Sep 1997. ACM.
+     cations. In Proc. SIGCOMM’99, pages 65–78, Boston,             [34] K. Ramakrishnan and S. Floyd. A Proposal to add Ex-
+     MA, Sep 1999. ACM.                                                  plicit Congestion Notification (ECN) to IP. Request
+[18] W. Hsieh et al. Type Safe Casting. Software Practice                For Comments 2481, IETF, Jan. 1999.
+     and Experience, 28(7), Sep. 1998.                              [35] D. P. Reed et al. Commentaries on the Active Net-
+[19] N. C. Hutchinson and L. L. Peterson. The x-Kernel:                  working and End-to-End Arguments. IEEE Network
+     An Architecture for Implementing Network Protocols.                 Magazine, 12(3):69–71, May/June 1998.
+     IEEE Trans. on Software Engineering, 17(1):64–76,              [36] R. Rivest. The MD5 Message-Digest Algorithm. Re-
+     Jan. 1991.                                                          quest For Comments 1321, IETF, April 1992.
+[20] E. Johnson. A Protocol for Network Level Caching.              [37] M. Robshaw. On Recent Results for MD2, MD4, and
+     M.Eng Thesis, Massachusetts Institute of Technology,                MD5. RSA Laboratories Bulletin, Nov. 1996.
+     May 1998.
+                                                                    [38] J. H. Saltzer et al. End-to-End Arguments in Sys-
+[21] M. F. Kaashoek et al. Application performance and                   tem Design. ACM Transactions on Computer Systems,
+     flexibility on exokernel systems. In Proc. of the 16th              2(4):277–288, 1984.
+     Symp. on Operating Systems Principles (SOSP’97),
+     pages 52–65. ACM, Oct. 1997.                                   [39] B. Schwartz et al. Smart Packets for Active Net-
+                                                                         works. In 2nd Conf. on Open Architectures and Net-
+[22] G. Kiczales et al. The Art of the Metaobject Protocol.              work Programming (OPENARCH’99), New York, NY,
+     MIT Press, 1991.                                                    Mar. 1999. IEEE.
+[23] U. Legedza et al. Improving the Performance of Dis-            [40] P. Srisuresh and M. Holdrege. IP network address
+     tributed Applications Using Active Networks. In Conf.               translator (NAT) terminology and considerations. Re-
+     on Computer Communications (INFOCOM’98), San                        quest For Comments 2663, IETF, Aug 1999.
+     Francisco, CA, April 1998. IEEE.
+                                                                    [41] D. L. Tennenhouse and D. Wetherall. Towards an Ac-
+[24] L. Lehman et al. Active Reliable Multicast. In Conf.
+                                                                         tive Network Architecture. In Multimedia Computing
+     on Computer Communications (INFOCOM’98), San
+                                                                         and Networking 96, San Jose, CA, Jan. 1996. A revised
+     Francisco, CA, April 1998. IEEE.
+                                                                         version appears in CCR Vol. 26, No. 2 (April 1996).
+[25] B. N. Levine and J. Garcia-Luna-Aceves. Improving
+                                                                    [42] The Tolly Group. Cisco 12000 Series GSR POS: Per-
+     internet multicast with routing labels. In Intl. Conf.
+                                                                         formance Evaluation. No. 199128, Manasquan, NJ,
+     on Network Protocols (ICNP’97), pages 241–250, At-
+                                                                         Sep. 1999.
+     lanta, GA, Oct. 1997. IEEE.
+                                                                    [43] J. van der Merwe et al. The Tempest – A Practical
+[26] D. Mazières et al. Separating Key Management from
+                                                                         Framework for Network Programmability. IEEE Net-
+     File System Security. In 17th Symp. on Operating Sys-
+                                                                         work Magazine, 12(3), May/June 1998.
+     tems Principles (SOSP’99), Kiawah Island, SC, 1999.
+     ACM.                                                           [44] R. Wahbe et al. Efficient Software-based Fault Isola-
+[27] P. Menage. RCANE: A resource controlled framework                   tion. In 14th Symp. on Operating Systems Principles
+     for active network services. In 1st Intl. Working Conf.             (SOSP’93), pages 203–216. ACM, Dec. 1993.
+     on Active Networks (IWAN’99), Berlin, Germany, Jul             [45] D. Wetherall. Service Introduction in an Active Net-
+     1999.                                                               work. PhD thesis, Massachusetts Institute of Technol-
+[28] R. Morris et al. The Click modular router. In 17th                  ogy, Feb. 1999.
+     Symp. on Operating Systems Principles (SOSP’99), Ki-           [46] D. Wetherall et al. ANTS: A Toolkit for Building
+     awah Island, SC, 1999. ACM.                                         and Dynamically Deploying Network Protocols. In 1st
+[29] G. Necula and P. Lee. The Design and Implementation                 Conf. on Open Architectures and Network Program-
+     of a Certifying Compiler. In Proc. PLDI’98 Conf. on                 ming (OPENARCH’98), pages 117–129, San Fran-
+     Programming Language Design and Implementation,                     cisco, CA, Apr 1998. IEEE.
+     pages 333–344, Montreal, Canada, June 1998.                    [47] D. J. Wetherall and D. L. Tennenhouse. The ACTIVE
+[30] E. Nygren et al. PAN: A High-Performance Active Net-                IP Option. In 7th SIGOPS European Workshop, Con-
+     work Node Supporting Multiple Code Systems. In 2nd                  nemara, Ireland, Sep 1996. ACM.
+     Conf. on Open Architectures and Network Program-               [48] Y. Yemini and S. da Silva. Towards Programmable Net-
+     ming (OPENARCH’99), pages 78–89, New York, NY,                      works. In Intl. Work. on Dist. Systems Operations and
+     Mar. 1999. IEEE.                                                    Management, Italy, Oct. 1996.
+[31] C. Papadopoulos et al. An Error Control Scheme
+     for Large-Scale Multicast Applications. In Conf.
+     on Computer Communications (INFOCOM’98), San
+     Francisco, CA, April 1998.
+
+                                                               79
+

@@ -1,0 +1,393 @@
+         WEB SEARCH FOR A PLANET:
+           THE GOOGLE CLUSTER
+              ARCHITECTURE
+                           AMENABLE TO EXTENSIVE PARALLELIZATION, GOOGLE’S WEB SEARCH
+                           APPLICATION LETS DIFFERENT QUERIES RUN ON DIFFERENT PROCESSORS AND,
+
+                           BY PARTITIONING THE OVERALL INDEX, ALSO LETS A SINGLE QUERY USE
+
+                           MULTIPLE PROCESSORS. TO HANDLE THIS WORKLOAD, GOOGLE’S
+
+                           ARCHITECTURE FEATURES CLUSTERS OF MORE THAN 15,000 COMMODITY-
+
+                           CLASS PCS WITH FAULT-TOLERANT SOFTWARE. THIS ARCHITECTURE ACHIEVES
+
+                           SUPERIOR PERFORMANCE AT A FRACTION OF THE COST OF A SYSTEM BUILT
+
+                           FROM FEWER, BUT MORE EXPENSIVE, HIGH-END SERVERS.
+
+
+                                     Few Web services require as much         its of available data center power densities.
+                           computation per request as search engines.            Our application affords easy parallelization:
+                           On average, a single query on Google reads         Different queries can run on different proces-
+                           hundreds of megabytes of data and consumes         sors, and the overall index is partitioned so
+                           tens of billions of CPU cycles. Supporting a       that a single query can use multiple proces-
+                           peak request stream of thousands of queries        sors. Consequently, peak processor perfor-
+                           per second requires an infrastructure compa-       mance is less important than its price/
+     Luiz André Barroso    rable in size to that of the largest supercom-     performance. As such, Google is an example
+                           puter installations. Combining more than           of a throughput-oriented workload, and
+           Jeffrey Dean    15,000 commodity-class PCs with fault-tol-         should benefit from processor architectures
+                           erant software creates a solution that is more     that offer more on-chip parallelism, such as
+              Urs Hölzle   cost-effective than a comparable system built      simultaneous multithreading or on-chip mul-
+                           out of a smaller number of high-end servers.       tiprocessors.
+                  Google      Here we present the architecture of the
+                           Google cluster, and discuss the most important     Google architecture overview
+                           factors that influence its design: energy effi-      Google’s software architecture arises from
+                           ciency and price-performance ratio. Energy         two basic insights. First, we provide reliability
+                           efficiency is key at our scale of operation, as    in software rather than in server-class hard-
+                           power consumption and cooling issues become        ware, so we can use commodity PCs to build
+                           significant operational factors, taxing the lim-   a high-end computing cluster at a low-end
+
+
+22                                   Published by the IEEE Computer Society                     0272-1732/03/$17.00 © 2003 IEEE
+price. Second, we tailor the design for best
+aggregate request throughput, not peak server
+response time, since we can manage response
+times by parallelizing individual requests.                                          Google Web server                  Spell checker
+   We believe that the best price/performance
+tradeoff for our applications comes from fash-
+                                                                                                                            Ad server
+ioning a reliable computing infrastructure
+from clusters of unreliable commodity PCs.
+We provide reliability in our environment at
+the software level, by replicating services across
+many different machines and automatically
+detecting and handling failures. This software-
+                                                                     Index servers                       Document servers
+based reliability encompasses many different
+areas and involves all parts of our system
+design. Examining the control flow in han-            Figure 1. Google query-serving architecture.
+dling a query provides insight into the high-
+level structure of the query-serving system, as
+well as insight into reliability considerations.     consult an inverted index that maps each
+                                                     query word to a matching list of documents
+Serving a Google query                               (the hit list). The index servers then determine
+   When a user enters a query to Google (such        a set of relevant documents by intersecting the
+as www.google.com/search?q=ieee+society), the        hit lists of the individual query words, and
+user’s browser first performs a domain name sys-     they compute a relevance score for each doc-
+tem (DNS) lookup to map www.google.com               ument. This relevance score determines the
+to a particular IP address. To provide sufficient    order of results on the output page.
+capacity to handle query traffic, our service con-      The search process is challenging because of
+sists of multiple clusters distributed worldwide.    the large amount of data: The raw documents
+Each cluster has around a few thousand               comprise several tens of terabytes of uncom-
+machines, and the geographically distributed         pressed data, and the inverted index resulting
+setup protects us against catastrophic data cen-     from this raw data is itself many terabytes of
+ter failures (like those arising from earthquakes    data. Fortunately, the search is highly paral-
+and large-scale power failures). A DNS-based         lelizable by dividing the index into pieces
+load-balancing system selects a cluster by           (index shards), each having a randomly chosen
+accounting for the user’s geographic proximity       subset of documents from the full index. A
+to each physical cluster. The load-balancing sys-    pool of machines serves requests for each shard,
+tem minimizes round-trip time for the user’s         and the overall index cluster contains one pool
+request, while also considering the available        for each shard. Each request chooses a machine
+capacity at the various clusters.                    within a pool using an intermediate load bal-
+   The user’s browser then sends a hypertext         ancer—in other words, each query goes to one
+transport protocol (HTTP) request to one of          machine (or a subset of machines) assigned to
+these clusters, and thereafter, the processing       each shard. If a shard’s replica goes down, the
+of that query is entirely local to that cluster.     load balancer will avoid using it for queries,
+A hardware-based load balancer in each clus-         and other components of our cluster-man-
+ter monitors the available set of Google Web         agement system will try to revive it or eventu-
+servers (GWSs) and performs local load bal-          ally replace it with another machine. During
+ancing of requests across a set of them. After       the downtime, the system capacity is reduced
+receiving a query, a GWS machine coordi-             in proportion to the total fraction of capacity
+nates the query execution and formats the            that this machine represented. However, ser-
+results into a Hypertext Markup Language             vice remains uninterrupted, and all parts of the
+(HTML) response to the user’s browser. Fig-          index remain available.
+ure 1 illustrates these steps.                          The final result of this first phase of query
+   Query execution consists of two major             execution is an ordered list of document iden-
+phases.1 In the first phase, the index servers       tifiers (docids). As Figure 1 shows, the second
+
+
+                                                                                                        MARCH–APRIL 2003                23
+     GOOGLE SEARCH ARCHITECTURE
+
+
+
+                    phase involves taking this list of docids and        allelizing the search over many machines, we
+                    computing the actual title and uniform               reduce the average latency necessary to answer
+                    resource locator of these documents, along           a query, dividing the total computation across
+                    with a query-specific document summary.              more CPUs and disks. Because individual
+                    Document servers (docservers) handle this            shards don’t need to communicate with each
+                    job, fetching each document from disk to             other, the resulting speedup is nearly linear.
+                    extract the title and the keyword-in-context         In other words, the CPU speed of the indi-
+                    snippet. As with the index lookup phase, the         vidual index servers does not directly influ-
+                    strategy is to partition the processing of all       ence the search’s overall performance, because
+                    documents by                                         we can increase the number of shards to
+                                                                         accommodate slower CPUs, and vice versa.
+                      • randomly distributing documents into             Consequently, our hardware selection process
+                        smaller shards                                   focuses on machines that offer an excellent
+                      • having multiple server replicas responsi-        request throughput for our application, rather
+                        ble for handling each shard, and                 than machines that offer the highest single-
+                      • routing requests through a load balancer.        thread performance.
+                                                                            In summary, Google clusters follow three
+                       The docserver cluster must have access to         key design principles:
+                    an online, low-latency copy of the entire Web.
+                    In fact, because of the replication required for       • Software reliability. We eschew fault-tol-
+                    performance and availability, Google stores              erant hardware features such as redun-
+                    dozens of copies of the Web across its clusters.         dant power supplies, a redundant array
+                       In addition to the indexing and document-             of inexpensive disks (RAID), and high-
+                    serving phases, a GWS also initiates several             quality components, instead focusing on
+                    other ancillary tasks upon receiving a query,            tolerating failures in software.
+                    such as sending the query to a spell-checking          • Use replication for better request through-
+                    system and to an ad-serving system to gener-             put and availability. Because machines are
+                    ate relevant advertisements (if any). When all           inherently unreliable, we replicate each
+                    phases are complete, a GWS generates the                 of our internal services across many
+                    appropriate HTML for the output page and                 machines. Because we already replicate
+                    returns it to the user’s browser.                        services across multiple machines to
+                                                                             obtain sufficient capacity, this type of
+                    Using replication for capacity and fault-tolerance       fault tolerance almost comes for free.
+                       We have structured our system so that most          • Price/performance beats peak performance.
+                    accesses to the index and other data structures          We purchase the CPU generation that
+                    involved in answering a query are read-only:             currently gives the best performance per
+                    Updates are relatively infrequent, and we can            unit price, not the CPUs that give the
+                    often perform them safely by diverting queries           best absolute performance.
+                    away from a service replica during an update.          • Using commodity PCs reduces the cost of
+                    This principle sidesteps many of the consis-             computation. As a result, we can afford to
+                    tency issues that typically arise in using a gen-        use more computational resources per
+                    eral-purpose database.                                   query, employ more expensive techniques
+                       We also aggressively exploit the very large           in our ranking algorithm, or search a
+                    amounts of inherent parallelism in the appli-            larger index of documents.
+                    cation: For example, we transform the lookup
+                    of matching documents in a large index into          Leveraging commodity parts
+                    many lookups for matching documents in a               Google’s racks consist of 40 to 80 x86-based
+                    set of smaller indices, followed by a relatively     servers mounted on either side of a custom
+                    inexpensive merging step. Similarly, we divide       made rack (each side of the rack contains
+                    the query stream into multiple streams, each         twenty 20u or forty 1u servers). Our focus on
+                    handled by a cluster. Adding machines to each        price/performance favors servers that resemble
+                    pool increases serving capacity, and adding          mid-range desktop PCs in terms of their com-
+                    shards accommodates index growth. By par-            ponents, except for the choice of large disk
+
+
+24     IEEE MICRO
+drives. Several CPU generations are in active      processor servers can be quite substantial, at
+service, ranging from single-processor 533-        least for a highly parallelizable application like
+MHz Intel-Celeron-based servers to dual 1.4-       ours. The example $278,000 rack contains
+GHz Intel Pentium III servers. Each server         176 2-GHz Xeon CPUs, 176 Gbytes of
+contains one or more integrated drive elec-        RAM, and 7 Tbytes of disk space. In com-
+tronics (IDE) drives, each holding 80 Gbytes.      parison, a typical x86-based server contains
+Index servers typically have less disk space       eight 2-GHz Xeon CPUs, 64 Gbytes of RAM,
+than document servers because the former           and 8 Tbytes of disk space; it costs about
+have a more CPU-intensive workload. The            $758,000.2 In other words, the multiproces-
+servers on each side of a rack interconnect via    sor server is about three times more expensive
+a 100-Mbps Ethernet switch that has one or         but has 22 times fewer CPUs, three times less
+two gigabit uplinks to a core gigabit switch       RAM, and slightly more disk space. Much of
+that connects all racks together.                  the cost difference derives from the much
+   Our ultimate selection criterion is cost per    higher interconnect bandwidth and reliabili-
+query, expressed as the sum of capital expense     ty of a high-end server, but again, Google’s
+(with depreciation) and operating costs (host-     highly redundant architecture does not rely
+ing, system administration, and repairs) divid-    on either of these attributes.
+ed by performance. Realistically, a server will       Operating thousands of mid-range PCs
+not last beyond two or three years, because of     instead of a few high-end multiprocessor
+its disparity in performance when compared         servers incurs significant system administra-
+to newer machines. Machines older than three       tion and repair costs. However, for a relative-
+years are so much slower than current-gener-       ly homogenous application like Google,
+ation machines that it is difficult to achieve     where most servers run one of very few appli-
+proper load distribution and configuration in      cations, these costs are manageable. Assum-
+clusters containing both types. Given the rel-     ing tools to install and upgrade software on
+atively short amortization period, the equip-      groups of machines are available, the time and
+ment cost figures prominently in the overall       cost to maintain 1,000 servers isn’t much more
+cost equation.                                     than the cost of maintaining 100 servers
+   Because Google servers are custom made,         because all machines have identical configu-
+we’ll use pricing information for comparable       rations. Similarly, the cost of monitoring a
+PC-based server racks for illustration. For        cluster using a scalable application-monitor-
+example, in late 2002 a rack of 88 dual-CPU        ing system does not increase greatly with clus-
+2-GHz Intel Xeon servers with 2 Gbytes of          ter size. Furthermore, we can keep repair costs
+RAM and an 80-Gbyte hard disk was offered          reasonably low by batching repairs and ensur-
+on RackSaver.com for around $278,000. This         ing that we can easily swap out components
+figure translates into a monthly capital cost of   with the highest failure rates, such as disks and
+$7,700 per rack over three years. Personnel        power supplies.
+and hosting costs are the remaining major
+contributors to overall cost.                      The power problem
+   The relative importance of equipment cost          Even without special, high-density packag-
+makes traditional server solutions less appeal-    ing, power consumption and cooling issues can
+ing for our problem because they increase per-     become challenging. A mid-range server with
+formance but decrease the price/performance.       dual 1.4-GHz Pentium III processors draws
+For example, four-processor motherboards are       about 90 W of DC power under load: roughly
+expensive, and because our application paral-      55 W for the two CPUs, 10 W for a disk drive,
+lelizes very well, such a motherboard doesn’t      and 25 W to power DRAM and the mother-
+recoup its additional cost with better perfor-     board. With a typical efficiency of about 75 per-
+mance. Similarly, although SCSI disks are          cent for an ATX power supply, this translates
+faster and more reliable, they typically cost      into 120 W of AC power per server, or rough-
+two or three times as much as an equal-capac-      ly 10 kW per rack. A rack comfortably fits in
+ity IDE drive.                                     25 ft2 of space, resulting in a power density of
+   The cost advantages of using inexpensive,       400 W/ft2. With higher-end processors, the
+PC-based clusters over high-end multi-             power density of a rack can exceed 700 W/ft2.
+
+
+                                                                                                        MARCH–APRIL 2003   25
+     GOOGLE SEARCH ARCHITECTURE
+
+
+
+
+                          Table 1. Instruction-level
+                                                                      Hardware-level application characteristics
+                      measurements on the index server.
+                                                                         Examining various architectural characteris-
+                                                                      tics of our application helps illustrate which
+                     Characteristic                      Value        hardware platforms will provide the best
+                     Cycles per instruction               1.1         price/performance for our query-serving sys-
+                     Ratios (percentage)                              tem. We’ll concentrate on the characteristics of
+                        Branch mispredict                 5.0         the index server, the component of our infra-
+                        Level 1 instruction miss*         0.4         structure whose price/performance most heav-
+                        Level 1 data miss*                0.7         ily impacts overall price/performance. The main
+                        Level 2 miss*                     0.3         activity in the index server consists of decoding
+                        Instruction TLB miss*             0.04        compressed information in the inverted index
+                        Data TLB miss*                    0.7         and finding matches against a set of documents
+                        * Cache and TLB ratios are per                that could satisfy a query. Table 1 shows some
+                        instructions retired.                         basic instruction-level measurements of the
+                                                                      index server program running on a 1-GHz dual-
+                                                                      processor Pentium III system.
+                       Unfortunately, the typical power density for      The application has a moderately high CPI,
+                    commercial data centers lies between 70 and       considering that the Pentium III is capable of
+                    150 W/ft2, much lower than that required for      issuing three instructions per cycle. We expect
+                    PC clusters. As a result, even low-tech PC        such behavior, considering that the applica-
+                    clusters using relatively straightforward pack-   tion traverses dynamic data structures and that
+                    aging need special cooling or additional space    control flow is data dependent, creating a sig-
+                    to bring down power density to that which is      nificant number of difficult-to-predict
+                    tolerable in typical data centers. Thus, pack-    branches. In fact, the same workload running
+                    ing even more servers into a rack could be of     on the newer Pentium 4 processor exhibits
+                    limited practical use for large-scale deploy-     nearly twice the CPI and approximately the
+                    ment as long as such racks reside in standard     same branch prediction performance, even
+                    data centers. This situation leads to the ques-   though the Pentium 4 can issue more instruc-
+                    tion of whether it is possible to reduce the      tions concurrently and has superior branch
+                    power usage per server.                           prediction logic. In essence, there isn’t that
+                       Reduced-power servers are attractive for       much exploitable instruction-level parallelism
+                    large-scale clusters, but you must keep some      (ILP) in the workload. Our measurements
+                    caveats in mind. First, reduced power is desir-   suggest that the level of aggressive out-of-
+                    able, but, for our application, it must come      order, speculative execution present in mod-
+                    without a corresponding performance penal-        ern processors is already beyond the point of
+                    ty: What counts is watts per unit of perfor-      diminishing performance returns for such
+                    mance, not watts alone. Second, the               programs.
+                    lower-power server must not be considerably          A more profitable way to exploit parallelism
+                    more expensive, because the cost of deprecia-     for applications such as the index server is to
+                    tion typically outweighs the cost of power.       leverage the trivially parallelizable computa-
+                    The earlier-mentioned 10 kW rack consumes         tion. Processing each query shares mostly read-
+                    about 10 MW-h of power per month (includ-         only data with the rest of the system, and
+                    ing cooling overhead). Even at a generous 15      constitutes a work unit that requires little com-
+                    cents per kilowatt-hour (half for the actual      munication. We already take advantage of that
+                    power, half to amortize uninterruptible power     at the cluster level by deploying large numbers
+                    supply [UPS] and power distribution equip-        of inexpensive nodes, rather than fewer high-
+                    ment), power and cooling cost only $1,500         end ones. Exploiting such abundant thread-
+                    per month. Such a cost is small in compari-       level parallelism at the microarchitecture level
+                    son to the depreciation cost of $7,700 per        appears equally promising. Both simultaneous
+                    month. Thus, low-power servers must not be        multithreading (SMT) and chip multiproces-
+                    more expensive than regular servers to have       sor (CMP) architectures target thread-level
+                    an overall cost advantage in our setup.           parallelism and should improve the perfor-
+                                                                      mance of many of our servers. Some early
+
+
+26     IEEE MICRO
+experiments with a dual-context (SMT) Intel         Large-scale multiprocessing
+Xeon processor show more than a 30 percent             As mentioned earlier, our infrastructure
+performance improvement over a single-con-          consists of a massively large cluster of inex-
+text setup. This speedup is at the upper bound      pensive desktop-class machines, as opposed
+of improvements reported by Intel for their         to a smaller number of large-scale shared-
+SMT implementation.3                                memory machines. Large shared-memory
+   We believe that the potential for CMP sys-       machines are most useful when the computa-
+tems is even greater. CMP designs, such as          tion-to-communication ratio is low; commu-
+Hydra4 and Piranha,5 seem especially promis-        nication patterns or data partitioning are
+ing. In these designs, multiple (four to eight)     dynamic or hard to predict; or when total cost
+simpler, in-order, short-pipeline cores replace     of ownership dwarfs hardware costs (due to
+a complex high-performance core. The penal-         management overhead and software licensing
+ties of in-order execution should be minor          prices). In those situations they justify their
+given how little ILP our application yields,        high price tags.
+and shorter pipelines would reduce or elimi-           At Google, none of these requirements
+nate branch mispredict penalties. The avail-        apply, because we partition index data and
+able thread-level parallelism should allow          computation to minimize communication
+near-linear speedup with the number of cores,       and evenly balance the load across servers. We
+and a shared L2 cache of reasonable size would      also produce all our software in-house, and
+speed up interprocessor communication.              minimize system management overhead
+                                                    through extensive automation and monitor-
+Memory system                                       ing, which makes hardware costs a significant
+   Table 1 also outlines the main memory sys-       fraction of the total system operating expens-
+tem performance parameters. We observe              es. Moreover, large-scale shared-memory
+good performance for the instruction cache          machines still do not handle individual hard-
+and instruction translation look-aside buffer,      ware component or software failures grace-
+a result of the relatively small inner-loop code    fully, with most fault types causing a full
+size. Index data blocks have no temporal local-     system crash. By deploying many small mul-
+ity, due to the sheer size of the index data and    tiprocessors, we contain the effect of faults to
+the unpredictability in access patterns for the     smaller pieces of the system. Overall, a cluster
+index’s data block. However, accesses within        solution fits the performance and availability
+an index data block do benefit from spatial         requirements of our service at significantly
+locality, which hardware prefetching (or pos-       lower costs.
+sibly larger cache lines) can exploit. The net
+effect is good overall cache hit ratios, even for
+relatively modest cache sizes.
+   Memory bandwidth does not appear to be
+                                                    A    t first sight, it might appear that there are
+                                                         few applications that share Google’s char-
+                                                    acteristics, because there are few services that
+a bottleneck. We estimate the memory bus            require many thousands of servers and
+utilization of a Pentium-class processor sys-       petabytes of storage. However, many applica-
+tem to be well under 20 percent. This is main-      tions share the essential traits that allow for a
+ly due to the amount of computation required        PC-based cluster architecture. As long as an
+(on average) for every cache line of index data     application orientation focuses on the
+brought into the processor caches, and to the       price/performance and can run on servers that
+data-dependent nature of the data fetch             have no private state (so servers can be repli-
+stream. In many ways, the index server’s mem-       cated), it might benefit from using a similar
+ory system behavior resembles the behavior          architecture. Common examples include high-
+reported for the Transaction Processing Per-        volume Web servers or application servers that
+formance Council’s benchmark D (TPC-D).6            are computationally intensive but essentially
+For such workloads, a memory system with a          stateless. All of these applications have plenty
+relatively modest sized L2 cache, short L2          of request-level parallelism, a characteristic
+cache and memory latencies, and longer (per-        exploitable by running individual requests on
+haps 128 byte) cache lines is likely to be the      separate servers. In fact, larger Web sites
+most effective.                                     already commonly use such architectures.
+
+
+                                                                                                         MARCH–APRIL 2003   27
+     GOOGLE SEARCH ARCHITECTURE
+
+
+
+                       At Google’s scale, some limits of massive               2000, pp. 282-293.
+                    server parallelism do become apparent, such as          6. L.A. Barroso, K. Gharachorloo, and E.
+                    the limited cooling capacity of commercial                 Bugnion, “Memory System Characterization
+                    data centers and the less-than-optimal fit of              of Commercial Workloads,” Proc. 25th ACM
+                    current CPUs for throughput-oriented appli-                Int’l Symp. Computer Architecture, ACM
+                    cations. Nevertheless, using inexpensive PCs               Press, 1998, pp. 3-14.
+                    to handle Google’s large-scale computations
+                    has drastically increased the amount of com-           Luiz André Barroso is a member of the Sys-
+                    putation we can afford to spend per query,             tems Lab at Google, where he has focused on
+                    thus helping to improve the Internet search            improving the efficiency of Google’s Web
+                    experience of tens of millions of users. MICRO         search and on Google’s hardware architecture.
+                                                                           Barroso has a BS and an MS in electrical engi-
+                    Acknowledgments                                        neering from Pontifícia Universidade Católi-
+                       Over the years, many others have made con-          ca, Brazil, and a PhD in computer engineering
+                    tributions to Google’s hardware architecture           from the University of Southern California.
+                    that are at least as significant as ours. In partic-   He is a member of the ACM.
+                    ular, we acknowledge the work of Gerald Aign-
+                    er, Ross Biro, Bogdan Cocosel, and Larry Page.         Jeffrey Dean is a distinguished engineer in the
+                                                                           Systems Lab at Google and has worked on the
+                                                                           crawling, indexing, and query serving systems,
+                    References                                             with a focus on scalability and improving rel-
+                     1. S. Brin and L. Page, “The Anatomy of a             evance. Dean has a BS in computer science
+                        Large-Scale Hypertextual Web Search                and economics from the University of Min-
+                        Engine,” Proc. Seventh World Wide Web              nesota and a PhD in computer science from
+                        Conf. (WWW7), International World Wide             the University of Washington. He is a mem-
+                        Web Conference Committee (IW3C2), 1998,            ber of the ACM.
+                        pp. 107-117.
+                     2. “TPC Benchmark C Full Disclosure Report            Urs Hölzle is a Google Fellow and in his pre-
+                        for IBM eserver xSeries 440 using Microsoft        vious role as vice president of engineering was
+                        SQL Server 2000 Enterprise Edition and             responsible for managing the development
+                        Microsoft Windows .NET Datacenter Server           and operation of the Google search engine
+                        2003, TPC-C Version 5.0,” http://www.tpc.          during its first two years. Hölzle has a diplo-
+                        org/results/FDR/TPCC/ibm.x4408way.c5.fdr.          ma from the Eidgenössische Technische
+                        02110801.pdf.                                      Hochschule Zürich and a PhD from Stanford
+                     3. D. Marr et al., “Hyper-Threading Technology        University, both in computer science. He is a
+                        Architecture and Microarchitecture: A              member of IEEE and the ACM.
+                        Hypertext History,” Intel Technology J., vol.
+                        6, issue 1, Feb. 2002.
+                     4. L. Hammond, B. Nayfeh, and K. Olukotun,               Direct questions and comments about this
+                        “A Single-Chip Multiprocessor,” Computer,          article to Urs Hölzle, 2400 Bayshore Parkway,
+                        vol. 30, no. 9, Sept. 1997, pp. 79-85.             Mountain View, CA 94043; urs@google.com.
+                     5. L.A. Barroso et al., “Piranha: A Scalable
+                        Architecture Based on Single-Chip                  For further information on this or any other
+                        Multiprocessing,” Proc. 27th ACM Int’l             computing topic, visit our Digital Library at
+                        Symp. Computer Architecture, ACM Press,            http://computer.org/publications/dlib.
+
+
+
+
+28     IEEE MICRO
+

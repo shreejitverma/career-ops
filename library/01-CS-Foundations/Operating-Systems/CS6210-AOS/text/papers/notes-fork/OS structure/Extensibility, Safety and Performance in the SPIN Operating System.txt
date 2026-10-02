@@ -1,0 +1,1159 @@
+                              Extensibility, Safety and Performance in the
+                                        SPIN Operating System
+                    Brian N. Bershad Stefan Savage Przemysław Pardyak Emin Gün Sirer
+                    Marc E. Fiuczynski David Becker  Craig Chambers    Susan Eggers
+
+                                       Department of Computer Science and Engineering
+                                                  University of Washington
+                                                     Seattle, WA 98195
+
+
+Abstract                                                                   purpose network protocol implementations are frequently in-
+                                                                           adequate for supporting the demands of high performance
+This paper describes the motivation, architecture and per-                 parallel applications [von Eicken et al. 92]. Other applica-
+formance of SPIN, an extensible operating system. SPIN                     tions, such as multimedia clients and servers, and realtime
+provides an extension infrastructure, together with a core                 and fault tolerant programs, can also present demands that
+set of extensible services, that allow applications to safely              poorly match operating system services. Using SPIN, an
+change the operating system’s interface and implementation.                application can extend the operating system’s interfaces and
+Extensions allow an application to specialize the underly-                 implementations to provide a better match between the needs
+ing operating system in order to achieve a particular level                of the application and the performance and functional char-
+of performance and functionality. SPIN uses language and                   acteristics of the system.
+link-time mechanisms to inexpensively export fine-grained
+interfaces to operating system services. Extensions are writ-
+ten in a type safe language, and are dynamically linked into               1.1    Goals and approach
+the operating system kernel. This approach offers extensions               The goal of our research is to build a general purpose op-
+rapid access to system services, while protecting the operat-              erating system that provides extensibility, safety and good
+ing system code executing within the kernel address space.                 performance. Extensibility is determined by the interfaces
+SPIN and its extensions are written in Modula-3 and run on                 to services and resources that are exported to applications;
+DEC Alpha workstations.                                                    it depends on an infrastructure that allows fine-grained ac-
+                                                                           cess to system services. Safety determines the exposure of
+1 Introduction                                                             applications to the actions of others, and requires that access
+                                                                           be controlled at the same granularity at which extensions are
+SPIN is an operating system that can be dynamically spe-                   defined. Finally, good performance requires low overhead
+cialized to safely meet the performance and functionality re-              communication between an extension and the system.
+quirements of applications. SPIN is motivated by the need to                  The design of SPIN reflects our view that an operating
+support applications that present demands poorly matched by                system can be extensible, safe, and fast through the use of
+an operating system’s implementation or interface. A poorly                language and runtime services that provide low-cost, fine-
+matched implementation prevents an application from work-                  grained, protected access to operating system resources.
+ing well, while a poorly matched interface prevents it from                Specifically, the SPIN operating system relies on four tech-
+working at all. For example, the implementations of disk                   niques implemented at the level of the language or its runtime:
+buffering and paging algorithms found in modern operat-
+ing systems can be inappropriate for database applications,                   Co-location. Operating system extensions are dynam-
+resulting in poor performance [Stonebraker 81]. General                        ically linked into the kernel virtual address space. Co-
+                                                                               location enables communication between system and
+     This research was sponsored by the Advanced Research Projects
+Agency, the National Science Foundation (Grants no. CDA-9123308 and
+                                                                               extension code to have low cost.
+CCR-9200832) and by an equipment grant from Digital Equipment Corpo-
+ration. Bershad was partially supported by a National Science Foundation      Enforced modularity. Extensions are written in Modula-
+Presidential Faculty Fellowship. Chambers was partially sponsored by a         3 [Nelson 91], a modular programming language for
+National Science Foundation Presidential Young Investigator Award. Sirer
+was supported by an IBM Graduate Student Fellowship. Fiuczynski was            which the compiler enforces interface boundaries be-
+partially supported by a National Science Foundation GEE Fellowship.           tween modules. Extensions, which execute in the ker-
+                                                                               nel’s virtual address space, cannot access memory or
+                                                                               execute privileged instructions unless they have been
+                                                                               given explicit access through an interface. Modularity
+      enforced by the compiler enables modules to be isolated    to the client’s screen. Using SPIN the server defines an exten-
+      from one another with low cost.                            sion that implements a direct stream between the disk and the
+                                                                 network. The client viewer application installs an extension
+   Logical protection domains. Extensions exist within          into the kernel that decompresses incoming network video
+    logical protection domains, which are kernel names-          packets and displays them to the video frame buffer.
+    paces that contain code and exported interfaces. Inter-
+    faces, which are language-level units, represent views
+    on system resources that are protected by the operat-        1.3    The rest of this paper
+    ing system. An in-kernel dynamic linker resolves code
+    in separate logical protection domains at runtime, en-       The rest of this paper describes the motivation, design, and
+    abling cross-domain communication to occur with the          performance of SPIN. In the next section we motivate the need
+    overhead of a procedure call.                                for extensible operating systems and discuss related work. In
+                                                                 Section 3 we describe the system’s architecture in terms of its
+   Dynamic call binding. Extensions execute in response         protection and extension facilities. In Section 4 we describe
+    to system events. An event can describe any potential        the core services provided by the system. In Section 5 we
+    action in the system, such as a virtual memory page fault    discuss the system’s performance and compare it against that
+    or the scheduling of a thread. Events are declared within    of several other operating systems. In Section 6 we discuss
+    interfaces, and can be dispatched with the overhead of a     our experiences writing an operating system in Modula-3.
+    procedure call.                                              Finally, in Section 7 we present our conclusions.
+   Co-location, enforced modularity, logical protection do-
+mains, and dynamic call binding enable interfaces to be de-
+fined and safely accessed with low overhead. However, these      2 Motivation
+techniques do not guarantee the system’s extensibility. Ulti-
+mately, extensibility is achieved through the system service     Most operating systems are forced to balance generality and
+interfaces themselves, which define the set of resources and     specialization. A general system runs many programs, but
+operations that are exported to applications. SPIN provides      may run few well. In contrast, a specialized system may
+a set of interfaces to core system services, such as memory      run few programs, but runs them all well. In practice, most
+management and scheduling, that rely on co-location to ef-       general systems can, with some effort, be specialized to ad-
+ficiently export fine-grained operations, enforced modularity    dress the performance and functional requirements of a par-
+and logical protection domains to manage protection, and         ticular application’s needs, such as interprocess communica-
+dynamic call binding to define relationships between system      tion, synchronization, thread management, networking, vir-
+components and extensions at runtime.                            tual memory and cache management [Draves et al. 91, Ber-
+                                                                 shad et al. 92b, Stodolsky et al. 93, Bershad 93, Yuhara et al.
+                                                                 94, Maeda & Bershad 93, Felten 92, Young et al. 87, Harty
+1.2    System overview                                           & Cheriton 91, McNamee & Armstrong 90, Anderson et al.
+The SPIN operating system consists of a set of extension         92, Fall & Pasquale 94, Wheeler & Bershad 92, Romer et al.
+services and core system services that execute within the        94, Romer et al. 95, Cao et al. 94]. Unfortunately, exist-
+kernel’s virtual address space. Extensions can be loaded         ing system structures are not well-suited for specialization,
+into the kernel at any time. Once loaded, they integrate         often requiring a substantial programming effort to affect
+themselves into the existing infrastructure and provide system   even a small change in system behavior. Moreover, changes
+services specific to the applications that require them. SPIN    intended to improve the performance of one class of appli-
+is primarily written in Modula-3, which allows extensions        cations can often degrade that of others. As a result, system
+to directly use system interfaces without requiring runtime      specialization is a costly and error-prone process.
+conversion when communicating with other system code.               An extensible system is one that can be changed dynam-
+   Although SPIN relies on language features to ensure safety    ically to meet the needs of an application. The need for
+within the kernel, applications can be written in any language   extensibility in operating systems is shown clearly by sys-
+and execute within their own virtual address space. Only         tems such as MS-DOS, Windows, or the Macintosh Operat-
+code that requires low-latency access to system services is      ing System. Although these systems were not designed to be
+written in the system’s safe extension language. For exam-       extensible, their weak protection mechanisms have allowed
+ple, we have used SPIN to implement a UNIX operating             application programmers to directly modify operating sys-
+system server. The bulk of the server is written in C, and       tem data structures and code [Schulman et al. 92]. While
+executes within its own address space (as do applications).      individual applications have benefited from this level of free-
+The server consists of a large body of code that implements      dom, the lack of safe interfaces to either operating system
+the DEC OSF/1 system call interface, and a small number of       services or operating system extension services has created
+SPIN extensions that provide the thread, virtual memory, and     system configuration “chaos” [Draves 93].
+device interfaces required by the server.
+   We have also used extensions to specialize SPIN to the        2.1    Related work
+needs of individual application programs. For example, we
+have built a client/server video system that requires few con-   Previous efforts to build extensible systems have demon-
+trol and data transfers as images move from the server’s disk    strated the three-way tension between extensibility, safety
+and performance. For example, Hydra [Wulf et al. 81] de-          limit performance.
+fined an infrastructure that allowed applications to manage          Many systems provide interfaces that enable arbitrary code
+resources through multi-level policies. The kernel defined the    to be installed into the kernel at runtime [Heidemann & Popek
+mechanism for allocating resources between processes, and         94, Rozier et al. 88]. In these systems the right to define ex-
+the processes themselves implemented the policies for man-        tensions is restricted because any extension can bring down
+aging those resources. Hydra’s architecture, although highly      the entire system; application-specific extensibility is not pos-
+influential, had high overhead due to its weighty capability-     sible.
+based protection mechanism. Consequently, the system was             Several projects [Lucco 94, Engler et al. 95, Small &
+designed with “large objects” as the basic building blocks,       Seltzer 94] are exploring the use of software fault isola-
+requiring a large programming effort to affect even a small       tion [Wahbe et al. 93] to safely link application code, writ-
+extension.                                                        ten in any language, into the kernel’s virtual address space.
+   Researchers have recently investigated the use of micro-       Software fault isolation relies on a binary rewriting tool that
+kernels as a vehicle for building extensible systems [Black       inserts explicit checks on memory references and branch in-
+et al. 92, Mullender et al. 90, Cheriton & Zwaenepoel             structions. These checks allow the system to define protected
+83, Cheriton & Duda 94, Thacker et al. 88]. A microker-           memory segments without relying on virtual memory hard-
+nel typically exports a small number of abstractions that in-     ware. Software fault isolation shows promise as a co-location
+clude threads, address spaces, and communication channels.        mechanism for relatively isolated code and data segments. It
+These abstractions can be combined to support more conven-        is unclear, though, if the mechanism is appropriate for a sys-
+tional operating system services implemented as user-level        tem with fine-grained sharing, where extensions may access
+programs. Application-specific extensions in a microkernel        a large number of segments. In addition, software fault iso-
+occur at or above the level of the kernel’s interfaces. Unfor-    lation is only a protection mechanism and does not define an
+tunately, applications often require substantial changes to a     extension model or the service interfaces that determine the
+microkernel’s implementation to compensate for limitations        degree to which a system can be extended.
+in interfaces [Lee et al. 94, Davis et al. 93, Waldspurger &         Aegis [Engler et al. 95] is an operating system that re-
+Weihl 94].                                                        lies on efficient trap redirection to export hardware services,
+                                                                  such as exception handling and TLB management, directly
+   Although a microkernel’s communication facilities pro-
+                                                                  to applications. The system itself defines no abstractions
+vide the infrastructure for extending nearly any kernel ser-
+vice [Barrera 91, Abrossimov et al. 89, Forin et al. 91], few     beyond those minimally provided by the hardware [Engler
+                                                                  & Kaashoek 95]. Instead, conventional operating system
+have been so extended. We believe this is because of high
+                                                                  services, such as virtual memory and scheduling, are im-
+communication overhead [Bershad et al. 90, Draves et al.
+91, Chen & Bershad 93], which limits extensions mostly            plemented as libraries executing in an application’s address
+                                                                  space. System service code executing in a library can be
+to coarse-grained services [Golub et al. 90, Stevenson &
+                                                                  changed by the application according to its needs. SPIN
+Julin 95, Bricker et al. 91]. Otherwise, protected interac-
+tion between system components, which occurs frequently           shares many of the same goals as Aegis although its ap-
+                                                                  proach is quite different. SPIN uses language facilities to
+in a system with fine-grained extensions, can be a limiting
+                                                                  protect the kernel from extensions and implements protected
+performance factor.
+                                                                  communication using procedure call. Using this infrastruc-
+   Although the performance of cross-domain communica-            ture, SPIN provides an extension model and a core set of
+tion has improved substantially in recent years [Hamilton         extensible services. In contrast, Aegis relies on hardware
+& Kougiouris 93, Hildebrand 92, Engler et al. 95], it still       protected system calls to isolate extensions from the kernel
+does not approach that of a procedure call, encouraging the       and leaves unspecified the manner by which those extensions
+construction of monolithic, non-extensible systems. For ex-       are defined or applied.
+ample, the L3 microkernel, even with its aggressive design,          Several systems [Cooper et al. 91, Redell et al. 80,
+has a protected procedure call implementation with over-          Mossenbock 94, Organick 73] like SPIN, have relied on lan-
+head of nearly 100 procedure call times [Liedtke 92, Liedtke      guage features to extend operating system services. Pilot,
+93, Int 90]. As a point of comparison, the Intel 432 [Int 81],    for instance, was a single-address space system that ran pro-
+which provided hardware support for protected cross-domain        grams written in Mesa [Geschke et al. 77], an ancestor of
+transfer, had a cross-domain communication overhead on the        Modula-3. In general, systems such as Pilot have depended
+order of about 10 procedure call times [Colwell 85], and was      on the language for all protection in the system, not just for
+generally considered unacceptable.                                the protection of the operating system and its extensions. In
+   Some systems rely on “little languages” to safely extend       contrast, SPIN’s reliance on language services applies only to
+the operating system interface through the use of interpreted     extension code within the kernel. Virtual address spaces are
+code that runs in the kernel [Lee et al. 94, Mogul et al.         used to otherwise isolate the operating system and programs
+87, Yuhara et al. 94]. These systems suffer from three            from one another.
+problems. First, the languages, being little, make the expres-
+sion of arbitrary control and data structures cumbersome, and
+therefore limit the range of possible extensions. Second, the     3 The SPIN Architecture
+interface between the language’s programming environment
+and the rest of the system is generally narrow, making sys-       The SPIN architecture provides a software infrastructure for
+tem integration difficult. Finally, interpretation overhead can   safely combining system and application code. The pro-
+tection model supports efficient, fine-grained access control      protection [Engler et al. 94], or protected message chan-
+of resources, while the extension model enables extensions         nels [Black et al. 92], SPIN implements capabilities directly
+to be defined at the granularity of a procedure call. The          using pointers, which are supported by the language. A
+system’s architecture is biased towards mechanisms that can        pointer is a reference to a block of memory whose type is
+be implemented with low-cost on conventional processors.           declared within an interface. Figure 1 demonstrates the def-
+Consequently, SPIN makes few demands of the hardware,              inition and use of interfaces and capabilities (pointers) in
+and instead relies on language-level services, such as static      SPIN.
+typechecking and dynamic linking.
+
+Relevant properties of Modula-3
+                                                                   INTERFACE Console; (* An interface. *)
+                                                                   TYPE T <: REFANY; (* Read as "Console.T is opaque." *)
+SPIN and its extensions are written in Modula-3, a general
+purpose programming language designed in the early 1990’s.         CONST InterfaceName = "ConsoleService";
+                                                                     (* A global name *)
+The key features of the language include support for inter-
+faces, type safety, automatic storage management, objects,         PROCEDURE Open():T;
+                                                                     (* Open returns a capability for the console. *)
+generic interfaces, threads, and exceptions. We rely on the        PROCEDURE Write(t: T; msg: TEXT);
+language’s support for objects, generic interfaces, threads,       PROCEDURE Read(t: VAR msg: TEXT);
+                                                                   PROCEDURE Close(t: T);
+and exceptions for aesthetic reasons only; we find that these      END Console;
+features simplify the task of constructing a large system.
+   The design of SPIN depends only on the language’s safety
+and encapsulation mechanisms; specifically interfaces, type
+                                                                   MODULE Console;        (* An implementation module. *)
+safety, and automatic storage management. An interface de-
+clares the visible parts of an implementation module, which        (* The implementation of Console.T *)
+                                                                   TYPE Buf = ARRAY [0..31] OF CHAR;
+defines the items listed in the interface. All other definitions   REVEAL T = BRANDED REF RECORD     (* T is a pointer *)
+within the implementation module are hidden. The com-                       inputQ: Buf;             (* to a record *)
+                                                                            outputQ: Buf;
+piler enforces this restriction at compile-time. Type safety                (* device specific info *)
+prevents code from accessing memory arbitrarily. A pointer             END;
+may only refer to objects of its referent’s type, and array        (* Implementations of interface functions   *)
+indexing operations must be checked for bounds violation.          (* have direct access to the revealed type. *)
+                                                                   PROCEDURE Open():T = ...
+The first restriction is enforced at compile-time, and the sec-    END Console;
+ond is enforced through a combination of compile-time and
+run-time checks. Automatic storage management prevents
+memory used by a live pointer’s referent from being returned
+                                                                   MODULE Gatekeeper; (* A client *)
+to the heap and reused for an object of a different type.          IMPORT Console;
+
+                                                                   VAR c: Console.T;  (* A capability for *)
+3.1    The protection model                                                           (* the console device *)
+                                                                   PROCEDURE IntruderAlert() =
+                                                                     BEGIN
+A protection model controls the set of operations that can              c := Console.Open();
+be applied to resources. For example, a protection model                Console.Write(c, "Intruder Alert");
+                                                                        Console.Close(c);
+based on address spaces ensures that a process can only ac-          END IntruderAlert;
+cess memory within a particular range of virtual addresses.        BEGIN
+Address spaces, though, are frequently inadequate for the          END Gatekeeper;
+fine-grained protection and management of resources, being
+expensive to create and slow to access [Lazowska et al. 81].
+                                                                   Figure 1: The Gatekeeper module interacts with SPIN’s Console service
+Capabilities                                                       through the Console interface. Although Gatekeeper.IntruderAlert manip-
+                                                                   ulates objects of type Console.T, it is unable to access the fields within the
+All kernel resources in SPIN are referenced by capabilities.       object, even though it executes within the same virtual address space as the
+A capability is an unforgeable reference to a resource which       Console module.
+can be a system object, an interface, or a collection of in-
+terfaces. An example of each of these is a physical page,             The compiler, at compile-time, prevents a pointer from
+a physical page allocation interface, and the entire virtual       being forged or dereferenced in a way inconsistent with its
+memory system. Individual resources are protected to en-           type. There is no run-time overhead for using a pointer,
+sure that extensions reference only the resources to which         passing it across an interface, or dereferencing it, other than
+they have been given access. Interfaces and collections of         the overhead of going to memory to access the pointer or
+interfaces are protected to allow different extensions to have     its referent. A pointer can be passed from the kernel to a
+different views on the set of available services.                  user-level application, which cannot be assumed to be type
+   Unlike other operating systems based on capabilities,           safe, as an externalized reference. An externalized reference
+which rely on special-purpose hardware [Carter et al. 94],         is an index into a per-application table that contains type safe
+virtual memory mechanisms [Wulf et al. 81], probabilistic          references to in-kernel data structures. The references can
+later be recovered using the index. Kernel services that intend
+to pass a reference out to user level externalize the reference
+through this table and instead pass out the index.                 INTERFACE Domain;
+
+                                                                   TYPE T <: REFANY;      (* Domain.T is opaque *)
+Protection domains                                                 PROCEDURE Create(coff:CoffFile.T):T;
+                                                                   (* Returns a domain created from the specified object
+A protection domain defines the set of accessible names avail-        file (‘‘coff’’ is a standard object file format). *)
+able to an execution context. In a conventional operating          PROCEDURE CreateFromModule():T;
+system, a protection domain is implemented using virtual ad-       (* Create a domain containing interfaces defined by the
+                                                                      calling module. This function allows modules to
+dress spaces. A name within one domain, a virtual address,            name and export themselves at runtime. *)
+has no relationship to that same name in another domain.
+                                                                   PROCEDURE Resolve(source,target: T);
+Only through explicit mapping and sharing operations is it         (* Resolve any undefined symbols in the target domain
+possible for names to become meaningful between protection            against any exported symbols from the source.*)
+domains.                                                           PROCEDURE Combine(d1, d2: T):T;
+   In SPIN the naming and protection interface is at the level     (* Create a new aggregate domain that exports the
+                                                                      interfaces of the given domains. *)
+of the language, not of the virtual memory system. Conse-
+quently, namespace management must occur at the language           END Domain.
+level. For example, if the name c is an instance of the type
+Console.T, then both c and Console.T occupy a portion of
+some symbolic namespace. An extension that redefines the           Figure 2: The Domain interface. This interface operates on instances of
+type Console.T, creates an instance of the new type, and           type Domain.T, which are described by type safe pointers. The implemen-
+passes it to a module expecting a Console.T of the original        tation of the Domain interface is unsafe with respect to Modula-3 memory
+type creates a type conflict that results in an error. The error   semantics, as it must manipulate linker symbols and program addresses
+                                                                   directly.
+could be avoided by placing all extensions into a global mod-
+ule space, but since modules, procedures, and variable names
+are visible to programmers, we felt that this would introduce      speed. Resolution only resolves the target domain’s unde-
+an overly restrictive programming model for the system. In-        fined symbols; it does not cause additional symbols to be
+stead, SPIN provides facilities for creating, coordinating, and    exported. Cross-linking, a common idiom, occurs through a
+linking program-level namespaces in the context of protec-         pair of Resolve operations.
+tion domains.                                                         The Combine operation creates linkable namespaces that
+   A SPIN protection domain defines a set of names, or pro-        are the union of existing domains, and can be used to bind
+gram symbols, that can be referenced by code with access           together collections of related interfaces. For example, the
+to the domain. A domain, named by a capability, is used to         domain SpinPublic combines the system’s public interfaces
+control dynamic linking, and corresponds to one or more safe       into a single domain available to extensions. Figure 2 sum-
+object files with one or more exported interfaces. An object       marizes the major operations on domains.
+file is safe if it is unknown to the kernel but has been signed       The domain interface is commonly used to import or export
+by the Modula-3 compiler, or if the kernel can otherwise as-       particular named interfaces. A module that exports an inter-
+sert the object file to be safe. For example, SPIN’s lowest        face explicitly creates a domain for its interface, and exports
+level device interface is identical to the DEC OSF/1 driver        the domain through an in-kernel nameserver. The exported
+interface [Dig 93], allowing us to dynamically link vendor         name of the interface, which can be specified within the inter-
+drivers into the kernel. Although the drivers are written in C,    face, is used to coordinate the export and import as in many
+the kernel asserts their safety. In general, we prefer to avoid    RPC systems [Schroeder & Burrows 90, Brockschmidt 94].
+using object files that are “safe by assertion” rather than by     The constant Console.InterfaceName in Figure 1 defines a
+compiler verification, as they tend to be the source of more       name that exporters and importers can use to uniquely iden-
+than their fair share of bugs.                                     tify a particular version of a service.
+   Domains can be intersecting or disjoint, enabling appli-
+                                                                      Some interfaces, such as those for devices, restrict access
+cations to share services or define new ones. A domain is          at the time of the import. An exporter can register an au-
+created using the Create operation, which initializes a domain     thorization procedure with the nameserver that will be called
+with the contents of a safe object file. Any symbols exported
+                                                                   with the identity of the importer whenever the interface is
+by interfaces defined in the object file are exported from the     imported. This fine-grained control has low cost because
+domain, and any imported symbols are left unresolved. Un-          the importer, exporter, and authorizer interact through direct
+resolved symbols correspond to interfaces imported by code
+                                                                   procedure calls.
+within the domain for which implementations have not yet
+been found.
+   The Resolve operation serves as the basis for dynamic           3.2     The extension model
+linking. It takes a target and a source domain, and resolves
+any unresolved symbols in the target domain against symbols        An extension changes the way in which a system provides
+exported from the source. During resolution, text and data         service. All software is extensible in one way or another,
+symbols are patched in the target domain, ensuring that, once      but it is the extension model that determines the ease, trans-
+resolved, domains are able to share resources at memory            parency, and efficiency with which an extension can be ap-
+plied. SPIN’s extension model provides a controlled com-                     fault implementation of the PacketArrived event, upon each
+munication facility between extensions and the base system,                  installation, constructs a guard that compares the type field
+while allowing for a variety of interaction styles. For exam-                in the header of the incoming packet against the set of IP
+ple, the model allows extensions to passively monitor system                 protocol types that the handler may service. In this way, IP
+activity, and provide up-to-date performance information to                  does not have to export a separate interface for each event
+applications. Other extensions may offer hints to the system                 instance. A handler can stack additional guards on an event,
+to guide certain operations, such as page replacement. In                    further constraining its invocation.
+other cases, an extension may entirely replace an existing                      There may be any number of handlers installed on a par-
+system service, such as a scheduler, with a new one more                     ticular event. The default implementation module may con-
+appropriate to a specific application.                                       strain a handler to execute synchronously or asynchronously,
+   Extensions in SPIN are defined in terms of events and han-                in bounded time, or in some arbitrary order with respect to
+dlers. An event is a message that announces a change in                      other handlers for the same event. Each of these constraints
+the state of the system or a request for service. An event                   reflects a different degree of trust between the default imple-
+handler is a procedure that receives the message. An exten-                  mentation and the handler. For example, a handler may be
+sion installs a handler on an event by explicitly registering                bounded by a time quantum so that it is aborted if it executes
+the handler with the event through a central dispatcher that                 too long. A handler may be asynchronous, which causes it
+routes events to handlers.                                                   to execute in a separate thread from the raiser, isolating the
+   Event names are protected by the domain machinery de-                     raiser from handler latency. When multiple handlers execute
+scribed in the previous section. An event is defined as a                    in response to an event, a single result can be communicated
+procedure exported from an interface and its handlers are                    back to the raiser by associating with each event a procedure
+defined as procedures having the same type. A handler is                     that ultimately determines the final result [Pardyak & Ber-
+invoked with the arguments specified by the event raiser.1                   shad 94]. By default, the dispatcher mimics procedure call
+The kernel is preemptive, ensuring that a handler cannot take                semantics, and executes handlers synchronously, to comple-
+over the processor.                                                          tion, in undefined order, and returns the result of the final
+   The right to call a procedure is equivalent to the right to               handler executed.
+raise the event named by the procedure. In fact, the two are
+indistinguishable in SPIN, and any procedure exported by an
+interface is also an event. The dispatcher exploits this simi-               4 The core services
+larity to optimize event raise as a direct procedure call where
+there is only one handler for a given event. Otherwise, the                  The SPIN protection and extension mechanisms described
+dispatcher uses dynamic code generation [Engler & Proeb-                     in the previous section provide a framework for manag-
+sting 94] to construct optimized call paths from the raiser to               ing interfaces between services within the kernel. Appli-
+the handlers.                                                                cations, though, are ultimately concerned with manipulating
+                                                                             resources such as memory and the processor. Consequently,
+   The primary right to handle an event is restricted to the
+                                                                             SPIN provides a set of core services that manage memory
+default implementation module for the event, which is the
+                                                                             and processor resources. These services, which use events to
+module that statically exports the procedure named by the
+                                                                             communicate between the system and extensions, export in-
+event. For example, the module Console is the default im-
+                                                                             terfaces with fine-grained operations. In general, the service
+plementation module for the event Console.Open() shown in
+                                                                             interfaces that are exported to extensions within the kernel are
+Figure 1. Other modules may request that the dispatcher in-
+                                                                             similar to the secondary internal interfaces found in conven-
+stall additional handlers or even remove the primary handler.
+                                                                             tional operating systems; they provide simple functionality
+For each request, the dispatcher contacts the primary imple-
+                                                                             over a small set of objects. In SPIN it is straightforward
+mentation module, passing the event name provided by the
+                                                                             to allocate a single virtual page, a physical page, and then
+installer. The implementation module can deny or allow the
+                                                                             create a mapping between the two. Because the overhead of
+installation. If denied, the installation fails. If allowed, the
+                                                                             accessing each of these operations is low (a procedure call),
+implementation module can provide a guard to be associated
+                                                                             it is feasible to provide them as interfaces to separate ab-
+with the handler. The guard defines a predicate, expressed as
+                                                                             stractions, and to build up higher level abstractions through
+a procedure, that is evaluated by the dispatcher prior to the
+                                                                             direct composition. By contrast, traditional operating sys-
+handler’s invocation. If the predicate is true when the event
+                                                                             tems aggregate simpler abstractions into more complex ones,
+is raised, then the handler is invoked; otherwise the handler
+                                                                             because the cost of repeated access to the simpler abstractions
+is ignored.
+                                                                             is too high.
+   Guards are used to restrict access to events at a granu-
+larity finer than the event name, allowing events to be dis-
+patched on a per-instance basis. For example, the SPIN ex-                   4.1    Extensible memory management
+tension that implements IP layer processing defines the event
+                                                                             A memory management system is responsible for the alloca-
+IP.PacketArrived(pkt: IP.Packet), which it raises whenever an
+IP packet is received. The IP module, which defines the de-                  tion of virtual addresses, physical addresses, and mappings
+                                                                             between the two. Other systems have demonstrated signifi-
+   1 The dispatcher also allows a handler to specify an additional closure   cant performance improvements from specialized or “tuned”
+to be passed to the handler during event processing. The closure allows a    memory management policies that are accessible through in-
+single handler to be used within more than one context.                      terfaces exposed by the memory management system. Some
+of these interfaces have made it possible to manipulate large        we have built an extension that implements UNIX address
+objects, such as entire address spaces [Young et al. 87, Kha-        space semantics for applications. It exports an interface for
+lidi & Nelson 93], or to direct expensive operations, for exam-      copying an existing address space, and for allocating addi-
+ple page-out [Harty & Cheriton 91, McNamee & Armstrong               tional memory within one. For each new address space, the
+90], entirely from user level. Others have enabled control           extension allocates a new context from the translation service.
+over relatively small objects, such as cache pages [Romer            This context is subsequently filled in with virtual and phys-
+et al. 94] or TLB entries [Bala et al. 94], entirely from            ical address resources obtained from the memory allocation
+the kernel. None have allowed for fast, fine-grained control         services. Another kernel extension defines a memory man-
+over the physical and virtual memory resources required by           agement interface supporting Mach’s task abstraction [Young
+applications. SPIN’s virtual memory system provides such             et al. 87]. Applications may use these interfaces, or they may
+control, and is enabled by the system’s low-overhead invoca-         define their own in terms of the lower-level services.
+tion and protection services.
+    The SPIN memory management interface decomposes
+memory services into three basic components: physical stor-          4.2    Extensible thread management
+age, naming, and translation. These correspond to the basic
+                                                                     An operating system’s thread management system provides
+memory resources exported by processors, namely physical
+                                                                     applications with interfaces for scheduling, concurrency, and
+addresses, virtual addresses, and translations. Application-
+                                                                     synchronization. Applications, though, can require levels of
+specific services interact with these three services to define
+                                                                     functionality and performance that a thread management sys-
+higher level virtual memory abstractions, such as address
+                                                                     tem is unable to deliver. User-level thread management sys-
+spaces.
+                                                                     tems have addressed this mismatch [Wulf et al. 81, Cooper &
+    Each of the three basic components of the memory sys-            Draves 88, Marsh et al. 91, Anderson et al. 92], but only par-
+tem is provided by a separate service interface, described in        tially. For example, Mach’s user-level C-Threads implemen-
+Figure 3. The physical address service controls the use and          tation [Cooper & Draves 88] can have anomalous behavior
+allocation of physical pages. Clients raise the Allocate event       because it is not well-integrated with kernel services [Ander-
+to request physical memory with a certain size and an op-            son et al. 92]. In contrast, scheduler activations, which are
+tional series of attributes that reflect preferences for machine     integrated with the kernel, have high communication over-
+specific parameters such as color or contiguity. A physical          head [Davis et al. 93].
+page represents a unit of high speed storage. It is not, for            In SPIN an application can provide its own thread package
+most purposes, a nameable entity and may not be addressed            and scheduler that executes within the kernel. The thread
+directly from an extension or a user program. Instead, clients       package defines the application’s execution model and syn-
+of the physical address service receive a capability for the         chronization constructs. The scheduler controls the multi-
+memory. The virtual address service allocates capabilities           plexing of the processor across multiple threads. Together
+for virtual addresses, where the capability’s referent is com-       these packages allow an application to define arbitrary thread
+posed of a virtual address, a length, and an address space           semantics and to implement those semantics close to the pro-
+identifier that makes the address unique. The translation            cessor and other kernel services.
+service is used to express the relationship between virtual
+                                                                        Although SPIN does not define a thread model for applica-
+addresses and physical memory. This service interprets ref-
+                                                                     tions, it does define the structure on which an implementation
+erences to both virtual and physical addresses, constructs
+                                                                     of a thread model rests. This structure is defined by a set of
+mappings between the two, and installs the mappings into
+                                                                     events that are raised or handled by schedulers and thread
+the processor’s memory management unit (MMU).
+                                                                     packages. A scheduler multiplexes the underlying process-
+    The translation service raises a set of events that correspond   ing resources among competing contexts, called strands. A
+to various exceptional MMU conditions. For example, if a             strand is similar to a thread in traditional operating systems
+user program attempts to access an unallocated virtual mem-          in that it reflects some processor context. Unlike a thread
+ory address, the Translation.BadAddress event is raised. If          though, a strand has no minimal or requisite kernel state
+it accesses an allocated, but unmapped virtual page, then the        other than a name. An application-specific thread package
+Translation.PageNotPresent event is raised. Implementors of          defines an implementation of the strand interface for its own
+higher level memory management abstractions can use these            threads.
+events to define services, such as demand paging, copy-on-              Together, the thread package and the scheduler implement
+write [Rashid et al. 87], distributed shared memory [Carter          the control flow mechanisms for user-space contexts. Fig-
+et al. 91], or concurrent garbage collection [Appel & Li 91].        ure 4 describes this interface. The interface contains two
+    The physical page service may at any time reclaim phys-          events, Block and Unblock, that can be raised to signal
+ical memory by raising the PhysAddr.Reclaim event. The               changes in a strand’s execution state. A disk driver can
+interface allows the handler for this event to volunteer an          direct a scheduler to block the current strand during an I/O
+alternative page, which may be of less importance than the           operation, and an interrupt handler can unblock a strand to
+candidate page. The translation service ultimately invalidates       signal the completion of the I/O operation. In response to
+any mappings to a reclaimed page.                                    these events, the scheduler can communicate with the thread
+   The SPIN core services do not define an address space             package managing the strand using Checkpoint and Resume
+model directly, but can be used to implement a range of mod-         events, allowing the package to save and restore execution
+els using a variety of optimization techniques. For example,         state.
+         INTERFACE PhysAddr;                                                  INTERFACE Translation;
+                                                                              IMPORT PhysAddr, VirtAddr;
+         TYPE T <: REFANY; (* PhysAddr.T is opaque *)
+                                                                              TYPE T <: REFANY;       (* Translation.T is opaque *)
+         PROCEDURE Allocate(size: Size; attrib: Attrib): T;
+         (* Allocate some physical memory with                                PROCEDURE Create(): T;
+            particular attributes. *)                                         PROCEDURE Destroy(context: T);
+                                                                              (* Create or destroy an addressing context *)
+         PROCEDURE Deallocate(p: T);
+                                                                              PROCEDURE AddMapping(context: T; v: VirtAddr.T;
+         PROCEDURE Reclaim(candidate: T): T;                                               p: PhysAddr.T; prot: Protection);
+         (* Request to reclaim a candidate page.                              (* Add [v,p] into the named translation context
+            Clients may handle this event to                                     with the specified protection. *)
+            nominate alternative candidates. *)
+                                                                              PROCEDURE RemoveMapping(context: T; v: VirtAddr.T);
+         END PhysAddr.
+                                                                              PROCEDURE ExamineMapping(context: T;
+                                                                                           v: VirtAddr.T): Protection;
+
+                                                                              (* A few events raised during *)
+                                                                              (* illegal translations *)
+         INTERFACE VirtAddr;                                                  PROCEDURE PageNotPresent(v: T);
+                                                                              PROCEDURE BadAddress(v: T);
+         TYPE T <: REFANY; (* VirtAddr.T is opaque *)                         PROCEDURE ProtectionFault(v: T);
+         PROCEDURE Allocate(size: Size; attrib: Attrib): T;                   END Translation.
+         PROCEDURE Deallocate(v: T);
+         END VirtAddr.
+
+
+                              Figure 3: The interfaces for managing physical addresses, virtual addresses, and translations.
+
+                                                                                location policy between strands. Additional application-
+                                                                                specific schedulers can be placed on top of the global sched-
+INTERFACE Strand;                                                               uler using Checkpoint and Resume events to relinquish or
+TYPE T <: REFANY;       (* Strand.T is opaque *)                                receive control of the processor. That is, an application-
+                                                                                specific scheduler presents itself to the global scheduler as a
+PROCEDURE Block(s:T);
+(* Signal to a scheduler that s is not runnable. *)                             thread package. The delivery of the Resume event indicates
+                                                                                that the new scheduler can schedule its own strands, while
+PROCEDURE Unblock(s: T);
+(* Signal to a scheduler that s is runnable. *)                                 Checkpoint signals that the processor is being reclaimed by
+                                                                                the global scheduler.
+PROCEDURE Checkpoint(s: T);
+(* Signal that s is being descheduled and that it
+   should save any processor state required for
+   subsequent rescheduling. *)                                                     The Block and Unblock events, when raised on strands
+PROCEDURE Resume(s: T);                                                         scheduled by application-specific schedulers, are routed by
+(* Signal that s is being placed on a processor and                             the dispatcher to the appropriate scheduling implementa-
+   that it should reestablish any state saved during
+   a prior call to Checkpoint. *)                                               tion. This allows new scheduling policies to be implemented
+                                                                                and integrated into the kernel, provided that an application-
+END Strand.
+                                                                                specific policy does not conflict with the global policy. While
+                                                                                the global scheduling policy is replaceable, it cannot be re-
+                                                                                placed by an arbitrary application, and its replacement can
+Figure 4: The Strand Interface. This interface describes the schedul-           have global effects. In the current implementation, the global
+ing events affecting control flow that can be raised within the kernel.         scheduler implements a round-robin, preemptive, priority
+Application-specific schedulers and thread packages install handlers on         policy.
+these events, which are raised on behalf of particular strands. A trusted
+thread package and scheduler provide default implementations of these op-
+erations, and ensure that extensions do not install handlers on strands for
+which they do not possess a capability.
+                                                                                   We have used the strand interface to implement as kernel
+                                                                                extensions a variety of thread management interfaces includ-
+                                                                                ing DEC OSF/1 kernel threads [Dig 93], C-Threads [Cooper
+   Application-specific thread packages only manipulate the                     & Draves 88], and Modula-3 threads. The implementations
+flow of control for application threads executing outside of the                of these interfaces are built directly from strands and not
+kernel. For safety reasons, the responsibility for scheduling                   layered on top of others. The interface supporting DEC
+and synchronization within the kernel belongs to the kernel.                    OSF/1 kernel threads allows us to incorporate the vendor’s
+As a thread transfers from user mode to kernel mode, it is                      device drivers directly into the kernel. The C-Threads im-
+checkpointed and a Modula-3 thread executes in the kernel                       plementation supports our UNIX server, which uses the
+on its behalf. As the Modula-3 thread leaves the kernel, the                    Mach C-Threads interface for concurrency. Within the ker-
+blocked application-specific thread is resumed.                                 nel, a trusted thread package and scheduler implements the
+   A global scheduler implements the primary processor al-                      Modula-3 thread interface [Nelson 91].
+4.3    Implications for trusted services                                   architecture by describing two applications that use sys-
+                                                                           tem extensions.
+The processor and memory services are two instances of
+SPIN’s core services, which provide interfaces to hardware              We compare the performance of operations on three op-
+mechanisms. The core services are trusted, which means that          erating systems that run on the same platform: SPIN (V0.4
+they must perform according to their interface specification.        of August 1995), DEC OSF/1 V2.1 which is a monolithic
+Trust is required because the services access underlying hard-       operating system, and Mach 3.0 which is a microkernel. We
+ware facilities and at times must step outside the protection        collected our measurements on DEC Alpha 133MHz AXP
+model enforced by the language. Without trust, the pro-              3000/400 workstations, which are rated at 74 SPECint 92.
+tection and extension mechanisms described in the previous           Each machine has 64 MBs of memory, a 512KB unified ex-
+section could not function safely, as they rely on the proper        ternal cache, an HP C2247-300 1GB disk-drive, a 10Mb/sec
+management of the hardware. Because trusted services medi-           Lance Ethernet interface, and a FORE TCA-100 155Mb/sec
+ate access to physical resources, applications and extensions        ATM adapter card connected to a FORE ASX-200 switch.
+must trust the services that are trusted by the SPIN kernel.         The FORE cards use programmed I/O and can maximally
+   In designing the interfaces for SPIN’s trusted services, we       deliver only about 53Mb/sec between a pair of hosts [Brus-
+have worked to ensure that an extension’s failure to use an          toloni & Bershad 93]. We avoid comparisons with operating
+interface correctly is isolated to the extension itself (and any     systems running on different hardware as benchmarks tend to
+others that rely on it). For example, the SPIN scheduler             scale poorly for a variety of architectural reasons [Anderson
+raises events that are handled by application-specific thread        et al. 91]. All measurements are taken while the operating
+packages in order to start or stop threads. Although it is in        systems run in single-user mode.
+the handler’s best interests to respect, or at least not interfere
+with, the semantics implied by the event, this is not enforced.      5.1    System components
+An application-specific thread package may ignore the event
+that a particular user-level thread is runnable, but only the        SPIN runs as a standalone kernel on DEC Alpha worksta-
+application using the thread package will be affected. In this       tions. The system consists of five main components, sys,
+way, the failure of an extension is no more catastrophic than        core, rt, lib and sal, that support different classes of service.
+the failure of code executing in the runtime libraries found in      Table 1 shows the size of each component in source lines, ob-
+conventional systems.                                                ject bytes, and percentages. The first component, sys, imple-
+                                                                     ments the extensibility machinery, domains, naming, linking,
+                                                                     and dispatching. The second component, core, implements
+5 System performance                                                 the virtual memory and scheduling services described in the
+                                                                     previous section, as well as device management, a disk-based
+In this section we show that SPIN enables applications to            and network-based file system, and a network debugger [Re-
+compose system services in order to define new kernel ser-           dell 88]. The third component, rt, contains a version of the
+vices that perform well. Specifically, we evaluate the perfor-       DEC SRC Modula-3 runtime system that supports automatic
+mance of SPIN from four perspectives:                                memory management and exception processing. The fourth
+                                                                     component, lib, includes a subset of the standard Modula-3
+   System size. The size of the system in terms of lines of         libraries and handles many of the more mundane data struc-
+    code and object size demonstrates that advanced runtime          tures (lists, queues, hash tables, etc.) generally required
+    services do not necessarily create an operating system           by any operating system kernel. The final component, sal,
+    kernel of excessive size. In addition, the size of the           implements a low-level interface to device drivers and the
+    system’s extensions shows that they can be implemented           MMU, offering functionality such as “install a page table en-
+    with reasonable amounts of code.                                 try,” “get a character from the console,” and “read block 22
+                                                                     from SCSI unit 0.” We build sal by applying a few dozen
+   Microbenchmarks. Measurements of low-level sys-                  file diffs against a small subset of the files from the DEC
+    tem services, such as protected communication,
+                                                                     OSF/1 kernel source tree. This approach, while increasing
+    thread management and virtual memory, show that
+                                                                     the size of the kernel, allows us to track the vendor’s hard-
+    SPIN’s extension architecture enables us to construct
+                                                                     ware without requiring that we port SPIN to each new system
+    communication-intensive services with low overhead.
+                                                                     configuration.
+    The measurements also show that conventional system
+    mechanisms, such as a system call and cross-address
+    space protected procedure call, have overheads that are          5.2    Microbenchmarks
+    comparable to those in conventional systems.
+                                                                     Microbenchmarks reveal the overhead of basic system func-
+   Networking. Measurements of a suite of networking                tions, such a protected procedure call, thread management,
+    protocols demonstrate that SPIN’s extension architec-            and virtual memory. They define the bounds of system per-
+    ture enables the implementation of high-performance              formance and provide a framework for understanding larger
+    network protocols.                                               operations. Times presented in this section, measured with
+                                                                     the Alpha’s internal cycle counter, are the average of a large
+   End-to-end performance. Finally, we show that end-               number of iterations, and may therefore be overly optimistic
+    to-end application performance can benefit from SPIN’s           regarding cache effects [Bershad et al. 92a].
+       Component     Source size       Text size   Data size                             Operation                DEC OSF/1 Mach SPIN
+                      lines    %       bytes     % bytes     %                           Protected in-kernel call        n/a n/a   .13
+       sys           1646 2.5         42182 5.2 22397 5.0                                System call                       5   7     4
+       core         10866 16.5       170380 21.0 89586 20.0                              Cross-address space call       845 104     89
+       rt           14216 21.7       176171 21.8 104738 23.4
+       lib           1234 1.9         10752 1.3    3294      .8                 Table 2: Protected communication overhead in microseconds. Neither
+       sal          37690 57.4       411065 50.7 227259 50.8                    DEC OSF/1 nor Mach support protected in-kernel communication.
+       Total kernel 65652 100        810550 100 447274 100
+
+Table 1: This table shows the size of different components of the system.          The table illustrates two points about communication and
+The sys, core and rt components contain the interfaces visible to extensions.
+The column labeled “lines” does not include comments. We use the DEC            system structure. First, the overhead of protected communi-
+SRC Modula-3 compiler, release 3.5.                                             cation in SPIN can be that of procedure call for extensions
+                                                                                executing in the kernel’s address space. SPIN’s protected in-
+                                                                                kernel calls provide the same functionality as cross-address
+Protected communication                                                         space calls in DEC OSF/1 and Mach, namely the ability to
+                                                                                execute arbitrary code in response to an application’s call.
+In a conventional operating system, applications, services and                  Second, SPIN’s extensible architecture does not preclude the
+extensions communicate using two protected mechanisms:                          use of traditional communication mechanisms having perfor-
+system calls and cross-address space calls. The first enables                   mance comparable to that in non-extensible systems. How-
+applications and kernel services to interact. The second en-                    ever, the disparity between the performance of a protected
+ables interaction between applications and services that are                    in-kernel call and the other mechanisms encourages the use
+not part of the kernel. The overhead of using either of these                   of in-kernel extensions.
+mechanisms is the limiting factor in a conventional system’s                       SPIN’s in-kernel protected procedure call time is conser-
+extensibility. High overhead discourages frequent interac-                      vative. Our Modula-3 compiler generates code for which an
+tion, requiring that a system be built from coarse-grained                      intermodule call is roughly twice as slow as an intramod-
+interfaces to amortize the cost of communication over large                     ule call. A more recent version of the Modula-3 compiler
+operations.                                                                     corrects this disparity. In addition, our compiler does not
+   SPIN’s extension model offers a third mechanism for pro-                     perform inlining, which can be an important optimization
+tected communication. Simple procedure calls, rather than                       when calling many small procedures. These optimizations
+system calls, can be used for communication between ex-                         do not affect the semantics of the language and will therefore
+tensions and the core system. Similarly, simple procedure                       not change the system’s protection model.
+calls, rather than cross-address procedure calls, can be used
+for communication between applications and other services                       Thread management
+installed into the kernel.
+   In Table 2 we compare the performance of the different pro-                  Thread management packages implement concurrency con-
+tected communication mechanisms when invoking the “null                         trol operations using underlying kernel services. As pre-
+procedure call” on DEC OSF/1, Mach, and SPIN. The null                          viously mentioned, SPIN’s in-kernel threads are imple-
+procedure call takes no arguments and returns no results; it re-                mented with a trusted thread package exporting the Modula-3
+flects only the cost of control transfer. The protected in-kernel               thread interface. Application-specific extensions also rely on
+call in SPIN is implemented as a procedure call between two                     threads executing in the kernel to implement their own con-
+domains that have been dynamically linked. Although this                        current operations. At user level, thread management over-
+test does not measure data transfer, the overhead of pass-                      head determines the granularity with which threads can be
+ing arguments between domains, even large arguments, is                         used to control concurrent user-level operations.
+small because they can be passed by reference. System call                         Table 3 shows the overhead of thread management opera-
+overhead reflects the time to cross the user-kernel boundary,                   tions for kernel and user threads using the different systems.
+execute a procedure and return. In Mach and DEC OSF/1,                          Fork-Join measures the time to create, schedule, and termi-
+system calls flow from the trap handler through to a generic,                   nate a new thread, synchronizing the termination with another
+but fixed, system call dispatcher, and from there to the re-                    thread. Ping-Pong reflects synchronization overhead, and
+quested system call (written in C). In SPIN, the kernel’s trap                  measures the time for a pair of threads to synchronize with
+handler raises a Trap.SystemCall event which is dispatched                      one another; the first thread signals the second and blocks,
+to a Modula-3 procedure installed as a handler. The third                       then the second signals the first and blocks.
+line in the table shows the time to perform a protected, cross-                    We measure kernel thread overheads using the na-
+address space procedure call. DEC OSF/1 supports cross-                         tive primitives provided by each kernel (thread sleep and
+address space procedure call using sockets and SUN RPC.                         thread wakeup in DEC OSF/1 and Mach, and locks with con-
+Mach provides an optimized path for cross-address space                         dition variables in SPIN). At user-level, we measure the per-
+communication using messages [Draves 94]. SPIN’s cross-                         formance of the same program using C-Threads on Mach and
+address space procedure call is implemented as an extension                     SPIN, and P-Threads, a C-Threads superset, on DEC OSF/1.
+that uses system calls to transfer control in and out of the                    The table shows measurements for two implementations of
+kernel and cross-domain procedure calls within the kernel to                    C-Threads on SPIN. The first implementation, labeled “lay-
+transfer control between address spaces.                                        ered,” is implemented as a user-level library layered on a set
+of kernel extensions that implement Mach’s kernel thread in-       fault in the handler, and protect another page in the handler.
+terface. The second implementation, labeled “integrated,” is       Appel2 measures the time to protect 100 pages, and fault on
+structured as a kernel extension that exports the C-Threads        each one, resolving the fault in the handler (Appel2 is shown
+interface using system calls. The latter version uses SPIN’s       as the average cost per page).
+strand interface, and is integrated with the scheduling behav-        SPIN outperforms the other systems on the virtual memory
+ior of the rest of the kernel. The table shows that SPIN’s         benchmarks for two reasons. First, SPIN uses kernel exten-
+extensible thread implementation does not incur a perfor-          sions to define application-specific system calls for virtual
+mance penalty when compared to non-extensible ones, even           memory management. The calls provide access to the virtual
+when integrated with kernel services.                              and physical memory interfaces described in the previous
+                                                                   section, and install handlers for Translation.ProtectionFault
+                                                                   events that occur within the application’s virtual address
+                DEC OSF/1      Mach              SPIN              space. In contrast, DEC OSF/1 requires that applications
+                kernel user kernel user kernel       user
+    Operation                                 layered integrated   use the UNIX signal and mprotect interfaces to manage vir-
+    Fork-Join     198 1230    101 338      22     262       111    tual memory, and Mach requires that they use the external
+    Ping-Pong      21 264      71 115      17     159         85   pager interface [Young et al. 87]. Neither signals nor external
+                                                                   pagers, though, have especially efficient implementations, as
+                                                                   the focus of each is generalized functionality [Thekkath &
+      Table 3: Thread management overhead in microseconds.         Levy 94]. The second reason for SPIN’s dominance is that
+                                                                   each virtual memory event, which requires a series of inter-
+                                                                   actions between the kernel and the application, is reflected to
+Virtual memory                                                     the application through a fast in-kernel protected procedure
+                                                                   call. DEC OSF/1 and Mach, though, communicate these
+Applications can exploit the virtual memory fault path to ex-      events by means of more expensive traps or messages.
+tend system services [Appel & Li 91]. For example, concur-
+rent and generational garbage collectors can use write faults
+to maintain invariants or collect reference information. A                       Operation    DEC OSF/1      Mach     SPIN
+longstanding problem with fault-based strategies has been the                    Dirty               n/a       n/a       2
+                                                                                 Fault              329       415       29
+overhead of handling a page fault in an application [Thekkath                    Trap               260       185        7
+& Levy 94, Anderson et al. 91]. There are two sources of                         Prot1               45       106       16
+this overhead. First, handling each fault in a user applica-                     Prot100           1041      1792      213
+tion requires crossing the user/kernel boundary several times.                   Unprot100         1016       302      214
+                                                                                 Appel1             382       819       39
+Second, conventional systems provide quite general excep-                        Appel2             351       608       29
+tion interfaces that can perform many functions at once. As a
+result, applications requiring only a subset of the interface’s    Table 4: Virtual memory operation overheads in microseconds. Neither
+functionality must pay for all of it. SPIN allows applica-         DEC OSF/1 nor Mach provide an interface for querying the internal state
+tions to define specialized fault handling extensions to avoid     of a page frame.
+user/kernel boundary crossings and implement precisely the
+functionality that is required.
+   Table 4 shows the time to execute several commonly ref-
+erenced virtual memory benchmarks [Appel & Li 91, Engler           5.3    Networking
+et al. 95]. The line labeled Dirty in the table measures the       We have used SPIN’s extension architecture to implement a
+time for an application to query the status of a particular vir-   set of network protocol stacks for Ethernet and ATM net-
+tual page. Neither DEC OSF/1 nor Mach provide this facility.       works [Fiuczynski & Bershad 96]. Figure 5 illustrates the
+The time shown in the table is for an extension to invoke the      structure of the protocol stacks, which are similar to the x-
+virtual memory system; an additional 4 microseconds (sys-          kernel’s [Hutchinson et al. 89] except that SPIN permits user
+tem call time) is required to invoke the service from user         code to be dynamically placed within the stack. Each incom-
+level. Trap measures the latency between a page fault and          ing packet is “pushed” through the protocol graph by events
+the time when a handler executes. Fault is the perceived la-       and “pulled” by handlers. The handlers at the top of the graph
+tency of the access from the standpoint of the faulting thread.    can process the message entirely within the kernel, or copy
+It measures the time to reflect a page fault to an application,    it out to an application. The RPC and A.M. extensions, for
+enable access to the page within a handler, and resume the         example, implement the network transport for a remote pro-
+faulting thread. Prot1 measures the time to increase the pro-      cedure call package and active messages [von Eicken et al.
+tection of a single page. Similarly, Prot100 and Unprot100         92]. The video extension provides a direct path for video
+measure the time to increase and decrease the protection over      packets from the network to the framebuffer. The UDP
+a range of 100 pages. Mach’s unprotection is faster than           and TCP extensions support the Internet protocols.2 The
+protection since the operation is performed lazily; SPIN’s ex-     Forward extension provides transparent UDP/IP and TCP/IP
+tension does not lazily evaluate the request, but enables the      forwarding for packets arriving on a specific port. Finally,
+access as requested. Appel1 and Appel2 measure a combina-
+tion of traps and protection changes. The Appel1 benchmark           2 We currently use the DEC OSF/1 TCP engine as a SPIN extension, and
+measures the time to fault on a protected page, resolve the        manually assert that the code, which is written in C, is safe.
+                                                                                  We use the same vendor device drivers for both DEC OSF/1
+                                                                HTTP
+                                                                               and SPIN to isolate differences due to system architecture
+          Ping           A.M.     RPC      Video   Forward
+                                                                               from those due to the characteristics of the underlying device
+                                                                               driver. Neither the Lance Ethernet driver nor the FORE ATM
+     ICMP.PktArrived          UDP.PktArrived          TCP.PktArrived           driver are optimized for latency [Thekkath & Levy 93], and
+                                                                               only the Lance Ethernet driver is optimized for throughput.
+                                                                               Using different device drivers we achieve a round-trip latency
+          ICMP                           UDP                 TCP               of 337 secs on Ethernet and 241 secs on ATM, while
+                                                                               reliable ATM bandwidth between a pair of hosts rises to 41
+                                                                               Mb/sec. We estimate the minimum round trip time using our
+                                                                               hardware at roughly 250secs on Ethernet and 100secs on
+                                  IP.PktArrived
+
+     Event
+                                                                               ATM. The maximum usable Ethernet and ATM bandwidths
+     Handler                              IP                                   between a pair of hosts are roughly 9 Mb/sec and 53Mb/sec.
+
+     Event             Ether.PktArrived        ATM.PktArrived                  Protocol forwarding
+                            Lance                  Fore                        SPIN’s extension architecture can be used to provide protocol
+                         device driver          device driver                  functionalitynot generally available in conventional systems.
+                                                                               For example, some TCP redirection protocols [Balakrishnan
+Figure 5: This figure shows a protocol stack that routes incoming network      et al. 95] that have otherwise required kernel modifications
+packets to application-specific endpoints within the kernel. Ovals represent   can be straightforwardly defined by an application as a SPIN
+events raised to route control to handlers, which are represented by boxes.
+Handlers implement the protocol corresponding to their label.                  extension. A forwarding protocol can also be used to load
+                                                                               balance service requests across multiple servers.
+                                                                                  In SPIN an application installs a node into the protocol
+the HTTP extension implements the HyperText Transport                          stack which redirects all data and control packets destined
+Protocol [Berners-Lee et al. 94] directly within the kernel,                   for a particular port number to a secondary host. We have
+enabling a server to respond quickly to HTTP requests by                       implemented a similar service using DEC OSF/1 with a user-
+splicing together the protocol stack and the local file system.                level process that splices together an incoming and outgoing
+                                                                               socket. The DEC OSF/1 forwarder is not able to forward pro-
+Latency and Bandwidth                                                          tocol control packets because it executes above the transport
+                                                                               layer. As a result it cannot maintain a protocol’s end-to-end
+Table 5 shows the round trip latency and reliable bandwidth                    semantics. In the case of TCP, end-to-end connection estab-
+between two applications using UDP/IP on DEC OSF/1 and                         lishment and termination semantics are violated. A user-level
+SPIN. For DEC OSF/1, the application code executes at user                     intermediary also interferes with the protocol’s algorithms
+level, and each packet sent involves a trap and several copy                   for window size negotiation, slow start, failure detection, and
+operations as the data moves across the user/kernel boundary.                  congestion control, possibly degrading the overall perfor-
+For SPIN, the application code executes as an extension in the                 mance of connections between the hosts. Moreover, on the
+kernel, where it has low-latency access to both the device and                 user-level forwarder, each packet makes two trips through the
+data. Each incoming packet causes a series of events to be                     protocol stack where it is twice copied across the user/kernel
+generated for each layer in the UDP/IP protocol stack (Eth-                    boundary. Table 6 compares the latency for the two im-
+ernet/ATM, IP, UDP) shown in Figure 5. For SPIN, protocol                      plementations, and reveals the additional work done by the
+processing is done by a separately scheduled kernel thread                     user-level forwarder.
+outside of the interrupt handler. We do not present network-
+ing measurements for Mach, as the system neither provides
+                                                                                                       TCP                    UDP
+a path to the Ethernet more efficient than DEC OSF/1, nor                                        DEC OSF/1     SPIN     DEC OSF/1     SPIN
+supports our ATM card.                                                                Ethernet        2080     1420          1607     1344
+                                                                                      ATM             1730     1067          1389     1024
+                          Latency      Bandwidth
+                      DEC OSF/1 SPIN DEC OSF/1 SPIN                            Table 6: Round trip latency in microseconds to route 16 byte packets
+             Ethernet        789 565       8.9 8.9                             through a protocol forwarder.
+             ATM             631 421      27.9   33
+
+Table 5: Network protocol latency in microseconds and receive band-
+width in Mb/sec. We measure latency using small packets (16 bytes), and        5.4    End-to-end performance
+bandwidth using large packets (1500 for Ethernet and 8132 for ATM).
+                                                                               We have implemented several applications that exploit SPIN’s
+  The table shows that processing packets entirely within the                  extensibility. One is a networked video system that consists
+kernel can reduce round-trip latency when compared to a sys-                   of a server and a client viewer. The server is structured as
+tem in which packets are handled in user space. Throughput,                    three kernel extensions, one that uses the local file system
+which tends not to be latency sensitive, is roughly the same                   to read video frames from the disk, another that sends the
+on both systems.                                                               video out over the network, and a third that registers itself as
+a handler on the SendPacket event, transforming the single                    should cache recently accessed objects, not cache large ob-
+send into a multicast to a list of clients. The server trans-                 jects that are infrequently accessed [Chankhunthod et al. 95],
+mits 30 frames per second to each client. On the client, an                   and avoid double buffering with other caching agents [Stone-
+extension awaits incoming video packets, decompresses and                     braker 81]. A server that does not itself cache but is built on
+writes them directly to the frame buffer using the structure                  top of a conventional caching file system avoids the double
+shown in Figure 5.                                                            buffering problem, but is unable to control the caching policy.
+   Because each outgoing packet is pushed through the pro-                    In contrast, a server that controls its own cache on top of the
+tocol graph only once, and not once per client stream, SPIN’s                 file system’s suffers from double buffering.
+server can support a larger number of clients than one that                      SPIN allows a server to both control its cache and avoid the
+processes each packet in isolation. To show this, we measure                  problem of double buffering. A SPIN web server implements
+processor utilization as a function of the number of clients                  its own hybrid caching policy based on file type: LRU for
+for the SPIN server and for a server that runs on DEC OSF/1.                  small files, and no-cache for large files which tend to be
+The DEC OSF/1 server executes in user space and commu-                        accessed infrequently. The client-side latency of an HTTP
+nicates with clients using sockets; each outgoing packet is                   transaction to a SPIN web server running as a kernel extension
+copied into the kernel and is pushed through the kernel’s pro-                is 5 milliseconds when the requested file is in the server’s
+tocol stack into the device driver. We determine processor                    cache. Otherwise, the server goes through a non-caching file
+utilization by measuring the progress of a low-priority idle                  system to find the file. A comparable user-level web server
+thread that executes on the server.                                           on DEC OSF/1 that relies on the operating system’s caching
+   Using the FORE interface, we find that both SPIN and DEC                   file system (no double buffering) takes about 8 milliseconds
+OSF/1 consume roughly the same fraction of the server’s                       per request for the same cached file.
+processor for a given number of clients. Although the SPIN
+server does less work in the protocol stack, the majority of
+the server’s CPU resources are consumed by the programmed                     5.5    Other issues
+I/O that copies data to the network one word at a time. Using                 Scalability and the dispatcher
+a network interface that supports DMA, though, we find that
+the SPIN server’s processor utilization grows less slowly than                SPIN’s event dispatcher matches event raisers to handlers.
+the DEC OSF/1 server’s. Figure 6 shows server processor                       Since every procedure in the system is effectively an event,
+utilization as a function of the number of supported client                   the latency of the dispatcher is critical. As mentioned, in
+streams when the server is configured with a Digital T3PKT                    the case of a single synchronous handler, an event raise is
+adapter. The “T3” is an experimental network interface that                   implemented as a procedure call from the raiser to the han-
+can send 45 Mb/sec using DMA. We use the same device                          dler. In other cases, such as when there are many handlers
+driver in both operating systems. At 15 streams, both SPIN                    registered for a particular event, the dispatcher takes a more
+and DEC OSF/1 saturate the network, but SPIN consumes                         active role in event delivery. For each guard/handler pair in-
+only half as much of the processor. Compared to DEC OSF/1,                    stalled on an event, the dispatcher evaluates the guard and, if
+SPIN can support more clients on a faster network, or as many                 true, invokes the handler. Consequently, dispatcher latency
+clients on a slower processor.                                                depends on the number and complexity of the guards, and
+                                                                              the number of event handlers ultimately invoked. In practice,
+                                                                              the overhead of an event dispatch is linear with the number
+                   45                                                         of guards and handlers installed on the event. For example,
+                                                                              round trip Ethernet latency, which we measure at 565 secs,
+                                                                              rises to about 585 secs when 50 additional guards and han-
+                   40
+
+                   35        SPIN T3 Driver                                   dlers register interest in the arrival of some UDP packet but
+                        DEC OSF/1 T3 Driver                                   all 50 guards evaluate to false. When all 50 guards evaluate
+                   30
+                                                                              to true, latency rises to 637 secs. Presently, we perform
+
+
+ CPU Utilization
+                   25                                                         no guard-specific optimizations such as evaluating common
+                                                                              subexpressions [Yuhara et al. 94] or representing guard pred-
+                   20                                                         icates as decision trees. As the system matures, we plan to
+                   15                                                         apply these optimizations.
+                   10
+                                                                              Impact of automatic storage management
+                    5
+                                                                              An extensible system cannot depend on the correctness of
+                    0                                                         unprivileged clients for its memory integrity. As previously
+                        2      4      6      8       10    12       14
+                                      Number of Clients                       mentioned, memory management schemes that allow exten-
+                                                                              sions to return objects to the system heap are unsafe because
+Figure 6:    Server utilization as a function of the number of client video   a rogue client can violate the type system by retaining a
+streams. Each stream requires approximately 3 Mb/sec.                         reference to a freed object. SPIN uses a trace-based, mostly-
+                                                                              copying, garbage collector [Bartlett 88] to safely reclaim
+   Another application that can benefit from SPIN’s architec-                 memory resources. The collector serves as a safety net for
+ture is a web server. To service requests quickly, a web server               untrusted extensions, and ensures that resources released by
+an extension, either through inaction or as a result of prema-           semantics and performance of C. As the design of our safe
+ture termination, are eventually reclaimed.                              subset proceeded, we faced the difficult issues that typically
+   Clients that allocate large amounts of memory can trigger             arise in any language design or redesign. For each major
+frequent garbage collections with adverse global effects. In             issue that we considered in the context of a safe version of
+practice, this is less of a problem than might be expected be-           C (type semantics, objects, storage management, naming,
+cause SPIN and its extensions avoid allocation on fast paths.            etc.), we found the issue already satisfactorily addressed by
+For example, none of the measurements presented in this sec-             Modula-3. Moreover, we understood that the definition of
+tion change when we disable the collector during the tests.              our service interfaces was more important than the language
+Even in systems without garbage collection, generalized al-              with which we implemented them.
+location is avoided because of its high latency. Instead, sub-              Ultimately, we decided to use Modula-3 for both the sys-
+systems implement their own allocators optimized for some                tem and its extensions. Early on we found evidence to aban-
+expected usage pattern. SPIN services do this as well and for            don our two main prejudices about the language: that pro-
+the same reason (dynamic memory allocation is relatively                 grams written in it are slow and large, and that C programmers
+expensive). As a consequence, there is less pressure on the              could not be effective using another language. In terms of
+collector, and the pressure is least likely to be applied during         performance, we have found nothing remarkable about the
+a critical path.                                                         language’s code size or execution time, as shown in the previ-
+                                                                         ous section. In terms of programmer effectiveness, we have
+Size of extensions                                                       found that it takes less than a day for a competent C pro-
+                                                                         grammer to learn the syntax and more obvious semantics of
+Table 7 shows the size of some of the extensions described               Modula-3, and another few days to become proficient with
+in this section. SPIN extensions tend to require an amount of            its more advanced features. Although anecdotal, our expe-
+code commensurate with their functionality. For example, the             rience has been that the portions of the SPIN kernel written
+Null syscall and IPC extensions, are conceptually simple, and            in Modula-3 are much more robust and easier to understand
+also have simple implementations. Extensions tend to import              than those portions written in C.
+relatively few (about a dozen) interfaces, and use the domain
+and event system in fairly stylized ways. As a result, we have
+not found building extensions to be exceptionally difficult.             7 Conclusions
+In contrast, we had more trouble correctly implementing a
+few of our benchmarks on DEC OSF/1 or Mach, because we                   The SPIN operating system demonstrates that it is possible
+were sometimes forced to follow circuitous routes to achieve             to achieve good performance in an extensible system without
+a particular level of functionality. Mach’s external pager               compromising safety. The system provides a set of efficient
+interface, for instance, required us to implement a complete             mechanisms for extending services, as well as a core set
+pager in user space, although we were only interested in                 of extensible services. Co-location, enforced modularity,
+discovering write protect faults.                                        logical protection domains and dynamic call binding allow
+                                                                         extensions to be dynamically defined and accessed at the
+        Component         Source size Text size Data size
+                             lines     bytes     bytes
+                                                                         granularity of a procedure call.
+        NULL syscall               19        96      656                    In the past, system builders have only relied on the pro-
+        IPC                       127    1344       1568                 gramming language to translate operating system policies
+        CThreads                  219    2480       1792                 and mechanisms into machine code. Using a programming
+        DEC OSF/1 threads         305    2304       3488
+        VM workload               263    5712       1472                 language with the appropriate features, we believe that oper-
+        IP                        744   19008     13088                  ating system implementors can more heavily rely on compiler
+        UDP                     1046    23968     16704                  and language runtime services to construct systems in which
+        TCP                     5077    69040       9840                 structure and performance are complementary.
+        HTTP                      392    5712       4176
+        TCP Forward               187    4592       2080                    Additional information about the SPIN project is available
+        UDP Forward               138    4592       2144                 at http://www-spin.cs.washington.edu, an Alpha workstation
+        Video Client               95    2736       1952                 running SPIN and the HTTP extension described in this paper.
+        Video Server              304    9228       3312
+
+Table 7: This table shows the size of some different system extensions
+described in this paper.                                                 Acknowledgements
+                                                                         Many people have contributed to the SPIN project. David
+                                                                         Dion has been responsible for bringing up the system’s UNIX
+6 Experiences with Modula-3                                              server. Jan Sanislo made it possible for us to use the DEC
+                                                                         OSF/1 SCSI driver from SPIN. Anthony Lamarca, Dylan
+Our decision to use Modula-3 was made with some care.                    McNamee, Geoff Voelker, and Alec Wolman assisted in un-
+Originally, we had intended to define and implement a com-               derstanding system performance on DEC OSF/1 and Mach.
+piler for a safe subset of C. All of us, being C programmers,            David Nichols, Hank Levy, and Terri Watson provided feed-
+were certain that it was infeasible to build an efficient op-            back on earlier drafts of this paper. David Boggs provided us
+erating system without using a language having the syntax,               with the T3 cards that we used in the video server experiment.
+Special thanks are due to DEC SRC, who provided us with                           [Brustoloni & Bershad 93] Brustoloni, J. C. and Bershad, B. N. Simple
+much of our compiler infrastructure.                                                      Protocol Processing for High-Bandwidth Low-Latency Networking.
+                                                                                          Technical Report CMU-CS-93-132, Carnegie Mellon University,
+                                                                                          March 1993.
+                                                                                  [Cao et al. 94] Cao, P., Felten, E. W., and Li, K. Implementation and Per-
+References                                                                                formance of Application-Controlled File Caching. In Proceedings
+                                                                                          of the First USENIX Symposium on Operating Systems Design and
+[Abrossimov et al. 89] Abrossimov, V., Rozier, M., and Shapiro, M.
+                                                                                          Implementation (OSDI), pages 165–177, Monterey, CA, November
+       Generic Virtual Memory Management for Operating System Ker-
+                                                                                          1994.
+       nels. In Proceedings of the Thirteenth ACM Symposium on Operating
+       Systems Principles, pages 123–136, Litchfield Park, AZ, December           [Carter et al. 91] Carter, J. B., Bennett, J. K., and Zwaenepoel, W. Im-
+       1989.                                                                              plementation and Performance of Munin. In Proceedings of the
+                                                                                          Thirteenth ACM Symposium on Operating Systems Principles, pages
+[Anderson et al. 91] Anderson, T. E., Levy, H. M., Bershad, B. N., and La-                152–64, Pacific Grove, CA, October 1991.
+       zowska, E. D. The Interaction of Architecture and Operating System
+       Design. In Proceedings of the Fourth International Conference on           [Carter et al. 94] Carter, N. P., Keckler, S. W., and Dally, W. J. Hardware
+       Architectural Support for Programming Languages and Operating                      Support for Fast Capability-Based Addressing. In Proceedings of
+       Systems (ASPLOS-IV), pages 108–120, Santa Clara, CA, April 1991.                   the Sixth International Conference on Architectural Support for Pro-
+                                                                                          gramming Languages and Operating Systems (ASPLOS-VI), pages
+[Anderson et al. 92] Anderson, T. E., Bershad, B. N., Lazowska, E. D., and                319–327, San Jose, CA, October 1994.
+       Levy, H. M. Scheduler Activations: Effective Kernel Support for
+       the User-Level Management of Parallelism. ACM Transactions on              [Chankhunthod et al. 95] Chankhunthod, A., Danzig, P., Neerdaels, C.,
+       Computer Systems, 10(1):53–79, February 1992.                                      Schwartz, M., and Worrell, K. A Hierarchical Internet Object Cache.
+                                                                                          Technical Report CU-CS-766-95, DCS University of Colorado, July
+[Appel & Li 91] Appel, W. and Li, K. Virtual Memory Primitives for User                   1995.
+       Programs. In Proceedings of the Fourth International Conference on
+                                                                                  [Chen & Bershad 93] Chen, J. B. and Bershad, B. N. The Impact of Op-
+       Architectural Support for Programming Languages and Operating
+                                                                                          erating System Structure on Memory System Performance. In Pro-
+       Systems (ASPLOS-IV), pages 96–107, Santa Clara, CA, April 1991.
+                                                                                          ceedings of the Fourteenth ACM Symposium on Operating Systems
+[Bala et al. 94] Bala, K., Kaashoek, M. F., and Weihl, W. E. Software                     Principles, pages 120–133, Asheville, NC, December 1993.
+        Prefetching and Caching for Translation Lookaside Buffers. In Pro-        [Cheriton & Duda 94] Cheriton, D. R. and Duda, K. J. A Caching Model
+        ceedings of the First USENIX Symposium on Operating Systems                       of Operating System Kernel Functionality. In Proceedings of the
+        Design and Implementation (OSDI), pages 243–253, Monterey, CA,                    First USENIX Symposium on Operating Systems Design and Imple-
+        November 1994.                                                                    mentation (OSDI), pages 179–194, Monterey, CA, November 1994.
+[Balakrishnan et al. 95] Balakrishnan, H., Seshan, S., Amir, E., and Katz.,       [Cheriton & Zwaenepoel 83] Cheriton, D. R. and Zwaenepoel, W. The
+       R. H. Improving TCP/IP Performance over Wireless Networks. In                      Distributed V Kernel and its Performance for Diskless Workstations.
+       Proceedings of the First ACM Conference on Mobile Computing and                    In Proceedings of the Ninth ACM Symposium on Operating Systems
+       Networking, November 1995.                                                         Principles, pages 129–140, Bretton Woods, NH, October 1983.
+[Barrera 91] Barrera, J. S. A Fast Mach Network IPC Implementation. In            [Colwell 85] Colwell, R. The Performance Effects of Functional Migration
+       Proceedings of the Second USENIX Mach Symposium, pages 1–11,                       and Architectural Complexity in Object-Oriented Systems. Techni-
+       Monterey, CA, November 1991.                                                       cal Report CMU-CS-85-159, Carnegie Mellon University, August
+[Bartlett 88] Bartlett, J. F. Compacting Garbage Collection with Ambigu-                  1985.
+        ous Roots. Technical Report WRL-TR-88-2, Digital Equipment                [Cooper & Draves 88] Cooper, E. C. and Draves, R. P. C Threads. Technical
+        Corporation Western Research Labs, February 1988.                                 Report CMU-CS-88-154, Carnegie Mellon University, June 1988.
+[Berners-Lee et al. 94] Berners-Lee, T., Cailliau, R., Luotonen, A., Nielsen,     [Cooper et al. 91] Cooper, E., Harper, R., and Lee, P. The Fox Project:
+       H. F., and Secretr, A. The World-Wide Web. Communications of the                   Advanced Development of Systems Software. Technical Report
+       ACM, 37(8):76–82, August 1994.                                                     CMU-CS-91-178, Carnegie Mellon University, August 1991.
+[Bershad 93] Bershad, B. N. Practical Considerations for Non-Blocking             [Davis et al. 93] Davis, P.-B., McNamee, D., Vaswani, R., and Lazowska,
+       Concurrent Objects. In Proceedings of the Thirteenth International                 E. Adding Scheduler Activations to Mach 3.0. In Proceedings of the
+       Conference on Distributed Computing Systems, pages 264–274,                        Third USENIX Mach Symposium, pages 119–136, Santa Fe, NM,
+       Pittsburgh, PA, May 1993.                                                          April 1993.
+[Bershad et al. 90] Bershad, B. N., Anderson, T. E., Lazowska, E. D., and         [Dig 93] Digital Equipment Corporation. DEC OSF/1 Writing Device
+       Levy, H. M. Lightweight Remote Procedure Call. ACM Transactions                    Drivers: Advanced Topics, 1993.
+       on Computer Systems, 8(1):37–55, February 1990.                            [Draves 93] Draves, R. The Case for Run-Time Replaceable Kernel Mod-
+                                                                                          ules. In Proceedings of the Fourth Workshop on Workstation Oper-
+[Bershad et al. 92a] Bershad, B. N., Draves, R. P., and Forin, A. Using
+                                                                                          ating Systems, pages 160–164, Napa, CA, October 1993.
+       Microbenchmarks to Evaluate System Performance. In Proceedings
+       of the Third Workshop on Workstation Operating Systems, pages              [Draves 94] Draves, R. P. Control Transfer in Operating System Kernels.
+       148–153, Key Biscayne, FL, April 1992.                                             Technical Report CMU-CS-94-142, Carnegie Mellon University,
+                                                                                          May 1994.
+[Bershad et al. 92b] Bershad, B. N., Redell, D. D., and Ellis, J. R. Fast
+       Mutual Exclusion for Uniprocessors. In Proceedings of the Fifth            [Draves et al. 91] Draves, R. P., Bershad, B. N., Rashid, R. F., and Dean,
+       International Conferenceon Architectural Support for Programming                   R. W. Using Continuations to Implement Thread Management and
+       Languages and Operating Systems (ASPLOS-V), pages 223–233,                         Communication in Operating Systems. In Proceedings of the Thir-
+       Boston, MA, October 1992.                                                          teenth ACM Symposium on Operating Systems Principles, pages
+                                                                                          122–136, Pacific Grove, CA, October 1991.
+[Black et al. 92] Black, D. L. et al. Microkernel Operating System Ar-
+       chitecture and Mach. In Proceedings of the USENIX Workshop on              [Engler & Kaashoek 95] Engler, D. and Kaashoek, M. F. Exterminate All
+       Micro-Kernels and Other Kernel Architectures, pages 11–30,Seattle,                 Operating System Abstractions. In Proceedings of the Fifth Work-
+       WA, April 1992.                                                                    shop on Hot Topics in Operating Systems, pages 78–83, Orcas Island,
+                                                                                          WA, May 1995.
+[Bricker et al. 91] Bricker, A., Gien, M., Guillemont, M., Lipkis, J., Orr, D.,
+                                                                                  [Engler & Proebsting 94] Engler, D. R. and Proebsting, T. A. DCG: An Effi-
+       and Rozier, M. A New Look at Micro-kernel-basedUNIX Operating
+                                                                                          cient, Retargettable Dynamic Code Generation System. In Proceed-
+       Systems: Lessons in Performance and Compatibility. In Proceedings
+                                                                                          ings of the Sixth International Conference on Architectural Support
+       of the EurOpen Spring’91 Conference,Tromsoe, Norway, May 1991.
+                                                                                          for Programming Languages and Operating Systems (ASPLOS-VI),
+[Brockschmidt 94] Brockschmidt, K. Inside OLE 2. Microsoft Press, 1994.                   pages 263–272, San Jose, CA, October 1994.
+[Engler et al. 94] Engler, D., Kaashoek, M. F., and O’Toole, J. The Oper-      [Liedtke 93] Liedtke, J. Improving IPC by Kernel Design. In Proceedings
+        ating System Kernel as a Secure Programmable Machine. In Pro-                 of the Fourteenth ACM Symposium on Operating Systems Principles,
+        ceedings of the 1994 ACM European SIGOPS Workshop, September                  pages 175–188, Asheville, NC, December 1993.
+        1994.                                                                  [Lucco 94] Lucco, S. High-Performance MicrokernelSystems. In Proceed-
+[Engler et al. 95] Engler, D. R., Kaashoek, M. F., and Jr, J. O. Exokernel:           ings of the First USENIX Symposium on Operating Systems Design
+        An Operating System Architecture for Application-Level Resource               and Implementation (OSDI), page 199, Monterey, CA, November
+        Management. In Proceedings of the Fifteenth ACM Symposium on                  1994.
+        Operating Systems Principles, Copper Mountain, CO, December
+                                                                               [Maeda & Bershad 93] Maeda, C. and Bershad, B. N. Protocol Service
+        1995.
+                                                                                     Decomposition for High-Performance Networking. In Proceedings
+[Fall & Pasquale 94] Fall, K. and Pasquale, J. Improving Continuous-                 of the Fourteenth ACM Symposium on Operating Systems Principles,
+        Media Playback Performance with In-Kernel Data Paths. In Pro-                pages 244–255, Asheville, NC, December 1993.
+        ceedings of the First IEEE International Conference on Multimedia
+        Computing and Systems, pages 100–109, Boston, MA, May 1994.            [Marsh et al. 91] Marsh, B., Scott, M., LeBlanc, T., and Markatos, E. First-
+                                                                                      Class User-Level Threads. In Proceedings of the Thirteenth ACM
+[Felten 92] Felten, E. W. The Case for Application-Specific Communica-                Symposium on Operating Systems Principles,pages 110–121,Pacific
+        tion Protocols. In Intel Supercomputer Systems Technology Focus               Grove, CA, October 1991.
+        Conference, pages 171–181, April 1992.
+                                                                               [McNamee & Armstrong 90] McNamee, D. and Armstrong, K. Extend-
+[Fiuczynski & Bershad 96] Fiuczynski, M. and Bershad, B. An Extensible              ing the Mach External Pager Interface to Accommodate User-Level
+        Protocol Architecture for Application-Specific Networking. In Pro-          Page Replacement Policies. In Proceedings of the USENIX Mach
+        ceedings of the 1996 Winter USENIX Conference, San Diego, CA,               Symposium, pages 17–29, Burlington, VT, October 1990.
+        January 1996.
+                                                                               [Mogul et al. 87] Mogul, J., Rashid, R., and Accetta, M. The Packet Filter:
+[Forin et al. 91] Forin, A., Golub, D., and Bershad, B. N. An I/O System for         An Efficient Mechanism for User-level Network Code. In Pro-
+        Mach 3.0. In Proceedings of the Second USENIX Mach Symposium,                ceedings of the Eleventh ACM Symposium on Operating Systems
+        pages 163–176, Monterey, CA, November 1991.                                  Principles, pages 39–51, Austin, TX, November 1987.
+[Geschke et al. 77] Geschke, C., Morris, J., and Satterthwaite, E. Early
+                                                                               [Mossenbock 94] Mossenbock, H. Extensibility in the Oberon System.
+        Experiences with Mesa. Communications of the ACM, 20(8):540–
+                                                                                     Nordic Journal of Computing, 1(1):77–93, February 1994.
+        553, August 1977.
+[Golub et al. 90] Golub, D., Dean, R., Forin, A., and Rashid, R. Unix as an    [Mullender et al. 90] Mullender, S. J., Rossum, G. V., Tanenbaum, A. S.,
+        Application Program. In Proceedings of the 1990 Summer USENIX                 Renesse, R. V., and van Staveren, H. Amoeba – A Distributed
+        Conference, pages 87–95, June 1990.                                           Operating System for the 1990’s. IEEE Computer, pages 44–54,
+                                                                                      May 1990.
+[Hamilton & Kougiouris 93] Hamilton, G. and Kougiouris, P. The Spring
+        Nucleus: A Microkernel for Objects. In Proceedings of the 1993         [Nelson 91] Nelson, G., editor. System Programmingin Modula-3. Prentice
+        Summer USENIX Conference, pages 147–159, Cincinnati, OH, June                 Hall, 1991.
+        1993.                                                                  [Organick 73] Organick, E., editor. Computer System Organizatrion: The
+[Harty & Cheriton 91] Harty, K. and Cheriton, D. R. Application-                      B5700/B6700 Series. Academic Press, 1973.
+        Controlled Physical Memory using External Page-Cache Manage-           [Pardyak & Bershad 94] Pardyak, P. and Bershad, B. A Group Structuring
+        ment. In Proceedings of the Fourth International Conference on                Mechanism for a Distributed Object Oriented Language Objects.
+        Architectural Support for Programming Languages and Operating                 In Proceedings of the Fourteenth International Conference on Dis-
+        Systems (ASPLOS-IV), pages 187–197, Santa Clara, CA, April 1991.              tributed Computing Systems, pages 312–219, Poznan, Poland, June
+[Heidemann & Popek 94] Heidemann, J. and Popek, G. File-System De-                    1994.
+        velopment with Stackable Layers. Communications of the ACM,            [Rashid et al. 87] Rashid, R., Tevanian, Jr., A., Young, M., Golub, D.,
+        12(1):58–89, February 1994.                                                   Baron, R., Black, D., Bolosky, W., and Chew, J. Machine-
+[Hildebrand 92] Hildebrand, D. An Architectural Overview of QNX. In                   Independent Virtual Memory Management for Paged Uniprocessor
+        Proceedings of the USENIX Workshop on Micro-Kernels and Other                 and Multiprocessor Architectures. In Proceedings of the Second In-
+        Kernel Architectures, pages 113–126, Seattle, WA, April 1992.                 ternational Conference on Architectural Support for Programming
+                                                                                      Languages and Operating Systems (ASPLOS-II), pages 31–39, Palo
+[Hutchinson et al. 89] Hutchinson, N. C., Peterson, L., Abbott, M. B., and
+                                                                                      Alto, CA, April 1987.
+        O’Malley, S. RPC in x-kernel: Evaluating New Design Techniques.
+        In Proceedings of the Thirteenth ACM Symposium on Operating            [Redell 88] Redell, D. Experience with Topaz Teledebugging. In Proceed-
+        Systems Principles, pages 91–101, Litchfield Park, AZ, December               ings of the ACM SIGPLAN and SIGOPS Workshop on Parallel and
+        1989.                                                                         Distributed Debugging, October 1988.
+[Int 81] Intel Corporation. Introduction to the iAPX 432 Architecture, 1981.   [Redell et al. 80] Redell, D. D., Dalal, Y. K., Horsley, T. R., Lauer, H. C.,
+[Int 90] Intel Corporation. i486 Microprocessor Programmer’s Reference                Lynch, W. C., McJones, P. R., Murray, H. G., and Purcell, S. C. Pilot:
+        Manual, 1990.                                                                 An Operating System for a Personal Computer. Communications of
+                                                                                      the ACM, 23(2):81–92, February 1980.
+[Khalidi & Nelson 93] Khalidi, Y. A. and Nelson, M. An Implementation
+        of UNIX on an Object-Oriented Operating System. In Proceedings         [Romer et al. 94] Romer, T. H., Lee, D., and Bershad, B. N. Dynamic
+        of the 1993 Winter USENIX Conference, pages 469–480, San Diego,              Page Mapping Policies for Cache Conflict Resolution on Standard
+        CA, January 1993.                                                            Hardware. In Proceedings of the First USENIX Symposium on Oper-
+                                                                                     ating Systems Design and Implementation (OSDI), pages 255–266,
+[Lazowska et al. 81] Lazowska, E. D., Levy, H. M., Almes, G. T., Fischer,            Monterey, CA, November 1994.
+        M., Fowler, R., and Vestal, S. The Architecture of the Eden System.
+        In Proceedingsof the Eighth ACM Symposium on Operating Systems         [Romer et al. 95] Romer, T., Ohlrich, W., Karlin, A., and Bershad, B. Re-
+        Principles, pages 148—159, December 1981.                                    ducing TLB and Memory Overhead Using Online Superpage Promo-
+                                                                                     tion. In Proceedings of the Twenty-Third International Symposium
+[Lee et al. 94] Lee, C. H., Chen, M. C., and Chang, R. C. HiPEC: High
+                                                                                     on Computer Architecture, pages 176–187, 1995.
+        Performance External Virtual Memory Caching. In Proceedings of
+        the First USENIX Symposium on Operating Systems Design and             [Rozier et al. 88] Rozier, M., Abrossimov, V., Armand, F., Boule, I., Giend,
+        Implementation (OSDI), pages 153–164, Monterey, CA, November                  M., Guillemont, M., Herrmann, F., Leonard, P., Langlois, S., and
+        1994.                                                                         Neuhauser, W. The Chorus Distributed Operating System. Comput-
+[Liedtke 92] Liedtke, J. Fast Thread Management and Communication                     ing Systems, 1(4):305–370, 1988.
+        Without Continuations. In Proceedings of the USENIX Workshop           [Schroeder & Burrows 90] Schroeder, M. D. and Burrows, M. Performance
+        on Micro-Kernels and Other Kernel Architectures, pages 213–221,               of Firefly RPC. ACM Transactions on Computer Systems, 8(1):1–17,
+        Seattle, WA, April 1992.                                                      February 1990.
+[Schulman et al. 92] Schulman, A., Maxey, D., and Pietrek, M. Undocu-
+       mented Windows. Addison-Wesley, 1992.
+[Small & Seltzer 94] Small, C. and Seltzer, M. VINO: An Integrated Plat-
+       form for Operating System and Database Research. Technical Report
+       TR-30-94, Harvard University, 1994.
+[Stevenson & Julin 95] Stevenson, J. M. and Julin, D. P. Mach-US: Unix
+       On Generic OS Object Servers. In Proceedings of the 1995 Winter
+       USENIX Conference, New Orleans, LA, January 1995.
+[Stodolsky et al. 93] Stodolsky, D., Bershad, B. N., and Chen, B. Fast
+       Interrupt Priority Management for Operating System Kernels. In
+       Proceedings of the Second USENIX Workshop on Microkernels and
+       Other Kernel Architectures,pages 105–110,San Diego, CA, Septem-
+       ber 1993.
+[Stonebraker 81] Stonebraker, M. Operating System Support for Database
+       Management. Communications of the ACM, 24(7):412–418, July
+       1981.
+[Thacker et al. 88] Thacker, C. P., Stewart, L. C., and Satterthwaite, Jr.,
+       E. H. Firefly: a Multiprocessor Workstation. IEEE Transactions on
+       Computers, 37(8):909–920, August 1988.
+[Thekkath & Levy 93] Thekkath, C. A. and Levy, H. M. Limits to Low-
+      Latency RPC. ACM Transactions on Computer Systems, 11(2):179–
+      203, May 1993.
+[Thekkath & Levy 94] Thekkath, C. A. and Levy, H. M. Hardware and
+      Software Support for Efficient Exception Handling. In Proceed-
+      ings of the Sixth International Conference on Architectural Support
+      for Programming Languages and Operating Systems (ASPLOS-VI),
+      pages 145–156, San Jose, CA, October 1994.
+[von Eicken et al. 92] von Eicken, T., Culler, D. E., Goldstein, S. C., and
+       Schauser, K. E. Active Messages: A Mechanism for Integrated
+       Communication and Computation. In Proceedings of the Nineteenth
+       International Symposium on Computer Architecture, pages 256–266,
+       Gold Coast, Australia, May 1992.
+[Wahbe et al. 93] Wahbe, R., Lucco, S., Anderson, T. E., and Graham,
+      S. L. Efficient Software-Based Fault Isolation. In Proceedings of
+      the Fourteenth ACM Symposium on Operating Systems Principles,
+      pages 203–216, Asheville, NC, December 1993.
+[Waldspurger & Weihl 94] Waldspurger, C. A. and Weihl, W. E. Lottery
+       Scheduling: Flexible Proportional-Share Resource Management. In
+       Proceedings of the First USENIX Symposium on Operating Systems
+       Design and Implementation (OSDI), pages 1–11, Monterey, CA,
+       November 1994.
+[Wheeler & Bershad 92] Wheeler, B. and Bershad, B. N. Consistency Man-
+      agement for Virtually Indexed Caches. In Proceedings of the Fifth
+      International Conferenceon Architectural Support for Programming
+      Languages and Operating Systems (ASPLOS-V), pages 124–136,
+      Boston, MA, October 1992.
+[Wulf et al. 81] Wulf, W. A., Levin, R., and Harbison, S. P. Hydra/C.mmp:
+       An Experimental Computer System. McGraw–Hill, 1981.
+[Young et al. 87] Young, M., Tevanian, A., Rashid, R., Golub, D., Ep-
+       pinger, J., Chew, J., Bolosky, W., Black, D., and Baron, R. The
+       Duality of Memory and Communication in the Implementation of a
+       Multiprocessor Operating System. In Proceedings of the Eleventh
+       ACM Symposium on Operating Systems Principles, pages 63–76,
+       Austin, TX, November 1987.
+[Yuhara et al. 94] Yuhara, M., Bershad, B. N., Maeda, C., and Moss, J. E. B.
+       Efficient Packet Demultiplexing for Multiple Endpoints and Large
+       Messages. In Proceedings of the 1994 Winter USENIX Conference,
+       pages 153–165, San Francisco, CA, January 1994.
+

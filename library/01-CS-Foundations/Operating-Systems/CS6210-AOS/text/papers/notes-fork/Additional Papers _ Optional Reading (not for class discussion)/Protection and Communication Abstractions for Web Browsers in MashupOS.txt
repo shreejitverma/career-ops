@@ -1,0 +1,1193 @@
+                    Protection and Communication Abstractions
+                          for Web Browsers in MashupOS
+
+       Helen J. Wang                                 Xiaofeng Fan                              Jon Howell                        Collin Jackson
+     Microsoft Research                          Microsoft Research                        Microsoft Research                  Stanford University
+    Redmond, WA, USA                            Redmond, WA, USA                           Redmond, WA, USA                    Palo Alto, CA, USA
+   helenw@microsoft.com                       xiaoffan@microsoft.com                      howell@microsoft.com               collinj@cs.stanford.edu
+
+
+ABSTRACT                                                                                 evolved to be a multi-principal operating environment where mu-
+Web browsers have evolved from a single-principal platform on                            tually distrusting Web sites (as principals) interact programmati-
+which one site is browsed at a time into a multi-principal plat-                         cally in a single page on the client side, sharing the underlying
+form on which data and code from mutually distrusting sites in-                          browser resources. This resembles the PC operating environment
+teract programmatically in a single page at the browser. Today’s                         where mutually distrusting users share host resources.
+“Web 2.0” applications (or mashups) offer rich services, rivaling                           However, unlike PCs that utilize multi-user operating systems for
+those of desktop PCs. However, the protection and communication                          resource sharing, protection, and management, today’s browsers do
+abstractions offered by today’s browsers remain suitable only for                        not employ any operating system abstractions, but provide just a
+a single-principal system—either no trust through complete isola-                        limited all-or-nothing trust model and protection abstractions suit-
+tion between principals (sites) or full trust by incorporating third                     able only for a single-principal system: There is either no trust
+party code as libraries. In this paper, we address this deficiency                       across principals through complete isolation or full trust through
+by identifying and designing the missing abstractions needed for                         incorporating third party code as libraries. Consequently, Web pro-
+a browser-based multi-principal platform. We have designed our                           grammers are forced to make tradeoffs between security and func-
+abstractions to be backward compatible and easily adoptable. We                          tionality, and oftentimes sacrifice security for functionality.
+have built a prototype system that realizes almost all of our abstrac-                      In the MashupOS project, we aim to design and build a browser-
+tions and their associated properties. Our evaluation shows that our                     based multi-principal operating system. Among the myriad of op-
+abstractions make it easy to build more secure and robust client-                        erating system issues, we focus on the most imminent needs of
+side Web mashups and can be easily implemented with negligible                           today’s browsers: abstractions for protection and communication.
+performance overhead.                                                                    The goal of protection is to prevent one principal from compro-
+                                                                                         mising the confidentiality and integrity of other principals, while
+                                                                                         communication allows them to interact in a controlled manner.
+Categories and Subject Descriptors                                                          We follow the principles below in designing our abstractions for
+D.4.6 [Operating Systems]: Security and Protection                                       Web programmers:
+                                                                                            • Match all common trust levels: We must understand all the
+General Terms                                                                                 common trust levels between Web content providers and in-
+Design, Security, Standardization                                                             tegrators and aim to provide abstractions matching these lev-
+                                                                                              els of trust. Otherwise, Web programmers would face mak-
+Keywords                                                                                      ing tradeoffs among trust levels, either trusting more, and
+                                                                                              sacrificing security, or trusting less, and losing functionality.
+Browser, Web, same-origin policy, protection, communications, se-
+curity, multi-principal OS, abstractions                                                    • Strike a balance between ease-of-use and security: One
+                                                                                              might argue that a system is either secure or insecure and
+1. INTRODUCTION                                                                               there should be no middle ground. This may be true for
+                                                                                              designing a security system like an authentication system,
+   Web browsers are becoming the single stop for everyone’s com-                              but not true when designing abstractions for programmers.
+puting needs including information access, personal communica-                                A rigid set of abstractions that tie programmers’ hands and
+tions, office tasks, and e-commerce. Today’s Web applications syn-                            limit flexibility for the purpose of better security often has
+thesize the world of data and code, offering rich services through                            a short life span, since programmers can build up libraries
+Web browsers and rivaling those of desktop PCs. Browsers have                                 on the rigid interfaces to make their lives easy, resulting in
+                                                                                              a de facto abstraction for all programmers. It would be bet-
+                                                                                              ter for abstraction designers to design those abstractions with
+                                                                                              security in mind. Our goal here is to provide a full set of ab-
+Permission to make digital or hard copies of all or part of this work for
+personal or classroom use is granted without fee provided that copies are                     stractions and enable programmers to build robust and secure
+not made or distributed for profit or commercial advantage and that copies                    services that match their trust expectations (see above bullet),
+bear this notice and the full citation on the first page. To copy otherwise, to               rather than to make it impossible for programmers to shoot
+republish, to post on servers or to redistribute to lists, requires prior specific            themselves in the foot.
+permission and/or a fee.
+SOSP’07, October 14–17, 2007, Stevenson, Washington, USA.                                   • Easy adoption and no unintended behaviors: Allowing easy
+Copyright 2007 ACM 978-1-59593-591-5/07/0010 ...$5.00.                                        adoption is paramount in our abstraction design. We must
+
+
+
+                                                                                     1
+      ensure that our abstractions allow programmers to provide                then describe a new access control policy that mashup authors are
+      fallback mechanisms when Web pages using them are ren-                   demanding through existing proposals.
+      dered by legacy browsers. We also must ensure that there
+      are no undesirable interactions between new services and old             2.1    The Same-Origin Policy and the
+      services in the new browser environment where our abstrac-                      All-or-Nothing Trust Model
+      tions are supported.                                                        The same-origin Policy (SOP) governs the access control on to-
+                                                                               day’s browsers. The SOP prevents documents or scripts loaded
+   By analyzing the trust relationship between content providers               from one origin from getting or setting properties of documents
+and integrators, we identify four types of content that require sup-           from a different origin [38]. (The origin that a script is loaded is
+port from the Web and browsers: (1) isolated content that is in-               the origin of the document that contains the script rather than the
+tended to be completely isolated from other sites (domains), (2)               origin that hosts the script.) Two pages have the same origin if
+access-controlled content that is isolated but allows message pass-            the protocol, port (if given), and host are the same for both pages.
+ing across domains to give mediated access to the content, (3) open            Each browser window, <frame>, or <iframe> is a separate doc-
+content that allows any domain to access and integrate as the do-              ument, and each document is associated with an origin. The SOP
+main’s own content, and (4) unauthorized content that assumes no               policy concerns three browser resources: cookies, the HTML doc-
+privileges of any domain. Existing browser abstractions support                ument tree, and remote store access. In more detail, a site can only
+only isolated content with the <frame> abstraction and open con-               sets its own cookie and a cookie is sent to only the site that sets
+tent with the <script> abstraction, resulting in an all-or-nothing             the cookie along with HTTP requests to that site. Two documents
+trust model.                                                                   from different origins cannot access each other’s HTML document
+   We propose abstractions for the missing content types and trust             using the Document Object Model (DOM) which is a platform-
+relationships. We advocate unauthorized content to be a funda-                 and language-neutral interface that will allow programs and scripts
+mental addition to today’s Web content provisioning. We introduce              to dynamically access and update the content, structure and style
+<Sandbox> and <OpenSandbox> abstractions and a provider-                       of documents [13]. A script can access its document origin’s re-
+browser protocol to enable content providers to publish and in-                mote data store using the XMLHttpRequest object, which issues
+tegrators to consume unauthorized content without liability and                an asynchronous HTTP request to the remote server [43]. (XML-
+overtrusting, providing both security and ease in creating client              HttpRequest is the cornerstone of the AJAX programming.) The
+mashups. Such support can also fundamentally combat Cross Site                 SOP requires a script to issue XMLHttpRequest to only its docu-
+Scripting attacks (a prominent threat in today’s Web and a con-                ment origin.
+sequence of the all-or-nothing trust model) while allowing the                    For example, an <iframe> sourced with  can-
+richest possible third party content. We have also proposed the                not access any HTML DOM elements from another <iframe>
+<ServiceInstance> abstraction for isolation, fault containment,                sourced with   and vice versa. a.com’s scripts can
+and as the unit of resource allocation and CommRequest for cross-              issue XMLHttpRequests to only a.com, but not to b.com. HTTP
+domain communications unifying recent proposals.                               requests to a.com send only cookies that are set by a.com.
+   We have designed these new abstractions to be backward com-                    A document may contain <script> elements from different
+patible and free of undesirable interactions with legacy browsers              domains. Such third party scripts are treated as libraries that run as
+and legacy content. Our prototype implementation and evaluation                the document’s origin rather than the scripts’ origins and can access
+demonstrate that the abstractions can be practically integrated into           all of the document’s resources. For example,    
+modern browser software with negligible overhead.                                  may contain the markup <script src=‘http://b.com/lib.js’>,
+   For the rest of the paper, we first give background in Section 2.           which allows   to access a.com’s HTML DOM objects,
+In Section 3, we describe browser resources and define MashupOS                cookies and data through XMLHttpRequest. However,  
+principals that own these resources. We analyze trust relation-                cannot access b.com’s resources since   is associated with
+ships between content providers and integrators and identify miss-             the site a.com, but not b.com in this context.
+ing content types, trust relationships, and abstractions in Section 4.            Following the SOP, today’s browser abstractions offer an all-or-
+In Section 5, we describe unauthorized content in detail and our               nothing trust model for Web programmers. Site a.com either does
+sandbox abstractions for it. We present our <ServiceInstance>                  not trust Site b.com’s content at all by segregating b.com’s content
+abstraction in Section 6 and the CommRequest abstraction in Sec-               into a frame or a.com trusts b.com’s scripts entirely by embedding
+tion 7. In Section 8, we show how our sandbox and ServiceInstance              b.com’s scripts and giving them full access to a.com’s resources.
+abstractions can be utilized to combat Cross Site Scripting attacks.
+We present our Internet Explorer-based prototype in Section 9. In              2.2    Web Mashups
+Section 10, we demonstrate the ease of creating a robust client                   Web mashups are defined as Web sites that compose content
+mashup through an example and evaluate the performance impli-                  from more than one site, yet this definition is in tension with the
+cations of realizing our abstractions. In Section 11, we compare               same-origin policy, which prevents such interactions. Many con-
+and contrast with related work. In Section 12, we give a discussion            tent providers want to publish information for any integrator site
+on the future work and finally we conclude in Section 13.                      to use, but the same-origin policy prevents the integrator Web page
+                                                                               from issuing XMLHttpRequests for the data directly.
+2. BACKGROUND                                                                     Initially, mashup developers worked around these restrictions
+   The Web has evolved from a collection of static documents con-              using a proxy approach: A proxy serves the aggregated content
+nected by hyperlinks into a dynamic, rich, interactive experience              from various domains and appears to the browser to be “same-
+driven by client-side code and aggregation by Web services. The                origin.” The pipes.yahoo.com mashup creation wizard is a recent
+security policy of modern browsers was designed to avoid vulner-               example of this approach. When a Web user visits the mashup
+abilities in old sites, rather than to provide the best abstractions for       on pipes.yahoo.com, it connects to pipes.yahoo.com to get data.
+the newest sites. In this section, we summarize the existing access            The request is proxied to the real data provider, like NYTimes, and
+control policies and the limitations they place on Web site design,            the response data is then passed back from pipes.yahoo.com to the
+
+
+
+                                                                           2
+mashup. The drawbacks of this approach are that the content makes            what we call the verifiable-origin policy: A site may request infor-
+several unnecessary round trips, reducing performance; the proxy             mation from any other site, and the responder can check the origin
+can become a choke point, limiting scalability; and the proxy can            of the request to decide how to respond. Communication that obeys
+become a hop point that gives hackers more anonymity.                        the VOP is an important building block of our MashupOS proposal,
+   Recently, the AJAX (Asynchronous JavaScript And XML) pro-                 and is discussed further in Section 7.
+gramming model has emerged, allowing Web services to shift in-
+teractive user interface code from the Web server to the browser.            3.      PRINCIPALS AND RESOURCES
+Where conventional Web pages handle every click with a round-
+trip to the server, AJAX uses client-side code (“JavaScript”) to han-        3.1      Principals
+dle many user interactions, providing interactivity not bounded by
+                                                                                We cast the world of Web applications in the context of the con-
+network and server performance. Furthermore, when communica-
+                                                                             ventional notion of the multi-user operating system, in which dif-
+tion with the server is required, that communication occurs asyn-
+                                                                             ferent principals have access to different sets of resources. In the
+chronously (“Asynchronous XML”) through XMLHttpRequest,
+                                                                             OS environment, the principal is a user or group. By associating a
+while the client-side code continues to provide interactivity in the
+                                                                             process with a principal, the OS ensures that the process only has
+meantime. Outlook Web Access and Google Maps are examples of
+                                                                             as much power as the principal that controls the process’ behavior.
+early AJAX deployments.
+                                                                             In general, one user does not trust another with respect to the con-
+   The advent of AJAX makes client-side mashups popular. An
+                                                                             fidentiality and integrity of her resources. In the Web environment,
+early example is housingmaps.com, which mashes up the craigslist
+                                                                             the principal is the owner of some Web content. With the same-
+housing database with the AJAX Google Maps library. Client-side
+                                                                             origin policy, a principal on browsers is tied to the ownership of a
+mashups include client-side interactions of script libraries from var-
+                                                                             DNS domain.
+ious sources as well as retrieving and aggregating data from differ-
+                                                                                Other notions of principal have been explored. The cookie
+ent sites. The former requires fully trusting the incorporated, third-
+                                                                             specification [16, 32] defines a path-based principal for cookie
+party scripts; the latter requires circumventing the same-origin pol-
+                                                                             access. By default, a cookie is associated with the Web page
+icy and communication to servers from different domains. For
+                                                                             that created it and any other Web pages in the same direc-
+the latter, by encoding public data in executable JavaScript for-
+                                                                             tory or any subdirectories of that directory.          For example,
+mat (JavaScript Object Notation, or JSON [30]), cross-domain
+                                                                             if the Web page       
+<script> tags can also be used to pass data in executable for-
+                                                                                 creates a cookie, that cookie is also visible to 
+mat from the provider to the integrator across domain boundaries,
+                                                                                       and 
+eliminating the need for proxies. Using <script> tags for cross-
+                                                                                        , but it is not vis-
+domain data exchange has the unfortunate side effect of granting
+                                                                             ible to        . However, since
+the integrator’s privileges to the data provider, even though the data
+                                                                             today’s SOP browsers allow same-domain pages to directly access
+provider may not be trusted by the integrator. The all-or-nothing
+                                                                             one another’s pages including their associated cookies, supporting
+trust model of the SOP forces the integrator to trade security for
+                                                                             such fine-grained, path-based principals is moot—scripts in 
+the capability of cross-domain communications.
+                                                                                     can (create then) navigate to
+   Web gadget aggregators, such as iGoogle [27] and Windows
+                                                                             an iframe sourced with      
+Live [33], are an advanced form of mashup, combining user-
+                                                                                 and access the index.html’s cookie. It is possible for
+selected active content from third-party sources into a single por-
+                                                                             MashupOS to support a fine-grained principal and to reject legacy
+tal page. A gadget is an HTML-plus-JavaScript component de-
+                                                                             support for SOP principals. Then MashupOS must ensure that only
+signed to be included into a gadget aggregator page; it is often the
+                                                                             “new” browsers and “new” servers interoperate. This saddles site
+client side of some Web service. Gadget aggregators are security-
+                                                                             operators with the problem of incremental deployment, providing
+conscious; they host each untrusted gadget in a frame on a distinct
+                                                                             both “MashupOS-enabled” content and legacy content. Once a site
+(sub)domain, relying on the SOP to isolate third-party gadgets from
+                                                                             operator works around SOP principals for legacy compatibility, the
+one another and from the outer page. However, because the SOP
+                                                                             proposed fine-grained principals offer no additional benefit. There-
+prevents interoperation among gadgets, aggregators also support
+                                                                             fore, we use the SOP principal as the MashupOS principal. Web
+inline gadgets, which include third-party code as a library of the
+                                                                             servers that wish to provide more fine-grained principals must do
+aggregator page using the <script> tag. The all-or-nothing trust
+                                                                             so using DNS subdomains rather than subpaths. Hierarchical DNS
+model of today’s browsers unfortunately forces the gadget aggrega-
+                                                                             names can represent hierarchical trust relationships among content
+tor to decide between interoperation and isolation. Because inlin-
+                                                                             owners. In many common Web deployments, unfortunately, con-
+ing requires complete trust, Google’s aggregator punts the security
+                                                                             tent owners sometimes have no control of the server’s DNS names-
+problem to the user: “Inline modules can...give its author access to
+                                                                             pace. The rest of the paper uses the terms “domain” and “principal”
+information including your Google cookies...Click OK if you trust
+                                                                             interchangeably.
+this module’s author.”
+                                                                                Because a browser is never used by more than one human user
+2.3 Verifiable-Origin Policy (VOP)                                           at the same time, MashupOS does not need to provide mechanisms
+                                                                             for arbitrating browser resources among users. In contrast, content-
+   Frustrated by the limitations of the SOP, mashup developers have
+                                                                             owning principals can share browser resources simultaneously, and
+been pushing browser vendors to move to a new security policy
+                                                                             must be mediated by MashupOS.
+for the Web, allowing fine-grained policy decision making between
+communicating domains. Web service providers want to be able to              3.2      Resources
+make their own access control decisions as to whether data they
+                                                                                  Browsers provide to applications the following resources:
+send between domains is public, whether it should be executed, or
+whether it should be ignored, rather than relying on the browser to                • Memory: The heap of script objects. This is analogous to
+make this decision. Several new browser communication propos-                        process heap memory.
+als [11, 22] have emerged, governed not by the SOP, but rather by
+
+
+
+
+                                                                         3
+   • Persistent state: Browsers provide applications with the abil-            Therefore, integrating open content requires the integrator to
+     ity to store a few kilobytes of cookies or some other persis-          fully trust the provider’s content to access any of the integrator’s
+     tent state [26], which persist across application invocations.         resources. It is possible that a provider includes in its open content
+     This resource is weakly analogous to the OS file system.               private and sensitive data which the provider does not trust integra-
+                                                                            tors to access directly. In such a scenario, the private and sensitive
+   • Display: The HTML DOM that controls the user’s display,                data is protected through server authentication or script data struc-
+     analogous to X Windows resources. The DOM API is itself                tures and scoping—the server only returns the script when the inte-
+     a heap of JavaScript objects.                                          grator is authenticated by the server; and the integrator can only ac-
+   • Network communications: The ability to send and receive                cess sensitive data inside the script through script global functions
+     messages outside the application, equivalent to an OS net-             or methods. This trust relationship is shown in Row 3 of Table 1.
+     work facility.                                                         However, this is a dangerous practice for providers. As exemplified
+                                                                            by a recent Gmail vulnerability [21], attackers can lure a logged-in
+   Later, we address how MashupOS assigns these resources to dif-           victim user to visit an attacker page which embeds the provider’s
+ferent domains, and to what extent domains are allowed to access            script. Because the user is in an active session, the correspond-
+resources belonging to other domains.                                       ing cookie that represents the user’s credential is sent along to the
+                                                                            provider for authentication of the script retrieval. The script that
+4. TRUST MODEL AMONG PRINCIPALS                                             contains the sensitive data, the user’s contact list in Gmail’s case,
+                                                                            is then returned to the attacker page. Although script data structure
+   An important goal of our work is to design abstractions that             and scoping can perform some level of access control, it places high
+match common trust levels of Web programmers in their service               requirements on programmers’ being careful and thorough.
+creation, whether as a service provider providing a Web service or             Therefore, a provider should put only non-sensitive information
+component or as a service integrator integrating or composing oth-          in its open content. In that case, the provider can trust any integrator
+ers’ services into a mashup. The content-rendering capability and           to access the content in an arbitrary way. This trust relationship is
+abstractions offered by browsers determine (and sometimes limit)            indicated in Row 5 of Table 1.
+how content is provisioned by service providers and how content
+can be integrated by service integrators from different domains.            4.2     What is Missing
+Today’s browsers offer abstractions for only an all-or-nothing trust
+model, which is insufficient for today’s Web services (Section 2).          4.2.1     Cross-Domain Communications
+In this section, we analyze and derive the various content types in            What is lacking in the existing handling of isolated content is
+demand today as well as the common trust levels between providers           that providers have no way of offering controlled access to the
+and integrators, and we identify the new content types and the new          isolated HTML content. This limitation has already motivated ad
+abstractions that are needed for the missing trust relationships.           hoc ways of cross-domain communications, e.g., through fragment
+4.1 Existing Trust Relationship between                                     identifiers [6, 31] and common domain postfixes [28] as well as
+                                                                            new proposals like JSONRequest [11] and cross-document messag-
+    Content Providers and Integrators                                       ing [22]. The latter proposals demand a VOP-based security policy
+   When a provider site p.com publishes an HTML file, say               that allows controlled access to providers’ content based on the re-
+   , an integrator site i.com can integrate                   quester’s source (Section 2). We call the isolated content to which
+only by using frames: For example,     con-                   the content owner provides access control through cross-domain
+tains <iframe src=‘http://p.com/p.html’>. By the same-origin pol-           communications, access-controlled content. The provider of the
+icy (Section 2),    and    belong to different principals           access-controlled content still does not trust any integrators to ac-
+(domains), and hence cannot access each other’s content on the              cess the provider’s content by default, but can use cross-domain
+browser. Here, the “access” is dictated by the DOM interface for            communications to provide a subset of content based on the integra-
+content manipulation, which could be reading or writing a DOM               tor’s credentials. The integrators do not have to trust the provider
+or JavaScript object or function invocations. We call such HTML             and the provider cannot access the integrators’ resources. The trust
+content isolated content. Providing isolated content means that the         relationship for access-controlled content is shown in Row 2 of Ta-
+provider does not trust any integrators to access the provider’s con-       ble 1. We give our proposal of the CommRequest abstraction for
+tent. This isolation is mutual—the integrator cannot access the             cross-domain communications and the <ServiceInstance> ab-
+provider’s content, and the content cannot access the integrator’s          straction for access-controlled content in Section 6.
+resources including its HTML elements, cookies, and its remote
+store accessed through XMLHttpRequest. This trust relationship is           4.2.2     Unauthorized Content
+indicated in Row 1 of Table 1.                                                 It is safe to have isolated or access-controlled content to run as
+   When p.com publishes a script, say   , i.com                its provider because no integrators are allowed unmediated access
+can integrate  only by using the <script> tag: For example,              to the content. It also makes sense that open content does not run as
+      contains <script src=‘http://p.com/p.js’>.              the provider because integrators can directly access or tamper with
+ treats  as library code, and  runs as the principal of            the content, and instead runs as the integrator since the integrator is
+i.com (rather than its source p.com). Because the same-origin pol-          expected to trust the open content entirely. What is missing here is
+icy applies only to the document origin, but not the script origin,         a type of content that an integrator can directly access, but does not
+a script from any domain can be included by a document of any               trust to access the integrator’s resources. For example, an integrator
+domain even when their domains doesn’t match, and the script’s              may want to use a script library (open content) from a different do-
+global variables, objects, or functions can be accessed by the doc-         main, but not trusting the script to touch the integrator’s resources.
+ument fully. For this reason, we call such script content open con-         It is necessary for such content to run as neither the provider nor
+tent. The open content can also access its integrator’s resources           the integrator. Here, we introduce unauthorized content to repre-
+fully.                                                                      sent this kind of content. The trust relationship for unauthorized
+
+
+
+
+                                                                        4
+      P trusts T to ac-      T trusts P to access T’s    Content type          Abstraction                                   Run-as Principal
+      cess P’s content       resources
+
+ 1    No                     No                          isolated              <Frame>                                       Provider
+ 2                                                       access-controlled     <ServiceInstance> & CommRequest               Provider
+ 3    No                     Yes                         open                  <Script> (bad practice)                       Integrator
+ 4    Yes                    No                          unauthorized          <Sandbox> <OpenSandbox>                       None
+ 5    Yes                    Yes                         open                  <Script>                                      Integrator
+
+                               Table 1: The Trust Model on the Web for a provider P and an integrator T
+
+
+content is shown in Row 4 of Table 1. We present our abstractions            In addition, the Yahoo and MSN search engines also respect this
+<Sandbox> and <OpenSandbox> for unauthorized content and a                   tag [44]. With a browser-server protocol and browser abstractions
+provider-browser protocol for hosting and integrating unauthorized           for unauthorized content in handling third party content, search en-
+content in Section 5.                                                        gines can more easily fight against Web spam by discounting the
+                                                                             links in unauthorized content.
+4.2.3       Support for Third Party Content
+   Another significant deficiency is a lack of support for hosted,           4.3    Putting it Together: Completeness
+third-party content which is a prevalent and fundamental part of                Now we refer back to Table 1 to give a qualitative understanding
+today’s Web. Examples of such content include user profiles of               of the completeness of our above derived content types and their
+social networking Web sites like MySpace.com, user blogs at blog-            associated browser abstractions demanded by the Web. Table 1
+hosting sites, and ads at ad-hosting sites.                                  enumerates all possible trust levels between providers and integra-
+   The host uses different domains to partition and isolate content.         tors at the granularity of provider’s content and integrator’s princi-
+Sometimes, a separate domain is used for each third party and for            pal. We don’t strive to provide abstractions to satisfy all possible
+the host. For example, gadget aggregators iGoogle and live.com               Web programmers’ trust levels at the most fine-grained level, say
+use separate domains for some of their third party gadgets. Again,           the trust levels for a particular DOM element of an HTML content.
+this setup imposes complete cross-domain content isolation. As               Providing browser abstractions at such a fine-grained level would
+discussed above, a missing content type is access-controlled con-            result in a large and complex set of abstractions that are hard to use
+tent that provides strong isolation across the principals while allow-       correctly and difficult to reason about. We use different granulari-
+ing the content owner to control others’ access to its content.              ties for providers and integrators because when a provider provides
+   Sometimes the host allows some third parties to share the same            a piece of content, the provider never intends to give away the rest
+domain with the host. Domain-sharing allows content from dif-                of its principal’s resources like cookies or access to remote store
+ferent sources to be more tightly integrated, such as accessing one          through XMLHttpRequest. However, when an integrator consumes
+another’s (DOM) objects by reference and directly invoking one               content, all of the integrator’s principal’s resources are at stake.
+another’s functions. For example, iGoogle and live.com also sup-                As shown in Table 1, all trust levels are met with
+port “inline gadgets”, allowing third party gadgets to be inlined            a content type along with either an existing abstraction
+with the host page for interactions with the parent page as well as          (<Frame> or <Script>) or a new abstraction (<Sandbox>,
+other gadgets. MySpace.com also hosts user profiles at the same              <OpenSandbox>, <ServiceInstance>, CommRequest) which
+domain. Unfortunately, modern browsers do not allow a host to                we will present in the subsequent sections.
+differentiate its content from the content of third parties. That is,           For the security of its site, a provider must ensure that no mat-
+all content executes under the same credentials. This deficiency             ter how open content and unauthorized content may be used (or
+has already yielded dangerous consequences, such as Cross Site               abused) by an integrator, it will not violate the access control of
+Scripting (XSS) attacks (Section 8). In one flavor of XSS attacks,           the provider’s access-controlled or isolated content. For example,
+malicious third party content, such as a user profile, is uploaded           a provider that offers both an access-controlled mail service and a
+to the host and then abuses the host’s privileges to cause dam-              public map library service must ensure that its map library code or
+ages to other third party content or the host itself. The notorious          any other third party unauthorized content have no access to any of
+Samy worm [39] was such an attack that infected over a million               its users’ mailboxes or contact lists.
+MySpace.com users within just 20 hours, making Samy one of the
+fastest spreading worms of all time. What is missing is a proto-             5.    UNAUTHORIZED CONTENT AND THE
+col for the host to indicate the untrustworthiness of certain third
+party content to browsers and the capability for browsers to deny                  SANDBOX ABSTRACTIONS
+such content’s access to any domain’s resources by default unless               In MashupOS, we enable service providers to publish and inte-
+explicitly allowed. Such content falls under unauthorized content            grators to consume unauthorized content (Section 4), such as third-
+whose objects and functions can be accessed directly by the host,            party content, without liability and overtrusting through a provider-
+but the third party script cannot access the host’s resources unless         browser protocol and the <Sandbox> and <OpenSandbox>
+explicitly allowed by the host.                                              browser abstractions, which we detail in this section. Allowing dif-
+   Interestingly enough, different treatment of third party content is       ferentiation between third-party content and a host’s own content
+also demanded in the context of Web spam. Google announced                   has significant security benefits as we will discuss in Section 8.
+in early 2005 [20] that hyperlinks with a      at-
+tribute [23] would not influence the link target’s PageRank [5].
+
+
+
+
+                                                                         5
+5.1 Private and Open Unauthorized Content                                   script global objects, invoking script functions, and modifying or
+   A key property of unauthorized content is that such content is           creating DOM elements inside the sandbox through DOM method
+not authorized to run as any principal, and, hence, cannot have ac-         calls. When the enclosing page invokes a sandbox’s function or
+cess to any principal’s resources including its HTML DOM objects,           method, the invocation is done in the context of the sandbox—it is
+cookies, and access to its remote store through XMLHttpRequest.             analogous to calling setuid(“unauthorized ) before the invo-
+Note that this is a one-way restriction that restricts the reach of         cation and setuid(“enclosingPagePrincipal ) after the invo-
+unauthorized content, but integrators can possibly have full access         cation so that the enclosing page’s principal’s resources are inacces-
+to the unauthorized content by references.                                  sible during the invocation. The enclosing page is unable to pass its
+   Unauthorized content may be directly published by a service              own object references (or any other references that do not belong to
+provider. This is the case for third party content hosting. An in-          the sandbox) into the sandbox. This is to prevent code from within
+tegrator can also turn an open content into an unauthorized content         the sandbox from following those references out of the sandbox.
+with our sandbox browser abstraction (described in detail in the            For example, the enclosing page is unable to pass its own display
+next subsection) when the integrator does not trust the open con-           elements like <div> into the sandbox. If an integrator wants to
+tent to access the integrator’s resources.                                  integrate a third-party library together with some of its own content
+   Although unauthorized content does not run as any principal, it          such as display elements that may be needed by the library, the inte-
+may belong to a principal in the sense that the unauthorized content        grator should create its own (private or open) unauthorized content.
+is private to the principal and cannot be accessed by other princi-         The unauthorized content would include both the library and the
+pals. For example, an integrator may group some of its own, private         display elements, which would all be sandboxed. In our implemen-
+HTML DOM elements (including its own scripts) and a third-party             tation, every object reference from within the sandbox is checked
+script (open content) into a piece of unauthorized content. In this         to see whether the reference belongs to the sandbox; for references
+scenario, the integrator would want to maintain this unauthorized           that don’t belong to the sandbox, an exception is thrown.
+content to be private to itself, and at the same time, disallow its
+access to the integrator’s resources other than the private HTML
+                                                                            5.2.1     Access control rules for sandboxes
+DOM elements inside the unauthorized content. Private unautho-                 The same-origin policy provides each piece of content with some
+rized content is particularly useful for an integrator to integrate         freedom and some protection: It is free to access other content
+open content that the integrator does not trust.                            from the same domain, and it is protected from access by con-
+   Open unauthorized content allows any principal to access the             tent from other domains. Sandboxes, however, are exceptions to
+content directly. Open unauthorized content is particularly useful          these general rules. A private sandbox enjoys the usual protection,
+for providers to provide a service to any integrators while not being       but an open sandbox enjoys less protection: It is intended to be
+liable for it. For example, today’s map services typically publish          used like a library to extend the enclosing piece of content (which
+a script library and require integrators to supply a <div> element          may have a different origin); therefore an open sandbox can be
+for the map to be drawn. Alternatively, the map service could take          accessed by exactly the same things that can access the enclosing
+the form of open unauthorized HTML content that already contains            content. A sandbox (whether open or private) has less freedom than
+a <div> element together with the map script library. This would            other kinds of content: It is intended to hold untrusted code; there-
+save some steps for the integrators.                                        fore it can access only itself and by implication the nested open
+                                                                            sandboxes that extend it, but not any other content even from the
+5.2 Sandboxing Unauthorized Content at the                                  same domain, even if it’s nested. If a sandbox were allowed to
+    Browser                                                                 access nested same-domain content, malicious third-party code in
+   We introduce two new HTML tags for integrators to in-                    the sandbox could gain access to private content by dynamically
+clude unauthorized content: <Sandbox> for private unautho-                  generating nested frames or private sandboxes. Since frames inside
+rized content that is hosted at and belongs to the integrator and           sandboxes are protected from tampering by the sandbox, they are
+<OpenSandbox> that may be hosted by any domain:                             not restricted by the sandbox and have all the freedom granted by
+                                                                            the same-origin policy. Notice that the origin of a private sandbox
+    !                                                       is relevant for its protection but not for its freedom, and the origin
+    "                                                    of an open sandbox is completely irrelevant just like open content.
+ !
+                                                                            5.2.2     Sandboxes for robust client mashups
+#   $                       !                         Most of today’s client mashups use third-party scripts (open con-
+    "                                                    tent) for service components. Sandboxes enable integrators to cre-
+#  !                                                               ate robust and secure client mashups of open content without sac-
+                                                                            rificing the programming convenience of library function invoca-
+   Because the content in <Sandbox> is private, when the src at-            tions. For each third-party library that an integrator uses, the inte-
+tribute indicates a path from a different domain (principal), the en-       grator can generate a piece of (open or private) unauthorized con-
+closing page cannot access the content in the sandbox; only when            tent containing the library along with its needed display DOM ele-
+the content comes from the same domain can the enclosing page               ments such as <div> and put the unauthorized content into a sand-
+access the content fully. In contrast, for <OpenSandbox>, no mat-           box. The integrator can then access and mash up content across its
+ter which domain hosts the content, the enclosing page can access           sandboxes as it wishes without worrying about any of the libraries
+the content fully including the HTML content. We use the term               maliciously or recklessly tampering with the integrator’s content or
+“sandbox” to loosely refer to either element.                               other resources. In Section 10.1, we demonstrate how easy it is to
+   Although the sandboxed content cannot reach out of the sand-             implement a more secure client-side mashup with <Sandbox>.
+box, the enclosing page of an open sandbox or the same-domain
+enclosing page of a private sandbox can access everything inside            5.2.3     Risks
+the sandbox by reference. The access includes reading or writing              Although the code from within a sandbox can never follow ref-
+
+
+
+
+                                                                        6
+erences to outside the sandbox, the data references from within a            straction, which is a unit of isolation, fault containment,
+sandbox may be used by the outside of the sandbox. Since these               and resource allocation. Controlled communication between
+data references are also managed by the untrusted library service,           <ServiceInstance>s is allowed through our CommRequest
+Web programmers should take caution and check the validity of                communication abstraction which we detail in the next section. The
+these data before use.                                                       <ServiceInstance> abstraction is used for rendering access-
+                                                                             controlled content (Section 4).
+5.3 Provider-Browser Protocol for Indicating
+    and Rendering Unauthorized Content                                       6.1     Isolation and Fault Containment:
+   When a provider publishes unauthorized content, a provider-                       ServiceInstance
+browser protocol is needed for the provider to indicate to browsers             An application instantiates a <ServiceInstance> with the
+that such content is not trustworthy and for browsers to forbid              tag:
+rendering (or running) the content in the name of any principal.               % 
+Enforcement is needed not only for the new <Sandbox> and                                                  &!
+<OpenSandbox> tags that are designed to limit the reach of unau-
+thorized content, but also for the existing browser abstractions like        The tag creates an isolated environment, analogous to an OS pro-
+<frame>s — frames must not be allowed to render unauthorized                 cess, fetches into it the content from the specified , and asso-
+content; otherwise, the unauthorized content would run in the name           ciates it with the domain bob.com that served that content. The
+of the frame’s principal and could access all of the principal’s re-         HTML file specified by the  tag should contain only a 
+sources and violate the key semantic of unauthorized content.                tag; any layout elements are ignored.
+   We employ the MIME protocol [18] as our provider-                            To understand the value of the <ServiceInstance> ab-
+browser protocol.           We require providers of unautho-                 straction, we must specify how resources are isolated.              A
+rized content to prefix their MIME content subtype with                      <ServiceInstance> is a unit of resource allocation; it accounts
+x-privateUnauthorized+ for private unauthorized content                      for commodity resources such as CPU and memory pages, as well
+and with x-openUnauthorized+ for open unauthorized                           as a protection boundary, to prevent other domains from compro-
+content. For example, a private unauthorized HTML content must               mising the privacy or integrity of the data stored in those resources.
+be labeled text/x-privateUnauthorized+html. We                               This paper defers the issue of commodity resource allocation to fu-
+verified that both Firefox and Internet Explorer fail to render these        ture work, and this section focuses on the concerns of protecting
+MIME types.                                                                  resources.
+   To ensure that unauthorized content providers do not inadver-             6.1.1     Memory
+tently publish unauthorized content as access-controlled/isolated
+                                                                                Each <ServiceInstance> has its own isolated region of
+content, we constrain the <Sandbox> tag to render only content
+                                                                             memory: No <ServiceInstance> can follow a JavaScript ob-
+that is of a private unauthorized MIME type and <OpenSandbox>
+                                                                             ject reference to an object inside another <ServiceInstance>.
+to render only content that is of an open unauthorized MIME types
+                                                                             This is true even for <ServiceInstance>s associated with the
+or open content.
+                                                                             same domain, just as multiple OS processes can belong to the same
+   The integrator should take caution to sandbox open content
+                                                                             user: one domain can use <ServiceInstance>s to provide fault
+consistently—if a third-party library is sandboxed in one applica-
+                                                                             containment among multiple application instances. For example,
+tion, but not sandboxed in another application of the same domain,
+                                                                             suppose a browser runs both a calendar and an address book gadget
+then the library can escape the sandbox when both applications are
+                                                                             from a single site. If the calendar application dies of an exception
+used.
+                                                                             or runaway resource usage, its <ServiceInstance> can be killed
+                                                                             without affecting the addressbook gadget. This fault containment
+6. THE ABSTRACTION FOR                                                       is a bonus; it does not affect the adversarial cross-domain relation-
+   ACCESS-CONTROLLED CONTENT                                                 ships that MashupOS focuses on.
+   Existing mainstream browsers have no mechanism for controlled             6.1.2     Persistent state
+cross-domain communication. The only cross-domain communica-
+tion primitive available is the <script> tag, which gives the ser-             Cookies are handled no differently than in existing browsers:
+vice provider uncontrolled access to the integrator’s domain. There          two <ServiceInstance>s can access the same cookie data if and
+do exist some cross-domain communication proposals (browser-                 only if they belong to the same domain, just as two processes can
+to-server [1, 11, 22] and browser-side [41]), but they are not widely        access the same files if they are running as the same user.
+adopted, and they each exist in isolation, so none provides a general        6.1.3     Display
+solution to the problem of mismatched trust patterns.
+                                                                                A raw <ServiceInstance> comes with no display re-
+   As a result of the lack of controlled cross-domain communica-
+                                                                             source.       Instead, the parent document that created the
+tion, there is also no way for a parent window and a child window,
+                                                                             <ServiceInstance> must allocate a subregion of its own dis-
+containing mutually untrusted content, to flexibly negotiate the lay-
+                                                                             play, called a <Friv> (more in the next section), and assign the
+out of the boundary between them. Browser <frame>s offer iso-
+                                                                             <Friv> to the child <ServiceInstance>. A child can control
+lation at the cost of rigid, parent-controlled layout; <div>s offer
+                                                                             multiple display regions if its parent assigns it multiple <Friv>s,
+flexible, content-sensitive layout at the cost of requiring full trust
+                                                                             just as a single process can control multiple windows in a desktop
+between parent and child content.
+                                                                             GUI framework, such as a document window, a palette, and a menu
+   Finally, the only protection abstraction in contemporary
+                                                                             pop-up window. The code in the <ServiceInstance> controls
+browsers is the SOP boundary. Unlike an OS process, a single
+                                                                             each display region by manipulating its corresponding DOM tree.
+principal cannot instantiate this abstraction multiple times to pro-
+                                                                             As Web applications grow in sophistication, and as sophisticated
+vide fault containment among multiple applications.
+                                                                             Web “window managers” appear to manage these applications [45],
+   In this section, we present the <ServiceInstance> ab-
+                                                                             it will be important for MashupOS to support this pattern.
+
+
+
+                                                                         7
+6.1.4     Network resources                                                    %   (*
+   A ServiceInstance can access its principal’s remote data store
+                                                                             to destroy the <ServiceInstance>.
+through XMLHttpRequest, following the same-origin policy. Ser-
+                                                                                A <ServiceInstance> can act as a daemon by overriding the
+viceInstances can also communicate with one another with Comm-
+                                                                             default handlers so that it continues to run even when it has no
+Request (Section 7.
+                                                                             <Friv>s. Such a <ServiceInstance> may continue to com-
+6.2 Flexible Cross-Domain Display: Friv                                      municate with remote servers and local client-side components, and
+                                                                             has access to its persistent state. The browser may need to provide
+   In today’s browsers, there are two primary mechanisms by which
+                                                                             a process list, sorted by resource consumption, to facilitate killing
+control of display regions can be parceled out to separate applica-
+                                                                             errant daemons.
+tions. The simplest is the <iframe>, which provides an entire log-
+                                                                                When a <Friv> is assigned to a new location (for example,
+ical browser window inside a rectangular frame in the parent page.
+                                                                             using document.location = url, or equivalently, when the user
+If the enclosed page is bigger than its containing frame, scrollbars
+                                                                             clicks on a simple link in the <Friv>’s DOM), the <Friv>’s fate
+appear. Because the contained content is a separate page in a sep-
+                                                                             depends on the domain of the new location. The next two para-
+arate SOP domain, the child has no influence over the layout of its
+                                                                             graphs describe the two possibilities.
+frame in the parent page. The alternative is the <div>, which is
+                                                                                If the domain is different from that of the <ServiceInstance>
+the basic unit of layout. A <div> can conform to the size of its
+                                                                             that presently owns the <Friv>, the behavior is just as if
+contents. As a <div> resizes, it affects the layout of its parent
+                                                                             the parent had deleted the <Friv> (detaching it from the ex-
+DOM element. Unlike the <iframe>, the <div> is only a dis-
+                                                                             isting <ServiceInstance>) and created a new <Friv> and
+play layout interface, not a boundary between documents, so it pro-
+                                                                             <ServiceInstance> with the <Friv src=...> tag. The only re-
+vides no isolation. In practice, web developers often use <div>s,
+                                                                             source carried from the old domain to the new is the allocation
+sacrificing isolation to achieve flexible layout.
+                                                                             of display real-estate assigned to the <Friv>. This behavior is
+   MashupOS introduces the <Friv>, a flexible cross-domain dis-
+                                                                             analogous to creating a new process with a new identity, giving it
+play abstraction. A <Friv>, like an <iframe>, provides a
+                                                                             the handle of the existing X Window region, and disconnecting the
+boundary between a container document and an inner document,
+                                                                             prior process from the same X Window.
+isolating the content from separate domains, but enabling the inner
+                                                                                If the domain matches that of the <ServiceInstance> that
+document to appear within the container’s display. Like a <div>,
+                                                                             owns the <Friv>, then the HTML content at the new location
+the <Friv> allows the child’s layout requirements to flow to the
+                                                                             simply replaces the <Friv>’s layout DOM tree, which remains
+frame in the container, enabling the container to adjust its layout to
+                                                                             attached to the existing <ServiceInstance>. Any scripts as-
+suit the child document. It achieves this by providing default han-
+                                                                             sociated with the new content are executed in the context of the
+dlers that negotiate layout size across the isolation boundary using
+                                                                             existing <ServiceInstance>.
+the MashupOS local communication primitives (Section 7), provid-
+                                                                                Browsers allow a Web application to create a new “popup” win-
+ing flexible <div>-like layout behavior. The <Friv> is so named
+                                                                             dow. The creation of a popup creates a new parentless <Friv>
+because it crosses the <iframe> and the <div>.
+                                                                             associated with the <ServiceInstance> that created the popup.
+   The following tag syntax creates a new <Friv> in the parent’s
+                                                                                Given this definition of the life cycle of a <ServiceInstance>
+layout and assigns it to an existing <ServiceInstance>. The
+                                                                             and <Friv>, the legacy <Frame> tag is implemented as
+     & ServiceInstance receives an event referring to the initially-
+                                                                             follows:     For each domain, there is a special “legacy”
+empty DOM tree for the <Friv>, and populates it using JavaScript
+                                                                             <ServiceInstance>. The <Frame src=x> tag is an alias for
+code.
+                                                                             <Friv src=x instance=legacy>. Thus, all frame content and scripts
+             &!                                              for a single domain appear in a common object space, just
+                                                                             as they do in legacy SOP-only browsers. Within the legacy
+This alternate syntax creates a new <ServiceInstance> and a
+                                                                             <ServiceInstance>, each script still has a local document ref-
+new <Friv> simultaneously, and assigns the latter to the former.
+                                                                             erence that identifies the <Friv> whose DOM the script was
+                    !                               loaded with, so that references like document.location are mean-
+                                                                             ingful.
+6.2.1     ServiceInstance and Friv Life Cycle                                   Note that the automatic communication of layout information
+  By default, the life cycle of a <ServiceInstance> is limited               between a child document and its container introduces a path for
+by the <ServiceInstance>’s responsibility for some part of the               information leakage. A malicious parent might load in a <Friv>
+browser’s display. A <ServiceInstance> can track the display                 the url    ,-  , and infer from the layout size
+regions that it owns by registering a pair of handlers with the meth-        of the resulting child document how much email the user has re-
+ods:                                                                         garding the search keyword. One defense would require documents
+  %   ' ( & ) *+                             to explicitly declare their willingness to participate in the <Friv>
+  %   ' ( $  ) *+                             layout protocol, although MashupOS does not yet specify such a
+                                                                             declaration.
+The first callback is invoked whenever the parent assigns a new
+<Friv> display to the <ServiceInstance>. When the parent
+reclaims the display associated with a <Friv> (by removing the
+                                                                             7.    COMMUNICATION: COMMREQUEST
+<Friv> element from its DOM tree), the <Friv>’s DOM disap-                      As shown in Figure 1, a Web application is the pairing of
+pears from the child <ServiceInstance>’s object space, and the               browser-side components and server-side components, all owned
+child’s onFrivDetached handler is called.                                    by a common domain. This model guides the MashupOS design of
+   The default onFrivAttached and onFrivDetached handlers                    communication among domains: to the extent that a browser-side
+track the set of <Friv>s. When the last <Friv> disappears, the               application is an extension of a server-side application, it should be
+<ServiceInstance> no longer has a presence on the display, so                allowed to communicate with other domains in the same ways that
+the default handler invokes                                                  the server can.
+
+
+
+                                                                         8
+               webmail.com              stocks.com                          -    3   5 - (*+
+                                 0
+                                                                            -  (% 6#7')                       *+
+                                        static
+                                        pages
+                                                                            - (8*+
+               cgi                                                         /   %( -   9 /*+
+                       1         2                                         Local requests do not use HTTP, hence the special method IN-
+                                                                           VOKE. This scheme of named ports forms a symbolic name ser-
+                  webmail        3          stocks                         vice with nonconflicting names, since service names are required
+                  display                   display                        to include the SOP domain of the site sponsoring the service (the
+                           client browser                                  principal identifier).
+                                                                              Note that by requiring principal identifiers in the names, the
+                                                                           CommRequest port naming scheme is not a general discovery ser-
+Figure 1: The Same-Origin Policy isolates HTML pages and                   vice: an application cannot look up “local:IM” to discover any in-
+frames based on their source. MashupOS supports both SOP                   stant messenger service that happens to be running in the browser.
+(1) and VOP (1, 2, 3) communication patterns, mirroring those              We defer the task of a general discovery service (and the policy for
+available to the server.                                                   resolving conflicts) to a service built over CommRequest.
+                                                                              That said, there may still be non-adversarial name conflicts from
+                                                                           multiple <ServiceInstance>s running in the same browser. For
+                                                                           example, if one service is instantiated twice, the second instance
+                                                                           cannot listen to the same port as the first. In such an scenario, a
+   Legacy browsers follow the SOP in that they enable only com-            developer may wish to address each instance by its DOM relation-
+munication from the browser-side component to its corresponding            ship to the message sender. To enable this relative routing, each
+server (arrow 1). By communication we mean transfer of arbitrary           <ServiceInstance> has a unique identifier (analogous to a pro-
+data, such as an XML file. Servers, however, frequently commu-             cess identifier), and a <ServiceInstance> can learn the identi-
+nicate with other domains by establishing a new TCP connection             ties of its parents and children.
+(arrow 0). The recipient listens for the connection on a port, and            For example, suppose both Alice’s page and Bob’s page include
+with each connection learns the identity of the sender (its IP ad-         an instant-messaging gadget from im.com. Each parent page com-
+dress, roughly equivalent to its SOP domain).                              municates with its own im.com <ServiceInstance> to set de-
+   MashupOS follows the VOP, extending this facility to browser-           fault parameters, or to negotiate <Friv> boundaries (Section 6.2).
+side components by providing two additional communications                    The im.com <ServiceInstance> looks up its own identifier,
+paths: cross-domain browser-to-server communication and cross-             and registers that identifier as a port name.
+domain browser-side communication.
+                                                                                %   %(*
+7.1 Browser-to-server communication                                           4 ()  :  *+
+   Section 2 describes how the SOP protects legacy servers (such           Since the port’s address includes the im.com principal, no other
+as those behind corporate firewalls) by confining browser-to-server        principal can maliciously introduce a port name conflict.
+communication to stay within the same SOP domain. We are not                  Alice’s <ServiceInstance>, wishing to address its
+the first to observe [1, 11, 22] that cross-domain browser-to-server       child im.com instance, does so using methods on the
+communication (arrow 2) can be safely allowed, so long as the pro-         <ServiceInstance> element representing the child in the
+tocol labels the request with the domain that initiated it, and any        Alice’s DOM:
+participating server verifies the domain initiating the request. A
+VOP-governed protocol must fail with legacy servers; we adopt                    '    9/%(%; *+
+the technique proposed by JSONRequest [11], requiring servers to              0  $ (*0  %(*+
+indicate their compliance by tagging their replies with a special
+                                                                             Finally, a <ServiceInstance> can address its parent:
+MIME content type (application/jsonrequest). Like JSON-
+Request, CommRequest transmissions omit cookies to avoid sev-                 0  %   $                  (*
+eral subtle vulnerabilities.                                                 0  %   %(*+
+7.2 Browser-side communication                                                The Web Applications working draft [41] proposes an alterna-
+   MashupOS also provides browser-side communication across                tive cross-domain browser-side communications mechanism. It
+domains (arrow 3). For example, a <ServiceInstance> from                   provides only parent-to-child addressing, not global addressing be-
+bob.com may declare a port “inc”, and register a handler function          tween arbitrary browser-side components like the   scheme
+to receive browser-side messages on that port:                             in MashupOS. It does not yet specify data-only communications
+                                                                           (although we surmise that is the intent). It reveals the full URI (not
+   ( -* .                                                just the domain) of the sending document, which may reveal secret
+      - +                                                      information such as session identification. It offers a unidirectional
+     %( - /* 0 1+                                             model; CommRequest’s asynchronous procedure call matches the
+2                                                                          XMLHttpRequest of today’s deployed AJAX applications.
+     3      (*+                                                   Our <Sandbox> and <OpenSandbox> are also allowed to
+   4 ()  *+                                          communicate using CommRequest for both cross-domain browser-
+   Another domain alice.com can address a browser-side message             to-server messaging and browser-side messaging just in the same
+to Bob’s port using the new URL scheme   that specifies                way as <ServiceInstance>. The origin of unauthorized content
+Bob’s SOP domain (scheme, DNS host, TCP port tuple) and port             is labeled “unauthorized”, and the protocol requires participating
+name:                                                                      Web servers to authorize the requester before providing service.
+
+
+
+                                                                       9
+Because the requester is anonymous, no participating server will               typically have the policy of denying scripts in the user uploaded
+provide any service that it would not otherwise provide publicly.              HTML pages. Consequently, user input sanitization involves script
+   MashupOS restricts CommRequest messages to be data-only. As                 detection and removal. However, this turns out to be non-trivial:
+in JSONRequest [11], a data-only object is a raw data value, like an           Because browsers speak such a rich, evolving language and many
+integer or string, or a dictionary or array of other data-only objects.        browser implementations exist, there are many ways of injecting
+Preventing the communication of arbitrary script objects discour-              a script [37]. In many occasions already, creative attackers have
+ages strong coupling between <ServiceInstance>s and from a                     found new ways of injecting a script. The Samy worm [39] was
+sandbox to its enclosing page. Today it may be safe to pass a given            notorious for discovering several holes in myspace.com’s filtering
+object to another domain, but tomorrow another developer, mod-                 mechanism.
+ifying a different part of the application, may add a reference to                The difficulty of exhaustive input filtering led researchers to
+the object, and suddenly the message recipient can reach arbitrarily           tackle the second root cause, preventing unexpected script exe-
+deeply into the sender’s object heap. Obviously, programmers have              cution. Jim et al. [29] proposed BEEP to white-list known good
+the power (eval()) to blow wide holes in their application’s at-               scripts and adding a “noexecute” attribute to <div> elements to
+tack surface; this is no less true in the browser than when handling           disallow any script execution within that element. Eich also pro-
+data-only server-to-server messages (Figure 1 case 0). The data-               posed a <jail> [14] that is similar to the “noexecute” <div>.
+only restriction simply encourages designers to reason about their             These proposals take a step towards the servers’ goal of denying
+adversarial communication interfaces separately from their trusted             scripts. One drawback of these proposals is their insecure fallback
+internal object interfaces.                                                    mechanism when BEEP-capable or <jail>-containing pages run
+                                                                               in legacy browsers: The “noexecute” attribute and the <jail>
+8. COMBATTING CROSS SITE                                                       tag would be ignored by legacy browsers, allowing scripts in the
+                                                                               <div> and <jail> element to execute.
+   SCRIPTING ATTACKS
+   As of 2006, more than 21% of vulnerabilities reported to CVE                8.3    Using MashupOS for Defense
+are Cross Site Scripting (XSS) vulnerabilities, ranking number one                The reason behind Web servers’ policy to disallow scripts is that
+and surpassing buffer overflows, for two years in a row [7]. XSS               existing browsers provide no way to restrict a script’s behavior once
+is one of the consequences of insufficient protection and commu-               it is included. The best known approach is to use a cross-domain
+nication abstractions in today’s browsers, particularly the lack of            <iframe> to isolate the user-supplied scripts. This approach is
+support for unauthorized content. In this section, we show how we              undesirable for three reasons:
+use our abstractions ServiceInstance and sandboxes to combat XSS
+                                                                                  • It requires the server to serve the scripts from a second do-
+attacks in a fundamental way while retaining or even enhancing the
+                                                                                    main (to associate the scripts with a distinct domain),
+richness of page presentation.
+                                                                                  • The <iframe> provides an inflexible display layout, and
+8.1 Background on XSS Vulnerabilities
+                                                                                  • The user-supplied content cannot interact, even in a con-
+   In XSS, an attacker often exploits the case where a Web appli-
+                                                                                    strained way, with its containing page.
+cation injects user input into a dynamically generated page, with-
+out first filtering the input [29]. The injected content may be ei-               MashupOS’s        <Sandbox>,          <OpenSandbox>,          and
+ther persistent or non-persistent. As an example of a persistent               <ServiceInstance> solve all of the problems with <iframe>
+injection attack, an attacker uploads a maliciously-crafted profile            and can serve as a fundamental defense against XSS while
+to a social networking Web site. The site injects the content into             allowing third-party script-containing rich content.
+pages shown to others who view the profile. An injected script runs               For persistent, user-supplied HTML content, a Web server can
+with the social networking site as its domain, enabling the script to          serve it as private or open unauthorized content (Section 5.3) de-
+make requests back to the site on behalf of the user. The notorious            pending on whether the content contains private data. For non-
+Samy [39] worm that plagued myspace.com exploited persistent                   persistent user input in a reflected server page, the reflected page
+injection; it infected over one million myspace.com user profiles              can use a sandbox or ServiceInstance to contain the user input
+within the first twenty hours of its release.                                  with the “src” attribute being either a dynamic page proxied by the
+   A malicious input may also be non-persistent, simply reflected              server:
+through a Web server. For example, suppose a search site replies                
+to a query x with a page that says “No results found for x.” An                    % ,                !
+attacker can trick a user into visiting a URL which contains a mali-            !
+cious script within the query x to the search site. The script in the
+reflected page from the search site will run with the search site’s            or a “data” URI [34] with encoded content:
+privilege.                                                                      
+                                                                                   < = > 0  )
+8.2 Existing Defense                                                                          !
+   The root causes of the XSS attacks are unsanitized user input and            !
+unexpected script execution. Many existing mechanisms tackle the
+first cause by sanitizing user input. For applications that take text-            A <ServiceInstance> enables flexible layout by connect-
+only user input, the sanitization is as simple as enforcing the user           ing the unauthorized content’s display to the parent container
+input to be text, escaping special HTML tag symbols like < into                with a Friv. In the case of sandbox, the unauthorized con-
+their text form like “&lt;”. However, many Web applications, such              tent’s display DOM is directly accessible by the parent. A
+as social networking Web sites like myspace.com, demand rich                   <ServiceInstance> can communicate with its parent’s client or
+user input in the form of HTML. Because no existing browser ab-                server components using the CommRequest primitive. A sand-
+stractions constrain the reach of an included script, these Web sites          box can do the same, plus the parent can directly access the child
+                                                                               objects.
+
+
+
+                                                                          10
+                                                                                         goes through the SEP. In IE, a SEP takes the form of a COM [8]
+                                                         MashupOS                        object and is registered in the Windows Registry associated with a
+     Internet Explorer Architecture
+                                                        Script Engine                    scripting language (such as JScript) to serve as IE’s script engine
+               IExplore.exe                                 Proxy
+         Internet Explorer Application
+                                                                                         for that language. We have focused on the JavaScript language that
+   ShDocVw.dll           BrowserUI.dll
+                                                                                         is dominant in today’s web applications. Our techniques can be
+  Navigation & History     User Interface                                                readily applied to other languages.
+                                                        Script execution
+               MSHTML.dll                              DOM object access   Script           Our MashupOS Script Engine Proxy (MSEP) takes the crucial
+                Trident
+      HTML/CSS Parser and Renderer
+                                                                           Engine        role of implementing our various protection abstractions. Our
+                                                       DOM object update
+               URLMon.dll
+                                                                                         general strategy here is to use the existing isolation mechanism,
+      MIME Handling and File Download
+                                                      MashupOS
+                                                  transformed HTML
+                                                                                         namely frames, as our building block. <ServiceInstance> and
+                WinInet.dll                 Original
+                                                                                         <Sandbox> are implemented using frames with at least one script
+            HTTP/FTP and Cache               HTML        MashupOS                        inside (so that we can trigger MSEP’s interposition on the frame).
+                                                           MIME
+                                                           Filter                        Isolation across protection domain boundaries is implemented with
+                                                                                         cross-domain frames while full access across protection domain
+                                                                                         boundaries is implemented with same-domain frames. For both
+Figure 2: Our MashupOS prototype contains two extensions to                              kinds of sandboxes, we further mediate each object access from
+Internet Explorer [25]: (1) MashupOS MIME filter that trans-                             within a sandbox to ensure that the object belongs to the sand-
+forms HTML pages (2) MashupOS Script Engine Proxy that                                   box and not a reference from the outside of the sandbox. Our
+interposes DOM object access and update.                                                 customized access control of cross-domain frames is realized via
+                                                                                         object wrappers as described above.
+                                                                                            The second extension, MashupOS MIME filter, is an asyn-
+                                                                                         chronous pluggable protocol handler [35] at the software layer
+                                                                                         of URLMon.dll where various content (MIME) types are han-
+9. IMPLEMENTATION                                                                        dled. Our MIME filter takes an input HTML stream and outputs a
+                                                                                         MashupOS-transformed HTML stream to the next software layer in
+   We have built a MashupOS prototype system in which we have
+                                                                                         IE. We use our MIME filter to translate new tags into existing tags,
+realized almost all proposed abstractions and their properties. We
+                                                                                         such as <iframe> and <script>; and we use special JavaScript
+did not implement <OpenSandbox> and the enforcement of unau-
+                                                                                         comments inside an empty script element to indicate the original
+thorized MIME content types for sandbox abstractions. Also, our
+                                                                                         tags and attributes to MSEP. For example,
+implementation supports only one Friv per ServiceInstance. Our
+prototype is based on Internet Explorer 7 (IE) and runs on both                                        >   
+Windows XP SP2 and Windows Server 2003 SP1, but our method-                                           1!
+ology and techniques can also be applied to other browsers.                                   !
+   Instead of modifying IE’s source code directly, we leverage
+browser extensions and public interfaces exported by IE. Figure 2                        is translated by our MIME filter to
+shows the MashupOS extensions. We don’t anticipate that the ac-
+                                                                                          ! ?<< @@
+tual adoption of our abstractions will be implemented with browser
+                                                                                             >   
+extensions, but inside browsers directly. The goal of our prototype
+                                                                                                    1!
+implementation is to investigate how easily our abstractions can be
+                                                                                          @@ <<!  !
+realized.
+                                                                                              >   
+   Our system consists of two extensions to the IE architecture [25].
+                                                                                                   1!  !
+The first extension is a script engine proxy that we built from
+scratch using public interfaces exported by IE. As in all browsers,                      The comments inside the script element informs MSEP that the
+IE consists of an HTML/CSS rendering and layout engine and var-                          <iframe> with name “s1” should be treated as a sandbox. Similar
+ious script engines including a JavaScript engine and a VBScript                         translation happens to <ServiceInstance>.
+engine. When a script element is encountered during HTML ren-                               Our CommRequest-based communication primitives are imple-
+dering, the script element is handed to a corresponding script en-                       mented by providing two runtime objects CommServer and Comm-
+gine for parsing and execution. Script execution may manipulate                          Request, with the communication methods described in Section 7.
+HTML DOM objects. For this purpose, the script engine asks the                           For access control on XMLHttpRequest and cookies, particularly
+rendering page for references to needed DOM objects. We intro-                           for sandboxes, we again use the object wrapper mechanism above
+duce the mechanism of script engine proxy (SEP), which interposes                        for interception.
+between the rendering engine and the script engines, and mediates                           <Friv> is implemented using <iframe> as well. We used
+and customizes DOM object interactions. To the rendering engine                          CommRequest to carry out the automatic negotiation on the frame
+of a browser, a SEP serves as a script engine and exports the inter-                     width and height between a <Friv> and its parent.
+face of a script engine; to the original script engine of the browser,                      We find that script engine proxies can serve as a great platform
+the SEP serves as a rendering engine and exports the DOM inter-                          for experimenting with new browser features. The fact that we are
+face of the rendering engine. We use object wrappers for the pur-                        able to implement all our abstractions on this platform along with
+pose of interposition. When a script engine asks for a DOM object                        the MIME filter indicates that they should also be easy to add to the
+from the rendering engine, a SEP intercepts the request, retrieves                       existing browsers.
+the corresponding DOM object, associates the DOM object with its
+wrapper object inside the SEP, and then passes the wrapper object
+back to the original script engine. From that point on, any invoca-
+                                                                                         10.    EVALUATION
+tion of the wrapper object methods from the original script engine                         In this section, we first demonstrate the ease of programming
+                                                                                         robust Web services with MashupOS protection abstractions by
+
+
+
+                                                                                    11
+showcasing an example application in Section 10.1. We report the                Target                         No-SEP     MSEP      Overhead
+performance measurement of our prototype system in Section 10.2.
+                                                                                BenchJS benchmark
+10.1     Showcase Application
+                                                                                1. Counting                    1.56s      1.56s     0%
+   We have implemented a photo location Web service, called Pho-
+toLoc, as a showcase application. PhotoLoc mashes up Google’s                   2. Open pops                   8.09       8.09      0%
+map service [19] and Flickr’s geo-tagged photo gallery service [17]
+so that a user can map out the locations of photographs taken.                  3. Replace images              1.18       2.15      82%
+Flickr provides API libraries in languages like Java or C# to inter-            4. Text manipulation           1.47       1.50      2%
+act with the Flickr Web server across the network, for example to
+retrieve geo-tagged photographs. To facilitate easy, browser-side               5. Set tables                  2.89       2.95      2%
+cross-domain communication, we created an access-controlled,
+                                                                                6. Put layers into place       5.22       6.93      33%
+Flickr-based service that is isolated and protected with <Friv>
+(Section 6.2) and communications with the service are through                   7. Calculate x-mas             4.94       4.98      1%
+CommRequest (Section 7). Google’s map service is an open con-
+tent script library (Section 4). PhotoLoc chooses an asymmetric                 Our benchmark
+trust relationship with Google’s map library, which means that it
+trusts itself to use the library, but does not trust the library to ac-         Pure JavaScript object         3.47µs     3.49µs    1%
+cess PhotoLoc’s resources. PhotoLoc puts Google’s map library                   DOM object                     11.81      18.82     59%
+along with the <Div> display element that the library needs into
+“g.uhtml” and serves “g.uhtml” as private unauthorized content.                 Complex DOM operation          144.6      189.5     31%
+PhotoLoc’s main service page (index.htm) uses <Sandbox> to
+                                                                                Communication                  17.15      14.05     -18%
+contain “g.uhtml”. PhotoLoc can access everything inside the sand-
+box, but Google’s map library cannot reach out of the sandbox.
+Figure 3 shows our implementation.                                                              Table 2: Microbenchmark results.
+
+10.2     Performance
+                                                                               tests spend little time in MSEP’s interposition logic. Test 3 and 6
+  Now we present the performance measurement of our                            involve heavy interactions with DOM objects and incur 82% and
+MashupOS prototype. We first present our micro-benchmark re-                   33% overhead due to MSEP’s DOM object interposition and ma-
+sults that measure the overhead of our MashupOS-enabled Script                 nipulation.
+Engine Proxy (MSEP). Then, we present our macro-benchmark re-                     To further understand MSEP’s overhead targeting its interposi-
+sults on the impact of MSEP on page loading time. These mea-                   tion functions, we designed our own set of micro-benchmarks as
+surements shed light on the performance implication of realizing               follows:
+MashupOS abstractions in the existing browsers. We conducted
+our measurements on a 1.7 GHz Pentium-4 PC with 1.5 GB of                         1. Pure JavaScript object: All 14 properties and methods of
+RAM, which runs Windows XP SP2 and Internet Explorer (IE) 7.                         "Number" object.
+10.2.1      Microbenchmark on MSEP Overhead                                       2. DOM object: 92 properties and methods of "window", "doc-
+  We found a JavaScript and DHTML script performance bench-                          ument" and "clientInformation" object.
+mark called BenchJS [2]. The benchmark contains the following 7
+JavaScript and DHTML tests.                                                       3. Complex DOM operation: 4 JavaScript statements including
+                                                                                     DOM traversal, element creation, style sheet update, inline
+   1. Counting: count to 10000 and display a progress bar.                           script library loading, and event firing.
+
+   2. Open pops: open 8 pop ups and close them.                                   4. Communication: Cross-frame (same domain) function invo-
+                                                                                     cation when without MSEP; Cross-frame communication via
+   3. Replace images: replace 300 tiny images as fast as possible.                   CommRequest when with MSEP.
+      It repeats this procedure 10 times.
+                                                                                  We measured the duration for 10,000 runs of each individual
+   4. Text manipulation: manipulate long text with different ways.
+                                                                               script statement with and without MSEP. We report the average
+   5. Set tables: create 2000 table-cells and calculates a random              time in the bottom half of Table 2. The results are consistent with
+      background color for each table-cell.                                    that of BenchJS. MSEP incurs noticeable overhead for DOM ma-
+                                                                               nipulations, but negligible overhead for pure JavaScript object ma-
+   6. Put layers into place: create a phrase out of 50 different lay-          nipulations. Also, MashupOS’s CommRequest is even more effi-
+      ers that are pulled together.                                            cient than cross frame function calls.
+   7. Calculate x-mas: calculate the days of the week for the next             10.2.2     Macrobenchmark Results
+      10000 x-mas (not counting display time).                                    Our Macrobenchmark measurement evaluates the impact of
+   We run the 7 tests on both a MSEP-equipped IE 7 and IE 7 alone.             MSEP on the overall page loading time. We picked the top 500
+We run each test four times and report the average latency in the              pages from the top click-through search results of MSN search
+top half of the Table 2. As we can see, for both the computational             from 2005. In our measurement, we disabled the browser cache,
+tests (Test 1, 4, and 7) that involve pure JavaScript objects and the          measured the page loading with and without MSEP. We imple-
+tests with moderate interactions with DOM objects (Test 2 and 5),              mented a Browser Helper Object [4] to capture the time before a
+we observe negligible overhead. This is because these benchmark                document navigation and after the document loading. From our
+
+
+
+                                                                          12
+                                                                     http://PhotoLoc.com/index.htm
+                                                      <html>
+                                                      <script>
+                                                         function setPhotoLoc(request) {
+                                                           var coordinate = request.body;
+                                                           var latitude = getLatitude (coordinate);
+                                                           var longitude = getLongitude (coordinate);                          Center the map at
+                                                           G.map.setCenter(new GLatLng(latitude, longitude), 6);               the photo’s location
+                             Send the location                                                                                 using direct
+                                                         }
+                             of the picture to                                                                                 invocation in the
+                                                         var svr = new CommServer();
+                             parent once                                                                                       Sandbox
+                             loaded using                svr.listenTo(“recvLocationPort”, setPhotoLoc);
+                                                      </script>
+                             CommRequest
+                             primitive                <friv src=”http://ourFlicker.com/newGeoTaggedPhoto/” id=F></friv>
+
+                                                      <Sandbox src=”g.uhtml” id=G> </Sandbox>
+                                                      …
+                                                      </html>
+                             http://ourFlickr.com/newGeoTaggedPhoto/                                               g.uhtml
+
+                           <html> <body onload=”sendLoc”>                                   <html> <body onload=”createDivForGmap”>
+                           <script>                                                         <script src=”http://maps.google.com/?file=api& ...”>
+                           function sendLoc() {                                             </script>
+                             if ( hasCoordinate ) {                                         <script>
+                               var req = new CommRequest();                                    var map;
+                               req.open("INVOKE", "local:parent//recvLocationPort");           function createDivForGmap() {
+                               var requestBody                                                   map = new GMap2(divMap);
+                                = createCoordinate (latitude, longitude);                     }
+                               req.send(requestBody);                                       </script>
+                             }
+                           }                                                                <div id=”divMap” style=”width:500px; height=360px”>
+                           </script>                                                        </div>
+                                                                                            …
+                           …
+                                                                                            </body> </html>
+                           </body> </html>
+
+
+
+                        Figure 3: Our showcase PhotoLoc Service using Friv, CommRequest, and <Sandbox>
+
+
+
+numbers, we do not observe an MSEP impact on the page load-                                 quest [11] and XDM [22] in Section 7. The Flash browser plu-
+ing time. This is because script execution time is short, on the or-                        gin offers a less fine-grained form of communication using cross-
+der of microseconds, compared to the time for page retrieval over                           domain policy files [1]. A service provider can place a crossdo-
+the network and the page rendering, which is on the order of sec-                           main.xml file on the server, and Flash uses the contents of this file
+onds. Among the 500 pages that we measured, 30 of them cannot                               to determine which service integrator domains can access files on
+be loaded or rendered correctly in IE 7, and MSEP caused just one                           the provider’s server. Free libraries are available to allow JavaScript
+more faulty page than that. This gives us confidence on the com-                            to access these Flash communication primitives [9]. Although this
+pleteness and robustness of our prototype.                                                  approach provides more flexibility and control than standard SOP
+                                                                                            communication model, the provider’s server cannot distinguish be-
+11. RELATED WORK                                                                            tween network requests originating from its own code and requests
+                                                                                            generated by integrators that are permitted by the crossdomain.xml
+11.1     Web Desktops                                                                       file.
+  Recently, a new wave of “Web operating systems” [15] or web                                  Subspace [28] provides a cross-domain communication mecha-
+desktops [42], such as YouOS [45], have emerged. These sites                                nism in the context of gadget aggregators and is designed to run
+present a traditional desktop user interface, complete with a win-                          on current browsers without any additional plug-ins or client-side
+dow manager. However, all the applications are JavaScript code                              changes. Subspace splits a site into subdomains using each sub-
+hosted from the same domain. There is actually no operating sys-                            domain for a gadget (a principal). A subdomain can in turn be
+tem that performs resource protection and management.                                       used to draw in scripts from other domains. Cross-subdomain com-
+                                                                                            munication channel is set up by setting document.domain of two
+11.2     Existing Proposals for Isolation and                                               subdomains to a common domain postfix. Subspace requires sig-
+         Communications in Browsers                                                         nificant work on the part of the Web developer to use correctly,
+   Crockford proposed a new HTML <module> tag to partition a                                particularly for complex mashups with untrusted code from many
+page into a collection of modules [12]. A module groups DOM el-                             different sources.
+ements and scripts into an isolated environment; VOP-based socket                              Fragment identifiers, the string after the # in a URI, have also
+communications can be used to transmit data in JSON format be-                              been used for cross-domain, cross-frame communications [6, 31]
+tween the inner module and the outer module. To isolate the mod-                            because window.location can be modified (though not read) by
+ule from the origin server, modules may not make network requests.                          a cross-domain frame and modifying fragment identifier does not
+Thus, modules can be realized by our private sandbox enclosed in                            cause document reload. This scheme requires careful synchroniza-
+a ServiceInstance.                                                                          tion between the communicating pages, and can be easily disrupted
+   We have given detailed explanation and comparison with ex-                               if the user presses the browser’s back button. These schemes are
+isting cross-domain communication proposals such as JSONRe-                                 temporary rather than long term solutions to cross-domain commu-
+
+
+
+                                                                                       13
+nications. Browsers should provide built-in cross-domain commu-              operating systems [3, 24] have been built using safe languages to
+nication primitives.                                                         enable efficient and robust implementation of protection domains.
+                                                                             These may be promising directions for robust implementation of
+11.2.1     Sandboxing                                                        browsers.
+   “Sandbox” is an overloaded term. Oftentimes, it broadly means                We have only explored the protection and communication issues
+an isolated environment.                                                     in this paper. Many other issues, such as resource management and
+   Our sandbox abstraction is named this way because it shares               useful OS facilities that browsers can offer to Web services, deserve
+many properties with the original sandbox proposal by Wahbe et               further study.
+al. [40]. Wahbe et al.’s sandbox addresses the scenario where desk-             As discussed in Section 4, Web servers must segregate their
+top applications contain (untrusted) third-party libraries or mod-           open, isolated/access-controlled, and unauthorized content strictly
+ules. They use software-based fault isolation (SFI), namely, bi-             so that no one can abuse the open or unauthorized content to access
+nary rewriting to contain the reach of untrusted modules into a              the isolated/access-controlled content. Tools are needed for Web
+fault domain (a segregated and contiguous region of memory) in               servers to check and ensure the segregation of these content types.
+the same address space as the application’s process. The mech-               Information flow-based techniques may be applicable here.
+anism also manifests an asymmetric access pattern: The applica-
+tion’s process can access the fault domains inside its address space,        13.    CONCLUDING REMARKS
+but the fault domains cannot reach out. However, the primary mo-
+                                                                                The advent of AJAX and client mashups have turned Web
+tivation for this sandboxing work was to avoid the high overhead
+                                                                             browsers into a multi-principal operating environment. However,
+of context switches if the untrusted code were placed in a separate
+                                                                             browser support for Web programmers has lagged behind and re-
+process, rather than to have an abstraction for realizing an asym-
+                                                                             mained in a single-principal world. The MashupOS project is
+metric access pattern that is needed for integrating unauthorized
+                                                                             building a multi-principal operating system for Web browsers. This
+content or untrusted open content. In fact, people have not paid
+                                                                             paper focuses on the most imminent needs of today’s browsers: ab-
+much attention to or leveraged the property of asymmetric access
+                                                                             stractions for protection and communication.
+in the original sandboxing. In MashupOS, we adapt sandboxing to
+                                                                                From our analysis over the trust relationship between content
+the browser environment to particularly leverage this asymmetry to
+                                                                             providers and integrators, we derived four content types that re-
+match a common trust scenario between providers and integrators
+                                                                             quire support from the Web and browsers: isolated content, access-
+and provide both security and ease in creating client mashups.
+                                                                             controlled content, open content, and unauthorized content. Ex-
+   Cox et al. [10] also recognized that browsers have become a
+                                                                             isting browser abstractions support only the isolated content with
+de facto operating system for executing client-side components of
+                                                                             cross-domain frames and open content with scripts, resulting in
+Web applications but offer insufficient isolation across Web appli-
+                                                                             an all-or-nothing trust model—an integrator site either trusts a
+cations and can cause the desktop machine to be infected by drive-
+                                                                             provider site entirely by including the provider’s scripts or does
+by-downloads or by attacks that exploit browser vulnerabilities.
+                                                                             not trust a provider at all by putting the provider content inside a
+To this end, Cox et al. proposed the Tahoma browser operating
+                                                                             frame. Inflexibility and insecurity result from the incomplete sup-
+system as a system layer beneath the running browser instances.
+                                                                             port of today’s browsers.
+Tahoma puts each “Web application” into a separate virtual ma-
+                                                                                In MashupOS, we have proposed abstractions for the missing
+chine. The “Web application” consists of a browser instance and a
+                                                                             content types and trust relationships. We introduce unauthorized
+set of Web sites that the browser instance is permitted to visit. The
+                                                                             content as a fundamental addition to today’s Web content provi-
+use of the virtual machine is for isolation among the “Web applica-
+                                                                             sioning. Our sandbox abstractions and provider-browser proto-
+tions” as well as between a browser and its host system. However,
+                                                                             col enable content providers to publish and integrators to consume
+Tahoma does not address more fine-grained protection and com-
+                                                                             unauthorized content without liability and overtrusting, providing
+munication among the sites within a “Web application” or a site.
+                                                                             both security and ease in creating client mashups. Such support
+In comparison, MashupOS aims to enhance the browser itself to be
+                                                                             can fundamentally combat Cross Site Scripting attacks (a promi-
+a multi-principal OS that mediates resource access from different
+                                                                             nent threat in today’s Web) while allowing the richest possible third
+sites, and does not defend against attacks exploiting browser vul-
+                                                                             party content. We have also proposed ServiceInstance for isola-
+nerabilities or infections through drive-by download. MashupOS-
+                                                                             tion, fault containment, and as the unit of resource allocation and
+enabled browser plus the Tahoma system layer would provide both
+                                                                             CommRequest as a VOP-based communication abstraction unify-
+fine-grained isolation and host system protection.
+                                                                             ing existing cross-domain communication proposals.
+                                                                                Our abstractions are backward compatible, allowing Web pro-
+12. FUTURE WORK AND DISCUSSIONS                                              grammers to supply alternative content for browsers that don’t sup-
+   Today’s browser extensions, including ActiveX controls and                port our abstractions. We have carefully designed the MashupOS
+browser plugins can provide abstractions to Web pages that enable            abstractions to avoid unintended interactions between new content
+arbitrary flows of information within the browser and across the             that use our abstractions and legacy ones. These enable Web pro-
+network. Unfortunately, these extensions may weaken the protec-              grammers to adopt our abstractions with ease and comfort.
+tion provided by MashupOS. Tools can be developed to identify                   Our MashupOS prototype realizes almost all our proposed ab-
+the extensions through which browser security policies can be cir-           stractions and their properties. Our evaluation showcases an easy-
+cumvented and users should be warned before such extensions are              to-build and robust client mashup. Measurement of our proto-
+installed.                                                                   type shows negligible overhead. The implementation and evalu-
+   All major browsers have had cross-domain vulnerabilities that             ation demonstrate the ease of adding these abstractions to existing
+can be exploited to circumvent the SOP. It is an open challenge              browsers.
+to have a robust browser implementation that guarantees the isola-
+tion boundaries of the browser security policy to be obeyed. Reis            14.    ACKNOWLEDGEMENTS
+et al. realizes the SOP isolation using OS processes [36], putting
+                                                                               We’d like to thank Andy Begel, Shuo Chen, Adam Costello,
+each domain into a separate OS process for isolation. A number of
+
+
+
+                                                                        14
+Douglas Crockford, Richard Draves, John Dunagan, Sunava Dutta,               Advanced Web Attack Techniques using GMail.
+Hank Levy, Charlie Kaufman, Jay Lorch, Charlie Reis, Yinglian                                     CFFGF1
+Xie, Zhenbin Xu, and anonymous reviewers for their valuable dis-              < <"<  - <   .
+cussions and feedback to our work and this paper.                       [22] W. H. A. T. W. Group. Web Applications 1.0, February 2007.
+                                                                               
+15. REFERENCES                                                                     <  < ".
+ [1] Adobe. External data not accessible outside a Macromedia           [23] HTML 4.01 Specification, December 1999.
+     Flash movie’s domain, 2007.                                D 45  BF1.
+       "      ,A1BC1D.                         [24] G. Hunt and J. Larus. Singularity: Rethinking the Software
+ [2] JavaScript Speed Test: BenchJS. CB                      Stack. In Operating Systems Review, April 2007.
+                 .                                 [25] Internet Explorer Architecture.             
+ [3] B. Bershad, S. Savage, P. Pardyak, E. G. Sirer, D. Becker,                "               A  .
+     M. Fiuczynski, C. Chambers, and S. Eggers. Extensibility,          [26] Persistence of Internet Explorer.
+     Safety and Performance in the SPIN Operating System. In                                "          
+     Proceedings of the 15th ACM Symposium on Operating                               ,  .
+     System Principles (SOSP-15), December 1995.                        [27] G. Inc. Google Gadgets API Developer Guide. 
+ [4] Browser Helper Object.                                                            .
+        C            <  CEFBDG .                [28] C. Jackson and H. Wang. Subspace: Secure Cross-Domain
+ [5] S. Brin and L. Page. The anatomy of a large-scale                       Communication for Web Mashups. In Proc. WWW, 2007.
+     hypertextual Web search engine. In 7th International World         [29] T. Jim, N. Swamy, and M. Hicks. BEEP: Browser-Enforced
+     World Web Conference, 1998.                                             Embedded Policies. In 16th International World World Web
+ [6] J. Burke. Cross Domain Frame Communication with                         Conference, May 2007.
+     Fragment Identifiers.                                              [30] JavaScript Object Notation (JSON).
+              CFFGFG                                        .
+      < < <                <   .                [31] F. D. Keukelaere, S. Bhola, M. Steiner, S. Chari, and
+ [7] S. M. Christey. Vulnerability Type Distribution in CVE,                 s. Yoshihama. SMash: Secure Cross-Domain Mashups on
+     September 2006.                                   Unmodified Browsers. Technical report, IBM Research,
+        CFFG<             FF1FDC  .                       Tokyo Research Laboratory, June 2007.
+ [8] Component Object Model (COM).                                      [32] D. Kristol and L. Montulli. HTTP State Management
+                    /  ,                     Mechanism. IETF RFC 2965, October 2000.
+      / <                                       [33] Windows Live Gadget Developer’s Guide. 
+              .                                                    "     .
+ [9] J. Couvreur. FlashXMLHttpRequest: cross-domain requests.           [34] L. Masinter. RFC 2397: The "data" URL Scheme, August
+             H;:I5 - .                              1998.       CDJ8.
+[10] R. Cox, J. Hansen, S. Gribble, and H. Levy. A                      [35] About Asynchronous Pluggable Protocols.  C
+     Safety-Oriented Platform for Web Applications. In Proc.                      <  /8G8J1G .
+     IEEE Symposium on Security and Privacy, 2006.                      [36] C. Reis, B. Bershad, S. Gribble, and H. Levy. Using
+[11] D. Crockford. JSONRequest.                                              processes to improve the reliability of browser-based
+           -   .                                     applications. In Under submission.
+[12] D. Crockford. The Module Tag: A Proposed Solution to the           [37] RSnake. XSS Cheat Sheet.
+     Mashup Security Problem.                                                   "      .
+             .                                    [38] J. Ruderman. The Same Origin Policy.
+[13] Document Object Model. D $#;.                              >     /
+[14] B. Eich. JavaScript: Mobility and Ubiquity.                                   <   .
+       "     ;  F8                     [39] Technical explanation of The MySpace Worm.
+     F8FJ1F8FJ1' 9  .                                              .
+[15] Big WebOS roundup - 10 online operating systems reviewed.          [40] R. Wahbe, S. Lucco, T. E. Anderson, and S. L. Graham.
+            CFFG1CC1.                           Efficient Software-Based Fault Isolation. In Proceedings of
+[16] D. Flanagan. JavaScript: The Definitive Guide. O’Reilly,                the 14th ACM Symposium on Operating Systems Principles,
+     August 2006.                                                            December 1993.
+[17] Flickr Services API.                                               [41] Web applications working draft.
+       "   .                                              < 
+[18] N. Freed. Media Type Specifications and Registration                     < "L         $  ;          .
+     Procedures, December 2005.                                         [42] Web desktop.  "  "M  .
+        BCKK  .                                      [43] The XMLHttpRequest Object.
+[19] Google Maps API, 2007.                                                    D 45H;:I5 - .
+             .                                   [44] Google, Yahoo, MSN Unite On Support For Nofollow
+[20] Preventing comment spam, January 2005.                                  Attribute For Links, January 2005.   
+               CFFEF1                                            FEF11K<CFB8CK.
+       <          <    .                                [45] YouOS. /   .
+[21] J. Grossman.
+
+
+
+                                                                   15
+

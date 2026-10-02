@@ -1,0 +1,649 @@
+                          16th ACM Symposium on Operating Systems Principles, October 1997
+
+
+                                       Free Transactions with Rio Vista
+                                             David E. Lowell and Peter M. Chen
+
+                                       Computer Science and Engineering Division
+                                Department of Electrical Engineering and Computer Science
+                                                 University of Michigan
+                                           {dlowell,pmchen}@eecs.umich.edu
+                                             http://www.eecs.umich.edu/Rio
+
+
+Abstract: Transactions and recoverable memories are pow-            all persistent data. Committing a transaction has tradition-
+erful mechanisms for handling failures and manipulating             ally required at least one synchronous disk I/O. This sev-
+persistent data. Unfortunately, standard recoverable memo-          eral-millisecond overhead has persuaded most systems to
+ries incur an overhead of several milliseconds per transac-         give up the precise failure semantics of transactions in favor
+tion. This paper presents a system that improves transaction        of faster but less-precise behavior. For example, many ﬁle
+overhead by a factor of 2000 for working sets that ﬁt in            systems can lose up to 30 seconds of recently committed
+main memory. Of this factor of 2000, a factor of 20 is due to       data after a crash and depend on ad-hoc mechanisms such as
+the Rio ﬁle cache, which absorbs synchronous writes to disk         ordered writes and consistency checks to maintain ﬁle sys-
+without losing data during system crashes. The remaining            tem integrity.
+factor of 100 is due to Vista, a 720-line, recoverable-mem-               The main contribution of this paper is to present a sys-
+ory library tailored for Rio. Vista lowers transaction over-        tem that reduces transaction overhead by a factor of 2000.
+head to 5 µsec by using no redo log, no system calls, and           We believe the resulting 5 µsec overhead makes transactions
+only one memory-to-memory copy. This drastic reduction              cheap enough that applications and kernels can use them to
+in overhead leads to a overall speedup of 150-556x for              manipulate all persistent data. Two components, Rio and
+benchmarks based on TPC-B and TPC-C.                                Vista, combine to enable this remarkable speedup.
+1. Introduction                                                           The Rio ﬁle cache is an area of main memory that sur-
+      Any application that modiﬁes a ﬁle takes a risk—a             vives operating system crashes [Chen96]. Combined with
+crash during a series of updates can irreparably damage per-        an uninterruptible power supply, Rio provides persistent
+manent data. Grouping a series of updates into an atomic            memory to applications that can be used as a safe, in-mem-
+transaction addresses this problem by ensuring that either          ory buffer for ﬁle system data. Existing recoverable-mem-
+all the updates are applied, or none are [Gray93].                  ory libraries such as RVM [Satyanarayanan93] can run
+                                                                    unchanged on Rio and gain a 20-fold increase in perfor-
+      Transactions are acclaimed widely as a powerful               mance.
+mechanism for handling failures. Transactions simplify pro-
+gramming by restricting the variety of states in which a                  Vista is a user-level, recoverable-memory library tai-
+crash can leave a system. Recoverable memory provides               lored to run on Rio. Because Vista assumes its memory is
+atomic updates and persistence for a region of virtual mem-         persistent, its logging and recovery mechanisms are fast and
+ory [Satyanarayanan93]. Recoverable memory allows pro-              simple. The code for Vista totals 720 lines of C, including
+grams to manipulate permanent data structures safely in             the basic transaction routines, recovery code, and persistent
+their native, in-memory form—programs need not convert              heap management. Vista achieves a 100-fold speedup over
+between      persistent    and     non-persistent    formats        existing recoverable-memory libraries, even when both run
+[Atkinson83].                                                       on Rio. We expect Vista performance to scale well with
+                                                                    faster computers because its transactions use no disk I/Os,
+      Unfortunately, while transactions are useful in both          no system calls, and only one memory-to-memory copy—
+kernel and application programming, their high overhead             factors that have been identiﬁed repeatedly as bottlenecks to
+prevents them from being used ubiquitously to manipulate            scaling [Ousterhout90, Anderson91, Rosenblum95].
+
+    This research was supported in part by NSF grant
+                                                                    2. Related Work
+MIP-9521386, Digital Equipment Corporation, and the                       Out of the vast literature on transaction processing,
+University of Michigan. Peter Chen was also supported by            Vista is related most closely to RVM and a number of per-
+an NSF CAREER and Research Initiation Award (MIP-                   sistent stores.
+9624869 and MIP-9409229).                                                 RVM is an important, widely referenced, user-level
+                                                                    library      that    provides      recoverable      memory
+                                                                    [Satyanarayanan93]. RVM provides a simple, lightweight
+                                                                    layer that handles atomicity and persistence. To keep the
+                                                                    library simple and lightweight, the designers of RVM did
+                                                                    not support other transactional properties, such as serializ-
+                                                                    ability and nesting, arguing that these could be better pro-
+                                                                    vided as independent layers on top of RVM [Lampson83].
+
+
+
+                                                                1
+                     transaction                                                 transaction
+                        begin                       writes                           end
+                                                                                                 . . . log truncation
+                         CPU                          CPU                           CPU                         CPU
+
+
+   undo log            memory                       memory                        memory                       memory
+
+
+
+
+                database       redo          database        redo           database      redo                        redo
+                                                                                                        database
+                                log                           log                          log                         log
+
+Figure 1: Operations in a Typical Recoverable Memory System. Recoverable memory systems perform up to three copies
+for each transaction. They ﬁrst copy the before-image to an in-memory region called the undo log, which is used to support
+user-initiated aborts. When the transaction commits, they reclaim the space in the undo log and synchronously write the
+updated data to an on-disk region called the redo log. After many transactions commit and the redo log ﬁlls up, they truncate
+the log by propagating new data to the database on disk and reclaiming space in the redo log.
+
+       Figure 1 shows the steps involved in a simple RVM                database into the application’s address space using read
+transaction. After declaring the beginning of the transaction,          and maintains it using read and write. In contrast, per-
+the program notiﬁes RVM of the range of memory the trans-               sistent stores map the database into the application’s address
+action may update. RVM copies this range to an in-memory                space and depend on the VM system to trigger data move-
+region called the undo log. The program then writes to                  ment. We discuss the implications of these two choices in
+memory using normal store instructions. If the transaction              Section 3.
+commits, RVM reclaims the space in the undo log and syn-                      Vista differs from current recoverable memories and
+chronously writes the updated data to an on-disk region                 persistent stores in that Vista is tailored for the reliable
+called the redo log. If the user aborts the transaction, the            memory provided by Rio. Tailoring Vista for Rio allows
+undo log is used to quickly reverse the changes to the in-              Vista to eliminate the redo log and its accompanying two
+memory copy of the database. After many transactions com-               copy operations per transaction. Vista also eliminates
+mit and the redo log ﬁlls up, RVM truncates the log by prop-            expensive system calls such as fsync and msync, which
+agating new data to the database on disk and reclaiming                 other systems must use to ﬂush data to disk.
+space in the redo log. After a process or system crash, RVM                   Having placed our work in context, we next describe
+recovers by replaying committed transactions from the redo              the two systems that combine to reduce transaction over-
+log to the database.                                                    head.
+       In addition to providing atomicity and durability, writ-
+ing data to the redo log accelerates commit, because writing            3. The Rio File Cache
+sequentially to the redo log is faster than writing to scattered              Like most ﬁle caches, Rio buffers ﬁle data in main
+locations in the database. Writing to the redo log in this              memory to accelerate future accesses. Rio seeks to protect
+manner is known as a no-force policy, because dirty data-               this area of memory from its two common modes of failure:
+base pages need not be forced synchronously to disk for                 power loss and system crashes [Chen96]. While systems
+every transaction [Haerder83]. This policy is used by nearly            can protect against power loss in a straightforward manner
+all transaction systems.                                                (by using a $100 UPS, for example [APC96]), software
+       Note from Figure 1 that RVM performs up to three                 errors are trickier. Rio uses virtual memory protection to
+copy operations for each transaction. RVM performs two                  prevent operating system errors such as wild stores from
+copies during the transaction: one to an in-memory undo log             corrupting the ﬁle cache during a system crash. This protec-
+and one to an on-disk redo log. Log truncation adds at least            tion does not signiﬁcantly affect performance. After a crash,
+one additional copy for each modiﬁed datum in the log.                  Rio writes the ﬁle cache data in memory to disk, a process
+                                                                        called warm reboot.
+       Persistent stores such as IBM 801 Storage [Chang88]
+and ObjectStore [Lamb91] provide a single-level storage                       To verify Rio’s reliability against software crashes,
+interface to permanent data [Bensoussan72]. Like RVM,                   Chen et al. crashed the operating system several thousand
+most persistent stores write data to a redo log to avoid forc-          times using a wide variety of randomly chosen program-
+ing pages to the database for each transaction.                         ming bugs. Their results showed that Rio is even more reli-
+                                                                        able than a ﬁle system that writes data immediately through
+       RVM and persistent stores build and maintain an
+                                                                        to disk. To further establish Rio’s ability to make memory as
+application’s address space differently. RVM copies the
+                                                                        safe as disk, the Rio team has been storing their home direc-
+
+
+                                                                    2
+                                                                    atomic, durable transaction, a capability that is feasible only
+                                                                    with some form of reliable memory. Vista builds on this
+                              CPU                                   layer to group several memory operations into a single,
+                                                                    durable, atomic action.
+                                                                          Each method of modifying the ﬁle cache has advan-
+                      application memory                            tages and disadvantages. mmap has signiﬁcantly lower over-
+                                                                    heads, especially on Rio. Stores to a mapped region incur no
+                                                                    system calls, while writes require one system call. In addi-
+                                                                    tion, write requires an extra memory-to-memory copy,
+                                                                    which can lead to keeping each datum in memory twice.
+       write                                mmap                          The main advantage of write is that it may isolate
+                                                                    the ﬁle cache from application errors. The protection mech-
+                                                                    anism in Rio focuses only on kernel errors. Users are still
+                             ﬁle cache                              responsible for their own errors and can corrupt their ﬁle
+                                  I/O                               data through erroneous write calls or store instructions.
+                                                                    Because store instructions are much more common than
+                               disk                                 calls to write, applications may damage the ﬁle cache
+                                                                    more easily using mmap [GM92]. While other systems,
+                                                                    such as Mach’s Unix server [Golub90], have mapped ﬁles
+Figure 2: Using the Rio File Cache. Applications may                into the application address space, we are aware of only two
+modify persistent data in the Rio ﬁle cache in two ways:            papers that quantify the increased risk [Chen96, Ng97].
+write and mmap. Most applications use write, which                  Both papers indicate that (1) the risk of corruption increases
+copies data from an application buffer to the ﬁle cache.            only marginally when mapping persistent data into the
+mmap maps a portion of the ﬁle cache directly into the              address space and (2) memory protection can be used to fur-
+application’s address space. Once this mapping is                   ther reduce this risk to below that of using a write inter-
+established, applications may use store instructions to             face. The ﬁrst study was done on the Rio ﬁle cache and is
+manipulate ﬁle cache data directly; no copying is needed.           discussed earlier in this section. The second study compares
+tories, source trees, and mail on Rio for a year with no loss       the reliability of mmap and write in the Postgres database
+of data.                                                            and ﬁnds little difference. Users can enhance reliability by
+                                                                    applying virtual memory techniques to their address space
+      Rio improves both performance and reliability over            [Sullivan91, Chen96]. They can also use transactions to
+current systems. Under normal operation, Rio improves per-          reduce the risk of corrupting permanent data structures in
+formance by obviating the need for synchronous I/O and by           the event of a crash.
+using an inﬁnite write-back delay rather than the more com-
+mon 0-30 second delay. The longer delay allows more data            4. The Vista Recoverable Memory
+to be deleted or overwritten in the ﬁle cache, and hence                  The Rio ﬁle cache automatically intercepts writes that
+fewer writes need to be propagated to disk. When the sys-           would otherwise need to be propagated synchronously to
+tem crashes, Rio improves reliability by preserving data            disk. For example, when RVM runs on Rio, writes to the
+waiting to be written to disk.                                      redo log and database are not forced further than the ﬁle
+      There are two main ways systems can use the reliable          cache. Short-circuiting synchronous writes in this manner
+memory Rio provides: write and mmap (Figure 2).                     accelerates RVM by a factor of 20. However, it is possible to
+      Applications commonly modify data in the ﬁle cache            improve performance by another factor of 100 by tailoring a
+using the write system call. This explicit I/O operation            recoverable-memory library for Rio.
+copies data from a user buffer to the ﬁle cache. In Rio, each             Vista is just such a recoverable-memory library. While
+write also changes twice the protection on the modiﬁed              Rio accelerates existing recoverable memories by speeding
+page. To guarantee immediate permanence, applications               up disk operations, Vista can eliminate some operations
+running on non-Rio systems must use fsync or other syn-             entirely. In particular, Vista eliminates the redo log, two of
+chronous I/O to force new data to disk, or they must bypass         the three copies in Figure 1, and all system calls. As a result,
+the ﬁle cache and write directly to the raw disk. On Rio, the       Vista runs 100 times as fast as existing recoverable memo-
+data being written is permanent as soon as it is copied into        ries, even when both run on Rio. Because Vista is light-
+the ﬁle cache.                                                      weight (5 µsec overhead for small transactions) and simple
+      In contrast to write, mmap maps a portion of the ﬁle          (720 lines of code), it is an ideal building block for higher
+cache directly into the application’s address space. Once           layers. Like RVM, Vista provides only the basic transaction
+this mapping is established, applications can use store             features of atomicity and persistence; features such as con-
+instructions to manipulate the ﬁle cache data directly; no          currency control, nested transactions, and distribution can
+copying is needed. Applications using mmap on non-Rio               be built above Vista. Also like RVM, Vista is targeted for
+systems must use msync to ensure that newly written data            applications whose working set ﬁts in main memory.
+is stored on disk. On Rio, however, data from each individ-               Figure 3 shows the basic operation of Vista. After call-
+ual store instruction is persistent immediately; no msync is        ing vista_init and vista_map to map the database
+needed. This allows each store instruction to be its own            into the address space, applications start a transaction with
+
+
+                                                                3
+                                  transaction                                                         transaction
+                                     begin                                      writes                    end
+
+
+
+
+                                     CPU                                         CPU
+
+
+                             application memory                         application memory
+
+
+
+
+                              undo       database                        undo       database
+                               log                                        log
+
+                                   ﬁle cache                                 ﬁle cache
+
+Figure 3: Operations in Vista. Vista’s operation is tailored for Rio. The database is demand-paged into the ﬁle cache and
+mapped into the application’s address space. At the start of a transaction, Vista logs the original image of the data to an undo
+log, which is kept in the persistent memory provided by Rio. During the transaction, the application makes changes directly to
+the persistent, in-memory database. At the end of the transaction, Vista simply discards the undo log.
+
+vista_begin_transaction. As with RVM, applica-                     totals only 720 lines (not including comments), including
+tions call vista_set_range to declare which area of                the recovery code, begin/end/abort transaction, two versions
+memory a transaction will modify. We insert these calls by         of vista_set_range (explicit calls and VM-generated),
+hand, but they could also be inserted by a compiler                and the persistent memory allocator described below. Sev-
+[OToole93]. Vista also has an option to automatically gener-       eral factors contribute to Vista’s simplicity:
+ate the range of modiﬁcations on a page granularity by             • All modiﬁcations to the mapped space provided by Rio
+using the virtual memory system [Lamb91]; however this is              are persistent. This enables Vista to eliminate the redo
+much slower than calling vista_set_range explicitly.                   log and log truncation. Satyanarayanan, et al. report that
+Vista saves a before-image of the data to be modiﬁed in an             the log truncation was the most difﬁcult part of RVM to
+undo log. Like the main database, the undo log resides in              implement, so eliminating the redo log reduces com-
+mapped persistent memory provided by Rio.                              plexity signiﬁcantly [Satyanarayanan93].
+      After invoking vista_set_range one or more                   • Recovery is simpliﬁed considerably without a redo log
+times, the transaction modiﬁes the database by storing                 [Haerder83]. Checkpointing and recovery code are often
+directly to its mapped image. Because of Rio, each of these            extremely complex parts of transaction systems. In con-
+stores is persistent. The transaction commits by calling               trast, Vista does not need to checkpoint, and its recovery
+vista_end_transaction. This function simply dis-                       code is fewer than 20 lines.
+cards the undo log for the transaction. The transaction may        • High-performance transaction-processing systems use
+abort by calling vista_abort_transaction. This                         optimizations such as group commit to amortize disk
+function copies the original data from the undo log back to            I/Os across multiple transactions. Vista issues no disk
+the mapped database.                                                   I/Os and hence does not need these optimizations and
+      Rio and Vista cooperate to recover data after a system           their accompanying complexity.
+crash. During reboot, Rio writes the contents of the ﬁle           • Like RVM, Vista handles only the basic transaction fea-
+cache back to disk, including data from any Vista segments             tures of atomicity and persistence. We believe features
+that were mapped at the time of the crash. Each time a Vista           such as serializability are better handled by higher levels
+segment is mapped, Vista inspects the segment and deter-               of software. We considered and rejected locking the
+mines if it contains uncommitted transactions. Vista rolls             entire database to serialize all transactions. While Vista’s
+back the changes from these uncommitted transactions in                fast response times (5 µsec overhead for small transac-
+the same manner as user-initiated aborts. Recovery is idem-            tions) makes this practical, adopting any concurrency
+potent, so if the system fails during recovery, Vista needs            control scheme would penalize the majority of applica-
+only to replay the undo log again.                                     tions, which are single-threaded and do not need lock-
+      Designing a transaction library with Rio’s persistent            ing.
+memory in mind yields an extremely simple system. Vista
+
+
+                                                               4
+                                                                      well Vista achieves this goal, we compare the performance
+                           heap management                            of three systems: Vista, RVM, and RVM-Rio (RVM running
+                            undo records for                          on a Rio ﬁle system).
+       metadata              main database                                  We use RVM (version 1.3) as an example of a standard
+                                                                      recoverable memory. We maximize the performance of
+                            undo records for                          RVM by storing the database and log on two raw disks. This
+                            heap operations                           saves the overhead of going through the ﬁle system and pre-
+                                                                      vents the system from wasting ﬁle cache space on write-
+                                                                      mostly data. The log size is ﬁxed at 10% of the database
+                                                                      size.
+            not                                                             We also run RVM unmodiﬁed on a Rio ﬁle system
+    addressable                                                       (RVM-Rio) to show how Rio accelerates a standard recover-
+                                                                      able memory. Storing RVM’s log and data on a Rio ﬁle sys-
+                                                                      tem accelerates RVM by allowing Rio to short-circuit
+                                                                      RVM’s synchronous writes. However, it causes the system
+                                                                      to duplicate the database in both the ﬁle cache and applica-
+       user data             persistent heap                          tion memory.
+                                                                      5.1. Benchmarks
+Figure 4: Memory Allocation in Vista. Metadata such as                       We use three benchmarks to evaluate performance. We
+free lists and undo records are vulnerable to corruption              use a synthetic benchmark to quantify the overhead of trans-
+because they are mapped into the application’s address                actions as a function of transaction size. We also use two
+space. Vista reduces the risk of inadvertently corrupting             benchmarks based on TPC-B and TPC-C, industry-standard
+this data by separating it from the user data.                        benchmarks for measuring the performance of transaction-
+                                                                      processing systems.
+      Vista provides a general-purpose memory allocator                      Each transaction in our synthetic benchmark modiﬁes
+that applications can use to dynamically allocate persistent          data at a random location in a 50 MB database. The size of
+memory. vista_malloc and vista_free can be                            the database was chosen to ﬁt in main memory on all three
+invoked during a transaction and are automatically undone             systems. We vary the amount of data changed by each trans-
+if the transaction aborts. Vista enables this feature by logi-        action from 8 bytes to 1 MB. We use the synthetic bench-
+cally logging vista_malloc and vista_free calls. If                   mark to calculate the overhead per transaction of each
+a transaction commits, all memory that was freed in the               system. Overhead per transaction is deﬁned as the time per
+transaction is returned to the heap. Similarly, if the transac-       transaction of a given system minus the time per transaction
+tion aborts, all memory that was allocated during the trans-          of a system that does not provide atomic durability. Time
+action is returned to the heap. As a result, aborted                  per transaction is the running time divided by the number of
+transactions leave the heap unchanged. Vista uses the persis-         transactions.
+tent heap internally to store undo records for transactions.                 TPC-B processes banking transactions [TPC90]. The
+      Persistent heaps provide functionality similar to tradi-        database consists of a number of branches, tellers, and
+tional ﬁle systems but have some unique advantages and                accounts. The accounts comprise over 99% of the database.
+disadvantages. Persistent heaps may be more ﬂexible than              Each transaction updates the balance in a random account
+ﬁle systems, because programs can manipulate permanent                and the balances in the corresponding branch and teller.
+data structures in their native form—programs need not                Each transaction also appends a history record to an audit
+convert between persistent and non-persistent formats                 trail. Our variant of TPC-B, which we call debit-credit, fol-
+[Atkinson83]. For example, programs can store native mem-             lows TPC-B closely. We differ primarily by storing the audit
+ory pointers in the persistent heap, as long as the system            trail in a 2 MB, circular buffer. We limit the size of the audit
+maps the heap in a ﬁxed location.                                     trail to 2 MB to keep it in memory and better match our tar-
+      With the increased ﬂexibility of heaps comes increased          get applications.
+danger, however. Whereas metadata of a ﬁle system is inac-                   TPC-C models the activities of a wholesale supplier
+cessible to ordinary users, the metadata describing a persis-         who receives orders, payments, and deliveries for items
+tent heap is mapped into the user’s address space. Vista              [TPC96]. The database consists of a number of warehouses,
+reduces the risk of inadvertent corruption by mapping each            districts, customers, orders, and items. Our variant of the
+segment’s metadata into an isolated range of addresses (Fig-          benchmark, which we call order-entry, uses three of the
+ure 4). This is similar to the technique used in anonymous            ﬁve transaction types speciﬁed in TPC-C: new-order, pay-
+RPC [Yarvin93]. Other approaches to protecting the meta-              ment, and delivery. We do not implement the order-status
+data could also be used, such as software fault isolation and         and stock-level transactions, as these do not update any data
+virtual memory protection [Wahbe93].                                  and account for only 8% of the transactions. Order-entry
+                                                                      issues transactions differently from TPC-C. In TPC-C, a
+5. Performance Evaluation                                             number of concurrent users issue transactions at a given
+     Vista’s main goal is to drastically lower the overhead           rate. In contrast, order-entry issues transactions serially as
+of atomic, durable transactions. In order to evaluate how             fast as possible. Order-entry also does no terminal I/O, as
+
+
+                                                                  5
+                                                                     larger transactions is due to the need to copy more data to
+                     Seagate ST31200N                                the undo log. Each transaction in RVM-Rio incurs a mini-
+        spindle speed                5411 RPM                        mum overhead of 500 µsec. The higher overhead comes
+                                                                     from the write and fsync system calls, copying to the
+        average seek                    10 ms                        redo log, and log truncation. Without Rio, RVM incurs one
+         transfer rate              3.3-5.9 MB/s                     synchronous disk I/O to the redo log per transaction, as well
+                                                                     as some portion of an I/O per transaction during log trunca-
+                                                                     tion. This results in an overhead of 10 ms for the smallest
+                     Seagate ST15150N                                transaction.
+                                                                           Debit-credit and order-entry show results similar to the
+        spindle speed                7200 RPM
+                                                                     synthetic benchmarks when the database ﬁts in memory. For
+        average seek                    9 ms                         debit-credit, Vista improves performance by a factor of 41
+         transfer rate              5.9-9.0 MB/s                     over RVM-Rio and 556 over RVM. For order-entry, Vista
+                                                                     improves performance by a factor of 14 over RVM-Rio and
+                                                                     150 over RVM. These speedups are smaller than the
+                     Seagate ST12550N                                improvement shown in the synthetic workload because the
+                                                                     body of the debit-credit and order-entry transactions have
+        spindle speed                7200 RPM                        larger ﬁxed overheads than synthetic, and because they
+        average seek                    9 ms                         issue several vista_set_range calls per transaction.
+                                                                           RVM and Vista both begin thrashing once the database
+         transfer rate              4.3-7.1 MB/s                     is larger than available memory (roughly 200 MB). Note
+                                                                     that RVM-Rio begins thrashing at half the database size of
+Table 1: Disk Parameters.                                            RVM and Vista due to double buffering. Double buffering
+                                                                     results from frequent writes to the database ﬁle, effectively
+we would like to isolate the performance of the underlying           copying the database into the ﬁle cache. The result is two
+transaction system.                                                  copies of the database: one in the process’s address space
+      For all graphs, we run each benchmark ﬁve times, dis-          and another in the Rio ﬁle cache.
+card the best and worst runs, and present the average of the               Most transaction processing systems amortize the redo
+remaining three runs. The standard deviation of these runs is        log I/O across multiple concurrent transactions, a technique
+generally less than 1% of the mean. We run each benchmark            known as group commit [DeWitt84]. Systems that perform
+long enough to reach steady state; hence RVM and RVM-                this optimization wait for a number of committing transac-
+Rio results include truncation costs.                                tions to accumulate, then synchronously write to disk all
+                                                                     commit records for this group in one I/O. We implement a
+5.2. Environment                                                     simple form of group commit in RVM to measure how
+      All experiments use a 175 MHz DEC 3000/600 Alpha               much it improves performance. Figure 6 shows the perfor-
+workstation with 256 MB of memory. We use Digital Unix               mance of RVM when 1, 8, or 64 transactions are grouped
+V3.0 modiﬁed to include the Rio ﬁle cache.                           together to share a single write to the redo log. While group
+      The workstation has three data disks (Table 1). RVM            commit does improve performance, it suffers from several
+and RVM-Rio use ST31200N to page out the database when               problems. First, it does not improve response time; waiting
+it overﬂows memory. This disk is attached via a separate             for a group of transactions to accumulate lengthens the
+SCSI bus from ST15150N and ST12550N. RVM and RVM-                    response time of an individual transaction. Second, through-
+Rio use ST15150N to store the redo log and ST12550N to               put for large transactions can be limited by the speed of
+store the database. Vista uses ST15150N to store the data-           writing to the redo log. Third, group commit works only if
+base.                                                                there are many concurrent transactions. Single-threaded
+5.3. Results                                                         applications with dependent transactions cannot use group
+                                                                     commit because earlier transactions are delayed; these
+      The graphs in Figure 5 compare the performance of
+                                                                     applications need the fast response times provided by Vista.
+Vista, RVM-Rio, and RVM on our three benchmarks. The
+synthetic benchmark measures transaction overhead as a                     The performance improvements we have demonstrated
+function of transaction size, so lower values are better.            can be broken into two components. As we expected, Rio
+Debit-credit and order-entry measure transaction through-            improves performance for RVM by a factor of 11-20 by
+put, so higher values are better. Note that all y-axes use log       absorbing all synchronous disk writes. The biggest surprise
+scales.                                                              from our measurements was how much Vista improved per-
+                                                                     formance over RVM-Rio (a factor of 14-100). Once Rio
+      Results for the synthetic benchmark show that Vista
+                                                                     removes disk writes, factors such as system calls, copies,
+incurs only 5 µsec of overhead for small transactions. This
+                                                                     and manipulating the redo log comprise a large fraction of
+overhead represents the cost of beginning the transaction,
+                                                                     the remaining overhead in a transaction. Vista does away
+saving the old data with a single vista_set_range, and
+                                                                     with the redo log, all system calls, and all but one of these
+committing the transaction. For transactions larger than 1
+                                                                     copies. The performance improvement resulting from the
+KB, overhead scales roughly linearly with transaction size
+at a rate of 17.9 µsec/KB. The increasing overhead for
+
+
+                                                                 6
+                                                                                   106
+
+
+                                                                                   105
+
+
+
+
+                                                     Transaction Overhead (µsec)
+                                                                                            RVM
+                                                                                   104
+
+
+                                                                                   103     RVM-Rio
+
+
+                                                                                   102
+
+
+                                                                                   101      Vista
+
+
+                                                                                   100
+                                                                                     100   101      102     103     104    105                            106
+                                                                                                  Transaction Size (bytes)
+
+                                                                                                 (a) synthetic (overhead)
+
+
+
+
+               100,000                                                                                                      100,000
+
+                                     Vista
+                                                                                                                                                  Vista
+                        10,000                                                                                                       10,000
+
+
+
+
+  Transactions/Second                                                                                          Transactions/Second
+                                     RVM-Rio
+                                                                                                                                                  RVM-Rio
+                         1,000                                                                                                        1,000
+
+
+                                     RVM                                                                                                          RVM
+                          100                                                                                                          100
+
+
+
+                           10                                                                                                           10
+                                 0           100            200                                      300                                      0           100            200      300
+                                             Database Size (MB)                                                                                           Database Size (MB)
+
+                                               (b) debit-credit                                                                                                 (c) order-entry
+
+
+
+Figure 5: Performance of Vista, RVM-Rio, and RVM. This ﬁgure shows the performance of three recoverable memories
+on three benchmarks. Figure 5a shows the overhead per transaction for a synthetic, 50 MB database. For small transactions,
+Vista improves performance by a factor of 100 over RVM-Rio and a factor of 2000 over RVM. Figures 5b and 5c show the
+throughput for debit-credit and order-entry. Vista improves performance by a factor of 14-41 over RVM-Rio and 150-556
+over RVM.
+
+
+
+
+                                                                                                           7
+                                                                                  106
+
+
+                                                                                  105
+
+
+
+
+                                                    Transaction Overhead (µsec)
+                                                                                                RVM
+                                                                                  104
+                                                                                          RVM-group size 8
+
+                                                                                  103
+                                                                                                RVM-group size 64
+
+                                                                                  102
+
+
+                                                                                  101           Vista
+
+
+                                                                                  100
+                                                                                        100   101     102     103     104    105                             106
+                                                                                                    Transaction Size (bytes)
+                                                                                               (a) synthetic (overhead)
+
+
+
+
+              100,000                                                                                                          100,000
+                                    Vista
+
+                       10,000                                                                                                           10,000       Vista
+
+
+
+
+ Transactions/Second                                                                                              Transactions/Second
+                        1,000       RVM-group size 64                                                                                    1,000
+                                                                                                                                                     RVM-group size 64
+                                    RVM-group size 8
+                                                                                                                                                     RVM-group size 8
+                         100                                                                                                              100
+                                    RVM                                                                                                              RVM
+
+
+                          10                                                                                                               10
+                                0            100                                        200             300                                      0             100              200   300
+                                             Database Size (MB)                                                                                                Database Size (MB)
+                                             (b) debit-credit                                                                                                      (c) order-entry
+
+Figure 6: RVM Group Commit Performance. Group commit improves throughput by amortizing the synchronous write to
+the redo log over multiple transactions (the group commit size). However, group commit only improves throughput; response
+time for individual transactions actually gets slightly worse. Also, group commit works only if there are many concurrent
+transactions. Single-threaded applications with dependent transactions cannot use group commit because earlier transactions
+are delayed; these applications require fast response times. Vista’s performance is shown for reference.
+
+
+
+
+                                                                                                              8
+simplicity of Vista—Vista is less than 1/10 the size of              8. Acknowledgments
+RVM—is hard to quantify but is probably also signiﬁcant.                  We are grateful to Jeff Chase (our shepherd), Jim Gray,
+     Current architectural trends indicate that the perfor-          Margo Seltzer, Willy Zwaenepoel, and the SOSP reviewers
+mance advantage of Vista will continue to increase. RVM-             for providing timely insights that improved this paper sig-
+Rio is slower than Vista because of the extra copies and sys-        niﬁcantly.
+tem calls, while RVM is slower than Vista primarily because
+of synchronous disk I/Os. Many studies indicate that mem-            9. References
+ory-to-memory copies, system calls, and disk I/Os will scale         [Anderson91] Thomas E. Anderson, Henry M. Levy,
+more slowly than clock speed [Ousterhout90, Anderson91,                           Brian N. Bershad, and Edward D. Lazows-
+Rosenblum95].                                                                     ka. The Interaction of Architecture and Op-
+6. Uses for Vista                                                                 erating System Design. In Proceedings of
+      Rio and Vista provide a very useful set of services:                        the 1991 International Conference on Ar-
+free persistent memory and nearly free transactions. The                          chitectural Support for Programming Lan-
+minimal 5 µsec overhead of a Vista transaction is small                           guages and Operating Systems (ASPLOS-
+enough that it can be used even for ﬁne-grained tasks such                        IV), pages 108–120, April 1991.
+as swapping two pointers atomically—tasks for which disk
+I/Os are too expensive. We are exploring a number of ways            [APC96]         The Power Protection Handbook. Technical
+to take advantage of Vista’s fast persistence and atomicity:                         report, American Power Conversion, 1996.
+• Participants in two-phase commit [Gray78] can store                [Atkinson83]    Malcolm Atkinson, Ken Chisholm, Paul
+    commit records in Vista rather than on disk to accelerate                        Cockshott, and Richard Marshall. Algo-
+    an important technique for reliable, distributed comput-                         rithms for a Persistent Heap. Software–
+    ing.                                                                             Practice and Experience, 13(3):259–271,
+• Fault-tolerant applications can buffer network messages                            March 1983.
+    in Vista, then atomically send these message as part of a
+    local transaction. Once the transaction commits, these           [Bensoussan72] A. Bensoussan, C.T. Clingen, and R.C. Da-
+    messages will be delivered even if the system crashes.                          ley. The Multics Virtual Memory: Concepts
+• Software that uses a token-passing protocol can store the                         and Design. Communications of the ACM,
+    token in Vista and pass the token using messages within                         15(5):308–318, May 1972.
+    local transactions. Such a system would survive system
+    crashes without losing the token.                                [Chang88]       Albert Chang and Mark F. Mergen. 801
+• A distributed shared memory can be built on Vista to                               Storage: Architecture and Programming.
+    provide free persistence and transactions on the distrib-                        ACM Transactions on Computer Systems,
+    uted memory.                                                                     6(1):28–50, February 1988.
+7. Conclusions                                                       [Chen96]        Peter M. Chen, Wee Teck Ng, Subhachan-
+      The persistent memory provided by the Rio ﬁle cache                            dra Chandra, Christopher M. Aycock, Gu-
+is an ideal abstraction on which to build a recoverable mem-                         rushankar Rajamani, and David Lowell. The
+ory. Because stores to Rio are automatically persistent, Vista                       Rio File Cache: Surviving Operating Sys-
+can eliminate the standard redo log and its accompanying                             tem Crashes. In Proceedings of the 1996 In-
+overhead, two out of the three copy operations present in                            ternational Conference on Architectural
+standard recoverable memories, and all system calls. The                             Support for Programming Languages and
+resulting system achieves a performance improvement of                               Operating Systems (ASPLOS), pages 74–83,
+three orders of magnitude and a reduction in code size of                            October 1996.
+one order of magnitude.
+      Vista’s minimum overhead of 5 µsec per transaction is          [DeWitt84]      D. J. DeWitt, R. H. Katz, F. Olken, L. D.
+small enough that it can be used even for ﬁne-grained tasks                          Shapiro, M. R. Stonebraker, and D. Wood.
+such as atomically swapping two pointers. We believe Rio                             Implementation Techniques for Main Mem-
+and Vista have brought transactions into the realm of every-                         ory Database Systems. In Proceedings of
+day computing.1                                                                      the 1984 ACM SIGMOD International Con-
+                                                                                     ference on Management of Data, pages 1–8,
+                                                                                     June 1984.
+                                                                     [GM92]          Hector Garcia-Molina and Kenneth Salem.
+                                                                                     Main Memory Database Systems: An Over-
+                                                                                     view. IEEE Transactions on Knowledge
+1. Source code for Vista and all benchmarks used in this
+paper are available at http://www.eecs.umich.edu/Rio. Vista                          and Data Engineering, 4(6):509–516, De-
+can run on non-Rio systems, however recent changes will be                           cember 1992.
+lost if the operating system crashes.                                [Golub90]       David Golub, Randall Dean, Allessandro
+
+
+                                                                 9
+               Forin, and Richard Rashid. Unix as an Ap-                        write protected data structures to improve
+               plication Program. In Proceedings of the                         software fault tolerance in highly available
+               1990 USENIX Summer Conference, 1990.                             database management systems. In Proceed-
+                                                                                ings of the 1991 International Conference
+[Gray78]       J. N. Gray. Operating Systems: An Ad-
+                                                                                on Very Large Data Bases (VLDB), pages
+               vanced Course. Springer-Verlag, 1978.
+                                                                                171–180, September 1991.
+               Notes on Database Operating Systems.
+                                                                   [TPC90]      TPC Benchmark B Standard Specification.
+[Gray93]       Jim Gray and Andreas Reuter. Transaction
+                                                                                Technical report, Transaction Processing
+               Processing: Concepts and Techniques.
+                                                                                Performance Council, August 1990.
+               Morgan Kaufmann Publishers, Inc., 1993.
+                                                                   [TPC96]      TPC Benchmark C Standard Specification,
+[Haerder83]    Theo Haerder and Andreas Reuter. Princi-
+                                                                                Revision 3.2. Technical report, Transaction
+               ples of Transaction-Oriented Database Re-
+                                                                                Processing Performance Council, August
+               covery.    ACM      Computing    Surveys,
+                                                                                1996.
+               15(4):287–317, December 1983.
+                                                                   [Wahbe93]    Robert Wahbe, Steven Lucco, Thomas E.
+[Lamb91]       Charles Lamb, Gordon Landis, Jack Oren-
+                                                                                Anderson, and Susan L. Graham. Efficient
+               stein, and Dan Weinreb. The ObjectStore
+                                                                                Software-Based Fault Isolation. In Proceed-
+               Database System. Communications of the
+                                                                                ings of the 14th ACM Symposium on Oper-
+               ACM, 34(10):50–63, October 1991.
+                                                                                ating Systems Principles, pages 203–216,
+[Lampson83]    Butler W. Lampson. Hints for Computer                            December 1993.
+               System Design. In Proceedings of the 1983
+                                                                   [Yarvin93]   Curtis Yarvin, Richard Bukowski, and Tho-
+               Symposium on Operating System Princi-
+                                                                                mas Anderson. Anonymous RPC: Low La-
+               ples, pages 33–48, 1983.
+                                                                                tency Protection in a 64-Bit Address Space.
+[Ng97]         Wee Teck Ng and Peter M. Chen. Integrat-                         In Proceedings of the Summer 1993 US-
+               ing Reliable Memory in Databases. In Pro-                        ENIX Conference, 1993.
+               ceedings of the 1997 International
+               Conference on Very Large Data Bases
+               (VLDB), August 1997.
+[OToole93]     James OToole, Scott Nettles, and David
+               Gifford. Concurrent Compacting Garbage
+               Collection of a Persistent Heap. In Proceed-
+               ings of the 1993 Symposium on Operating
+               Systems Principles, pages 161–174, Decem-
+               ber 1993.
+[Ousterhout90] John K. Ousterhout. Why aren’t operating
+               systems getting faster as fast as hardware?
+               In Proceedings USENIX Summer Confer-
+               ence, pages 247–256, June 1990.
+[Rosenblum95] Mendel Rosenblum, Edouard Bugnion,
+              Stephen Alan Herrod, Emmett Witchel, and
+              Anoop Gupta. The Impact of Architectural
+              Trends on Operating System Performance.
+              In Proceedings of the 1995 Symposium on
+              Operating Systems Principles, pages 285–
+              298, December 1995.
+[Satyanarayanan93] M. Satyanarayanan, Henry H. Mash-
+               burn, Puneet Kumar, David C. Steere, and
+               James J. Kistler. Lightweight Recoverable
+               Virtual Memory. In Proceedings of the 1993
+               Symposium on Operating System Princi-
+               ples, pages 146–160, December 1993.
+[Sullivan91]   M. Sullivan and M. Stonebraker. Using
+
+
+                                                              10
+
