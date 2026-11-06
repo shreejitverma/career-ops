@@ -104,7 +104,7 @@ export function commandCenterPaths(root) {
  * {vault, prefix} or null.
  */
 export function detectVault(ccDir, candidate = process.env.JOBBOARD_VAULT_DIR
-  || join(homedir(), 'github', 'SDE-Interview-Prep', '16-Interview-Command-Center')) {
+  || join(homedir(), 'github', 'The-Distinguished-Engineer', '16-Interview-Command-Center')) {
   try {
     if (realpathSync(join(candidate, '03-Pipeline')) !== realpathSync(join(ccDir, '03-Pipeline'))) return null;
     for (let d = candidate; d !== dirname(d); d = dirname(d)) {

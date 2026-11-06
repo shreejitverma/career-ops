@@ -8,7 +8,7 @@ archived pipelines, and company intelligence dossiers.
 import os
 import json
 
-VAULT_ROOT = "/Users/shreejitverma/github/SDE-Interview-Prep/16-Interview-Command-Center"
+VAULT_ROOT = "/Users/shreejitverma/github/The-Distinguished-Engineer/16-Interview-Command-Center"
 ACTIVE_DIR = os.path.join(VAULT_ROOT, "03-Pipeline", "Active")
 ARCHIVE_DIR = os.path.join(VAULT_ROOT, "03-Pipeline", "Archive")
 COMPANIES_DIR = os.path.join(VAULT_ROOT, "02-Companies")

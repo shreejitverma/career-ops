@@ -107,7 +107,7 @@ def main():
         print(f"  Found {len(batch_res)} relevant messages.")
         all_relevant.extend(batch_res)
 
-    out_file = "/Users/shreejitverma/github/SDE-Interview-Prep/16-Interview-Command-Center/03-Pipeline/google_job_scanned.json"
+    out_file = "/Users/shreejitverma/github/The-Distinguished-Engineer/16-Interview-Command-Center/03-Pipeline/google_job_scanned.json"
     with open(out_file, "w") as f:
         json.dump(all_relevant, f, indent=2)
 

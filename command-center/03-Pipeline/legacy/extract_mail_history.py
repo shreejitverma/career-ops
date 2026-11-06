@@ -113,7 +113,7 @@ def main():
                         continue
                     all_job_emails.append(m)
 
-    output_path = "/Users/shreejitverma/github/SDE-Interview-Prep/16-Interview-Command-Center/03-Pipeline/extracted_emails.json"
+    output_path = "/Users/shreejitverma/github/The-Distinguished-Engineer/16-Interview-Command-Center/03-Pipeline/extracted_emails.json"
     with open(output_path, "w") as f:
         json.dump(all_job_emails, f, indent=2)
 
