@@ -1,6 +1,6 @@
 # Command Center (private)
 
-Private half of the Interview Command Center from the public `SDE-Interview-Prep` vault.
+Private half of the Interview Command Center from the public `The-Distinguished-Engineer` vault (formerly `SDE-Interview-Prep`).
 It holds company profiles with application status, the application pipeline and Gmail sync, retrospectives, behavioral stories, and daily logs.
 
 ## How it is wired
@@ -8,7 +8,7 @@ It holds company profiles with application status, the application pipeline and 
 Each folder here is symlinked into the vault at its original path, and those paths are gitignored in the public repo:
 
 ```sh
-V=~/github/SDE-Interview-Prep/16-Interview-Command-Center
+V=~/github/The-Distinguished-Engineer/16-Interview-Command-Center
 for d in 02-Companies 03-Pipeline 04-Retrospectives 05-Behavioral 06-Daily-Log; do
   ln -s ~/github/career-ops/command-center/$d "$V/$d"
 done

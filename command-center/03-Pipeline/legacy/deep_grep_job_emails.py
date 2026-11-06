@@ -325,7 +325,7 @@ def main():
         seen.add(key)
         combined.append(item)
         
-    out_file = "/Users/shreejitverma/github/SDE-Interview-Prep/16-Interview-Command-Center/03-Pipeline/all_job_emails_deep_grep.json"
+    out_file = "/Users/shreejitverma/github/The-Distinguished-Engineer/16-Interview-Command-Center/03-Pipeline/all_job_emails_deep_grep.json"
     with open(out_file, "w") as f:
         json.dump(combined, f, indent=2)
         
