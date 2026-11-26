@@ -26,6 +26,12 @@ jobs:
       - name: Force LF checkout on Windows
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
+      # Some tracked library/ paths exceed Windows' 260-char MAX_PATH once
+      # prefixed with the runner workspace; without this, checkout fails with
+      # "Filename too long".
+      - name: Allow long paths on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
       - uses: actions/checkout@v7
       - name: Set up Node 18 for syntax compatibility
         uses: actions/setup-node@v7
