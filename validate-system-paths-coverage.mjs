@@ -157,14 +157,21 @@ if (process.argv.includes('--self-test')) {
   process.exit(0);
 }
 
+// `-z` is load-bearing, not style. Without it git applies core.quotePath to any
+// path with a byte outside printable ASCII: `Facebook\u2019s Photo Storage.pdf`
+// comes back as `"...Facebook\342\200\231s Photo Storage.pdf"`, wrapped in
+// double quotes with octal escapes. That string starts with `"`, so no
+// SYSTEM_PATHS or USER_PATHS prefix can ever match it, and a correctly
+// registered file is reported as a coverage gap (a curly apostrophe or an
+// accented letter in a file name was enough to fail the suite). NUL-separated
+// output is never quoted, and it also survives a newline inside a file name.
 let tracked;
 try {
-  tracked = execFileSync('git', ['ls-files'], {
+  tracked = execFileSync('git', ['ls-files', '-z'], {
     cwd: ROOT,
     encoding: 'utf-8',
   })
-    .trim()
-    .split(/\r?\n/)
+    .split('\0')
     .filter(Boolean);
 } catch (err) {
   console.error('FAIL: git ls-files failed:', err.message);
